@@ -8,13 +8,14 @@ has_incomplete_tasks() {
 
 get_todo_tasks() {
     local kanban="$1"
-    # Extract task IDs from TODO section
-    awk '/^## TODO$/,/^## / {
-        if (/\*\*\[TASK-[0-9]+\]\*\*/) {
-            match($0, /\[TASK-[0-9]+\]/)
+    # Extract task IDs from TODO section (matches 2-8 letters followed by dash and numbers)
+    awk 'BEGIN{in_todo=0}
+        /^## TODO$/{in_todo=1; next}
+        /^## / && in_todo{in_todo=0}
+        in_todo && /\*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
+            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
             print substr($0, RSTART+1, RLENGTH-2)
-        }
-    }' "$kanban"
+        }' "$kanban"
 }
 
 extract_task() {
@@ -26,7 +27,7 @@ extract_task() {
 # Task: $task_id
 
 $(awk -v task="$task_id" '
-    /\*\*\['"$task_id"'\]\*\*/ {found=1; getline; next}
+    /\*\*\['"$task_id"'\]\*\*/ {found=1; next}
     found && /^  - Description:/ {sub(/^  - Description: /, ""); desc=$0}
     found && /^  - Priority:/ {sub(/^  - Priority: /, ""); priority=$0}
     found && /^  - Dependencies:/ {sub(/^  - Dependencies: /, ""); deps=$0}
