@@ -155,13 +155,15 @@ cleanup_worker() {
             cd "$WORKER_DIR/workspace" || return 1
 
             # Get task description from kanban for commit message
-            local task_desc=$(grep "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+            # Escape special regex characters in TASK_ID for safe pattern matching
+            local escaped_task_id=$(escape_regex_chars "$TASK_ID")
+            local task_desc=$(grep "**\[$escaped_task_id\]**" "$PROJECT_DIR/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
 
             # Get task priority
-            local task_priority=$(grep -A2 "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
+            local task_priority=$(grep -A2 "**\[$escaped_task_id\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
 
             # Get task dependencies
-            local task_deps=$(grep -A3 "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Dependencies:" | sed 's/.*Dependencies: //')
+            local task_deps=$(grep -A3 "**\[$escaped_task_id\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Dependencies:" | sed 's/.*Dependencies: //')
 
             # Commit any changes in the worktree
             if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then

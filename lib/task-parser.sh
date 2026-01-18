@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 # Task parser for markdown kanban and PRD files
 
+# Escape special regex characters for use in sed/grep patterns (BRE - Basic Regular Expressions)
+# Usage: escape_regex_chars "TASK-012.foo[bar]"
+escape_regex_chars() {
+    local str="$1"
+    # Escape special regex characters for Basic Regular Expressions (BRE)
+    # In BRE: . * [ ] ^ $ \ / are special and need escaping
+    # In BRE: ( ) { } + ? | are literal unless escaped, so we DON'T escape them
+    echo "$str" | sed 's/[]\.\*\[\^\$\\/]/\\&/g'
+}
+
+# Escape special regex characters for use in awk patterns (ERE - Extended Regular Expressions)
+# Usage: escape_regex_chars_ere "TASK-012.foo[bar]"
+escape_regex_chars_ere() {
+    local str="$1"
+    # Escape special regex characters for Extended Regular Expressions (ERE)
+    # In ERE: . * [ ] ^ $ \ / ( ) { } + ? | are all special and need escaping
+    echo "$str" | sed 's/[]\.\*\[\^\$\\/(){}+?|]/\\&/g'
+}
+
 has_incomplete_tasks() {
     local file="$1"
     grep -q -- '- \[ \]' "$file"
@@ -53,12 +72,15 @@ extract_task() {
     local task_id="$1"
     local kanban="$2"
 
+    # Escape special regex characters in task_id for safe pattern matching in awk (ERE)
+    local escaped_task_id=$(escape_regex_chars_ere "$task_id")
+
     # Extract task details and create a PRD for worker
     cat <<EOF
 # Task: $task_id
 
 $(awk -v task="$task_id" '
-    /\*\*\['"$task_id"'\]\*\*/ {found=1; next}
+    /\*\*\['"$escaped_task_id"'\]\*\*/ {found=1; next}
     found && /^  - Description:/ {sub(/^  - Description: /, ""); desc=$0; next}
     found && /^  - Priority:/ {sub(/^  - Priority: /, ""); priority=$0; next}
     found && /^  - Dependencies:/ {sub(/^  - Dependencies: /, ""); deps=$0; next}
