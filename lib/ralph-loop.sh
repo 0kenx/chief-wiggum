@@ -38,13 +38,14 @@ ralph_loop() {
             echo "PWD: $(pwd)"
             echo "PRD file (relative): $prd_relative"
             echo "Prompt: $prompt"
-            echo "Command: claude --dangerously-skip-permissions --verbose --output-format stream-json --plugin-dir \"$WIGGUM_HOME/skills\" -p \"$prompt\""
+            echo "Command: claude --verbose --output-format stream-json --plugin-dir \"$WIGGUM_HOME/skills\" -p \"$prompt\""
             echo "=== RUNNING ==="
         } >> "../worker.log"
 
         # Run Claude with the prompt (already in workspace directory)
         # Load chief-wiggum skills for task completion and progress reporting
-        claude --dangerously-skip-permissions --verbose --output-format stream-json --plugin-dir "$WIGGUM_HOME/skills" -p "$prompt" >> "../worker.log" 2>&1
+        # Workspace isolation is enforced via PreToolUse hooks
+        claude --verbose --output-format stream-json --plugin-dir "$WIGGUM_HOME/skills" -p "$prompt" >> "../worker.log" 2>&1
 
         iteration=$((iteration + 1))
         sleep 2  # Prevent tight loop

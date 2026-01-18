@@ -97,6 +97,15 @@ main() {
         exit 1
     fi
 
+    # Check for clean git status
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        log_error "Git working directory is not clean. Please commit or stash your changes before running."
+        echo ""
+        echo "Uncommitted changes detected:"
+        git status --short
+        exit 1
+    fi
+
     log "Starting Chief Wiggum in $PROJECT_DIR (max $MAX_WORKERS concurrent workers)"
     echo ""
     echo "Press Ctrl+C to stop and view 'wiggum status' for details"

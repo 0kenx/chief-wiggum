@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matchers": {"tool": "Edit|Write|Bash"},
+        "hooks": [{
+          "type": "command",
+          "command": "bash ${WIGGUM_HOME}/hooks/callbacks/validate-workspace-path.sh",
+          "stdin": "tool_call"
+        }]
+      }
+    ],
     "PostToolUse": [
       {
         "matchers": {"tool": "Edit", "file": "**/.ralph/workers/*/prd.md"},

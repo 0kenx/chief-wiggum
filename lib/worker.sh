@@ -36,14 +36,78 @@ setup_worker() {
     log_debug "Creating git worktree at $WORKER_DIR/workspace"
     git worktree add "$WORKER_DIR/workspace" HEAD 2>&1 | tee -a "$WORKER_DIR/worker.log"
 
-    # Setup hooks
+    # Setup hooks with workspace boundary enforcement
     export CLAUDE_HOOKS_CONFIG="$WIGGUM_HOME/hooks/worker-hooks.json"
     export WORKER_ID
     export TASK_ID
+    export WORKER_WORKSPACE="$WORKER_DIR/workspace"
+    export WIGGUM_HOME
+}
+
+detect_workspace_violations() {
+    local workspace="$1"
+    local project_dir="$2"
+
+    log_debug "Checking for workspace boundary violations"
+
+    # Check if any files outside workspace were modified in project root
+    cd "$project_dir" || return 0
+
+    # Get list of modified files in project root (excluding .ralph directory)
+    local modified_files=$(git status --porcelain 2>/dev/null | grep -v "^.. .ralph/" | awk '{print $2}')
+
+    if [[ -n "$modified_files" ]]; then
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_error "⚠️  CRITICAL: Workspace boundary violation detected!"
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_error ""
+        log_error "Worker $WORKER_ID modified files outside its workspace:"
+        echo "$modified_files" | while read -r file; do
+            log_error "  - $file"
+        done
+        log_error ""
+        log_error "Expected workspace: $workspace"
+        log_error "Actual modifications: $project_dir"
+        log_error ""
+
+        # Create violations log directory if it doesn't exist
+        mkdir -p "$project_dir/.ralph/logs"
+
+        # Log violation with timestamp
+        {
+            echo "================================================================================"
+            echo "VIOLATION: Workspace Escape"
+            echo "Timestamp: $(date -Iseconds)"
+            echo "Worker: $WORKER_ID"
+            echo "Task: $TASK_ID"
+            echo "Files modified outside workspace:"
+            echo "$modified_files"
+            echo "================================================================================"
+            echo ""
+        } >> "$project_dir/.ralph/logs/violations.log"
+
+        log_error "Reverting unauthorized changes..."
+        # Revert changes outside workspace
+        git checkout -- . 2>&1 | tee -a "$WORKER_DIR/worker.log"
+
+        log_error "Changes have been reverted. Task marked as FAILED."
+
+        return 1
+    fi
+
+    log_debug "No workspace violations detected"
+    return 0
 }
 
 cleanup_worker() {
     log "Cleaning up worker $WORKER_ID"
+
+    # Check for workspace violations before processing results
+    if ! detect_workspace_violations "$WORKER_DIR/workspace" "$PROJECT_DIR"; then
+        log_error "Workspace violation detected - changes outside workspace were reverted"
+        echo "WORKSPACE_VIOLATION" > "$WORKER_DIR/violation_status.txt"
+        # Continue with cleanup to mark task appropriately
+    fi
 
     if [ -d "$WORKER_DIR/workspace" ]; then
         cd "$WORKER_DIR/workspace" || return 1
