@@ -12,6 +12,8 @@ source "$WIGGUM_HOME/lib/audit-logger.sh"
 
 # Default configuration
 MAX_WORKERS=4
+MAX_ITERATIONS=50       # Max outer loop iterations per worker
+MAX_TURNS=20           # Max turns per Claude session
 
 show_help() {
     cat << EOF
@@ -21,11 +23,14 @@ Usage: wiggum run [options]
 
 Options:
   --max-workers N      Maximum concurrent workers (default: 4)
+  --max-iters N        Maximum iterations per worker (default: 50)
+  --max-turns N        Maximum turns per Claude session (default: 20)
   -h, --help          Show this help message
 
 Examples:
-  wiggum run                    # Start orchestration (max 4 workers)
-  wiggum run --max-workers 8    # Start with max 8 workers
+  wiggum run                              # Start orchestration with defaults
+  wiggum run --max-workers 8              # Start with max 8 workers
+  wiggum run --max-iters 100 --max-turns 30  # Customize iteration/turn limits
 
 Behavior:
   - Chief assigns pending tasks [ ] to workers
@@ -53,6 +58,8 @@ spawn_worker() {
     export WORKER_ID="$worker_id"
     export TASK_ID="$task_id"
     export WIGGUM_HOME
+    export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
+    export WIGGUM_MAX_TURNS="$MAX_TURNS"
     bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" >> "$RALPH_DIR/logs/workers.log" 2>&1
 }
 
@@ -66,6 +73,22 @@ main() {
                     exit 1
                 fi
                 MAX_WORKERS="$2"
+                shift 2
+                ;;
+            --max-iters)
+                if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                    echo "Error: --max-iters requires a number argument"
+                    exit 1
+                fi
+                MAX_ITERATIONS="$2"
+                shift 2
+                ;;
+            --max-turns)
+                if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                    echo "Error: --max-turns requires a number argument"
+                    exit 1
+                fi
+                MAX_TURNS="$2"
                 shift 2
                 ;;
             -h|--help)
@@ -173,6 +196,21 @@ main() {
     # Track active workers
     declare -A active_workers  # PID -> task_id mapping
     local all_pids=()
+
+    # Load existing PIDs from previous runs (if any)
+    if [ -f "$RALPH_DIR/.chief.pid" ]; then
+        log "Loading existing worker PIDs from previous runs"
+        while IFS= read -r pid; do
+            # Only keep PIDs that are still running
+            if kill -0 "$pid" 2>/dev/null; then
+                all_pids+=("$pid")
+                log "Preserving tracking for existing worker PID: $pid"
+            else
+                log "Skipping finished worker PID: $pid"
+            fi
+        done < "$RALPH_DIR/.chief.pid"
+    fi
+
     local iteration=0
 
     # Main orchestration loop
