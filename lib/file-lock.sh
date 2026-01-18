@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # File locking utilities for concurrent worker access
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/string-utils.sh"
+
 # Retry a command with file locking
 # Usage: with_file_lock <file> <max_retries> <command>
 with_file_lock() {
@@ -48,9 +52,13 @@ update_kanban_status() {
     local task_id="$2"
     local new_status="$3"
 
+    # Escape special regex characters in task_id for safe use in sed pattern
+    local escaped_task_id=$(escape_regex_chars "$task_id")
+
     # Match any status and replace with new status
+    # Use | as delimiter instead of / to avoid conflicts with forward slashes in task IDs
     with_file_lock "$kanban_file" 5 \
-        "sed -i 's/- \[[^\]]*\] \*\*\[$task_id\]\*\*/- [$new_status] **[$task_id]**/' '$kanban_file'"
+        "sed -i 's|- \[[^\]]*\] \*\*\[$escaped_task_id\]\*\*|- [$new_status] **[$task_id]**|' '$kanban_file'"
 }
 
 # Update kanban.md to mark complete with locking (convenience function)

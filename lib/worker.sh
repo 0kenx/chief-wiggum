@@ -13,6 +13,7 @@ source "$WIGGUM_HOME/lib/ralph-loop.sh"
 source "$WIGGUM_HOME/lib/logger.sh"
 source "$WIGGUM_HOME/lib/file-lock.sh"
 source "$WIGGUM_HOME/lib/calculate-cost.sh"
+source "$WIGGUM_HOME/lib/string-utils.sh"
 
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
@@ -147,8 +148,12 @@ cleanup_worker() {
         if [ -d "$WORKER_DIR/workspace" ]; then
             cd "$WORKER_DIR/workspace" || return 1
 
+            # Escape special regex characters in TASK_ID for safe use in sed patterns
+            local escaped_task_id=$(escape_regex_chars "$TASK_ID")
+
             # Get task description from kanban for commit message
-            local task_desc=$(grep "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+            # Use | as delimiter instead of / to avoid conflicts with forward slashes in task IDs
+            local task_desc=$(grep "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | sed "s|.*\*\*\[$escaped_task_id\]\*\* ||" | head -1)
 
             # Get task priority
             local task_priority=$(grep -A2 "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
