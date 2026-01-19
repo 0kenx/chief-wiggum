@@ -318,10 +318,31 @@ ${metrics_section}
         log "Skipping commit and PR creation - task status: $final_status"
     fi
 
-    # Clean up git worktree
+    # Clean up git worktree (only on full success - verify actual GitHub state)
     cd "$PROJECT_DIR" || exit 1
-    log_debug "Removing git worktree"
-    git worktree remove "$WORKER_DIR/workspace" --force 2>&1 | tee -a "$WORKER_DIR/worker.log" || true
+    local can_cleanup=false
+    if [ "$final_status" = "COMPLETE" ]; then
+        # Get local commit from worktree
+        local local_commit=$(git -C "$WORKER_DIR/workspace" rev-parse HEAD 2>/dev/null)
+
+        # Check if commit exists on remote branch and PR exists
+        local remote_commit=$(git ls-remote --heads origin "task/$TASK_ID-*" 2>/dev/null | head -1 | cut -f1)
+        local pr_exists=$(gh pr list --head "task/$TASK_ID-*" --json number -q '.[0].number' 2>/dev/null)
+
+        if [ -n "$remote_commit" ] && [ "$local_commit" = "$remote_commit" ] && [ -n "$pr_exists" ]; then
+            can_cleanup=true
+            log_debug "Verified: commit $local_commit pushed and PR #$pr_exists exists on GitHub"
+        else
+            log "GitHub verification failed: local=$local_commit, remote=${remote_commit:-none}, pr=$([ -n "$pr_exists" ] && echo '#'$pr_exists || echo 'no')"
+        fi
+    fi
+
+    if [ "$can_cleanup" = true ]; then
+        log_debug "Removing git worktree"
+        git worktree remove "$WORKER_DIR/workspace" --force 2>&1 | tee -a "$WORKER_DIR/worker.log" || true
+    else
+        log "Preserving worktree for debugging: $WORKER_DIR/workspace"
+    fi
 
     # Update kanban based on final status
     if [ "$final_status" = "COMPLETE" ]; then
