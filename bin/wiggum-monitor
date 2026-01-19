@@ -39,7 +39,36 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
     exit 0
 fi
 
-if [ ! -f "$RALPH_DIR/.chief.pid" ]; then
+# Check for active workers by scanning worker directories
+has_active_workers=false
+if [ -d "$RALPH_DIR/workers" ]; then
+    for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+        pid_file="$worker_dir/worker.pid"
+        [ -f "$pid_file" ] || continue
+        pid=$(cat "$pid_file" 2>/dev/null)
+
+        # Validate PID is a number
+        if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+            rm -f "$pid_file"
+            continue
+        fi
+
+        if kill -0 "$pid" 2>/dev/null; then
+            # Verify it's actually a worker process
+            if ps -p "$pid" -o args= 2>/dev/null | grep -q "lib/worker.sh"; then
+                has_active_workers=true
+                break
+            else
+                rm -f "$pid_file"
+            fi
+        else
+            rm -f "$pid_file"
+        fi
+    done
+fi
+
+if [ "$has_active_workers" = false ]; then
     echo "No active workers found. Run 'wiggum run' first."
     exit 1
 fi

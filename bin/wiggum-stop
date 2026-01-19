@@ -12,17 +12,20 @@ Usage: wiggum stop [options]
 
 Options:
   --workers PIDS      Comma-separated list of worker PIDs to stop
+  --orchestrator      Stop the orchestrator process
   -h, --help          Show this help message
 
 Description:
   Gracefully stops workers by sending TERM signal to worker processes.
 
-  Without --workers: Stops all workers and terminates the wiggum process
-  With --workers: Stops only specified workers, wiggum continues running
+  Without options: Stops all workers (orchestrator continues and will exit when done)
+  With --workers: Stops only specified workers
+  With --orchestrator: Stops the orchestrator process (and all workers)
 
 Examples:
-  wiggum stop                    # Stop all workers and chief
-  wiggum stop --workers 12345    # Stop only worker PID 12345
+  wiggum stop                        # Stop all workers
+  wiggum stop --workers 12345        # Stop only worker PID 12345
+  wiggum stop --orchestrator         # Stop orchestrator (and all workers)
   wiggum stop --workers 12345,67890  # Stop workers 12345 and 67890
 
 EOF
@@ -30,6 +33,7 @@ EOF
 
 # Parse options
 SPECIFIC_WORKERS=""
+STOP_ORCHESTRATOR=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workers)
@@ -39,6 +43,10 @@ while [[ $# -gt 0 ]]; do
             fi
             SPECIFIC_WORKERS="$2"
             shift 2
+            ;;
+        --orchestrator)
+            STOP_ORCHESTRATOR=true
+            shift
             ;;
         -h|--help)
             show_help
@@ -53,8 +61,83 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ ! -f "$RALPH_DIR/.chief.pid" ]; then
-    echo "No wiggum process running"
+# Handle stopping orchestrator
+if [ "$STOP_ORCHESTRATOR" = true ]; then
+    orchestrator_lock="$RALPH_DIR/.orchestrator.pid"
+
+    if [ ! -f "$orchestrator_lock" ]; then
+        echo "No orchestrator process running"
+        exit 0
+    fi
+
+    orchestrator_pid=$(cat "$orchestrator_lock" 2>/dev/null)
+
+    # Validate PID is a number
+    if ! [[ "$orchestrator_pid" =~ ^[0-9]+$ ]]; then
+        echo "Invalid orchestrator PID, cleaning lock file"
+        rm -f "$orchestrator_lock"
+        exit 0
+    fi
+
+    # Check if process is running and is wiggum-run
+    if kill -0 "$orchestrator_pid" 2>/dev/null; then
+        if ps -p "$orchestrator_pid" -o args= 2>/dev/null | grep -q "wiggum-run"; then
+            echo "Stopping orchestrator (PID: $orchestrator_pid)..."
+            kill -TERM "$orchestrator_pid"
+            echo "Orchestrator stopped (workers will also be terminated by orchestrator cleanup)"
+            exit 0
+        else
+            echo "Process $orchestrator_pid is not wiggum-run (PID reused?)"
+            rm -f "$orchestrator_lock"
+            exit 0
+        fi
+    else
+        echo "Orchestrator process not running, cleaning stale lock"
+        rm -f "$orchestrator_lock"
+        exit 0
+    fi
+fi
+
+# Check for active workers by scanning worker directories
+if [ ! -d "$RALPH_DIR/workers" ]; then
+    echo "No wiggum workers found"
+    exit 0
+fi
+
+# Collect active workers from worker directories
+declare -A worker_pids_map  # pid -> worker_id
+for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+    [ -d "$worker_dir" ] || continue
+
+    pid_file="$worker_dir/worker.pid"
+    [ -f "$pid_file" ] || continue
+
+    pid=$(cat "$pid_file" 2>/dev/null)
+    worker_id=$(basename "$worker_dir")
+
+    # Validate PID is a number
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        rm -f "$pid_file"
+        continue
+    fi
+
+    if kill -0 "$pid" 2>/dev/null; then
+        # Verify it's actually a worker process
+        if ps -p "$pid" -o args= 2>/dev/null | grep -q "lib/worker.sh"; then
+            worker_pids_map[$pid]="$worker_id"
+        else
+            # Stale PID file (PID reused)
+            rm -f "$pid_file"
+        fi
+    else
+        # Process no longer running
+        rm -f "$pid_file"
+    fi
+done
+
+# Check if any workers are running
+if [ ${#worker_pids_map[@]} -eq 0 ]; then
+    echo "No wiggum workers running"
     exit 0
 fi
 
@@ -65,12 +148,6 @@ if [ -n "$SPECIFIC_WORKERS" ]; then
     # Convert comma-separated list to array
     IFS=',' read -ra PIDS_TO_STOP <<< "$SPECIFIC_WORKERS"
 
-    # Read all managed worker PIDs into an array
-    declare -A managed_pids
-    while read -r pid; do
-        managed_pids[$pid]=1
-    done < "$RALPH_DIR/.chief.pid"
-
     stopped_count=0
     invalid_count=0
     for pid in "${PIDS_TO_STOP[@]}"; do
@@ -78,14 +155,14 @@ if [ -n "$SPECIFIC_WORKERS" ]; then
         pid=$(echo "$pid" | xargs)
 
         # Check if this PID is actually a managed worker
-        if [ -z "${managed_pids[$pid]}" ]; then
+        if [ -z "${worker_pids_map[$pid]}" ]; then
             echo "Error: PID $pid is not a managed worker"
             ((invalid_count++))
             continue
         fi
 
         if kill -0 "$pid" 2>/dev/null; then
-            echo "Stopping worker PID $pid"
+            echo "Stopping worker ${worker_pids_map[$pid]} (PID $pid)"
             kill -TERM "$pid"
             ((stopped_count++))
         else
@@ -99,49 +176,19 @@ if [ -n "$SPECIFIC_WORKERS" ]; then
         echo "Use 'wiggum status' to see valid worker PIDs"
     fi
 
-    # Update .chief.pid file to remove stopped workers
-    if [ -f "$RALPH_DIR/.chief.pid" ]; then
-        temp_file=$(mktemp)
-        while read -r pid; do
-            # Keep PID if it's not in the list to stop
-            should_keep=true
-            for stop_pid in "${PIDS_TO_STOP[@]}"; do
-                stop_pid=$(echo "$stop_pid" | xargs)
-                if [ "$pid" = "$stop_pid" ]; then
-                    should_keep=false
-                    break
-                fi
-            done
-
-            if [ "$should_keep" = true ]; then
-                echo "$pid" >> "$temp_file"
-            fi
-        done < "$RALPH_DIR/.chief.pid"
-
-        # Replace with updated list
-        mv "$temp_file" "$RALPH_DIR/.chief.pid"
-
-        # If no workers left, remove the file
-        if [ ! -s "$RALPH_DIR/.chief.pid" ]; then
-            rm "$RALPH_DIR/.chief.pid"
-            echo "Stopped $stopped_count workers (no workers remaining)"
-        else
-            echo "Stopped $stopped_count workers (wiggum continues running)"
-        fi
-    fi
+    echo "Stopped $stopped_count workers"
 else
     # Stop all workers
     echo "Stopping all workers..."
 
     stopped_count=0
-    while read -r pid; do
+    for pid in "${!worker_pids_map[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
-            echo "Stopping PID $pid"
+            echo "Stopping ${worker_pids_map[$pid]} (PID $pid)"
             kill -TERM "$pid"
             ((stopped_count++))
         fi
-    done < "$RALPH_DIR/.chief.pid"
+    done
 
-    rm "$RALPH_DIR/.chief.pid"
     echo "Stopped $stopped_count workers"
 fi

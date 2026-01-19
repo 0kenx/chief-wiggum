@@ -116,6 +116,51 @@ main() {
         exit 1
     fi
 
+    # Ensure only one orchestrator runs at a time
+    local orchestrator_lock="$RALPH_DIR/.orchestrator.pid"
+
+    # Check if another orchestrator is already running
+    if [ -f "$orchestrator_lock" ]; then
+        local existing_pid=$(cat "$orchestrator_lock" 2>/dev/null)
+
+        # Validate PID is a number
+        if [[ "$existing_pid" =~ ^[0-9]+$ ]]; then
+            # Check if that process is still running and is wiggum-run
+            if kill -0 "$existing_pid" 2>/dev/null; then
+                if ps -p "$existing_pid" -o args= 2>/dev/null | grep -q "wiggum-run"; then
+                    log_error "Another wiggum-run orchestrator is already running (PID: $existing_pid)"
+                    echo ""
+                    echo "Only one orchestrator can run at a time to prevent conflicts."
+                    echo "If you're sure no orchestrator is running, remove: $orchestrator_lock"
+                    exit 1
+                else
+                    # PID exists but it's not wiggum-run (PID reused)
+                    log "Cleaning stale orchestrator lock (PID reused)"
+                    rm -f "$orchestrator_lock"
+                fi
+            else
+                # Process no longer running
+                log "Cleaning stale orchestrator lock"
+                rm -f "$orchestrator_lock"
+            fi
+        else
+            # Invalid PID in lock file
+            log "Cleaning invalid orchestrator lock"
+            rm -f "$orchestrator_lock"
+        fi
+    fi
+
+    # Create orchestrator lock file
+    echo "$$" > "$orchestrator_lock"
+    log "Created orchestrator lock (PID: $$)"
+
+    # Setup trap to cleanup lock file on exit (normal or Ctrl+C)
+    cleanup_orchestrator() {
+        log "Cleaning up orchestrator lock"
+        rm -f "$orchestrator_lock"
+    }
+    trap cleanup_orchestrator EXIT INT TERM
+
     if [ ! -f "$RALPH_DIR/kanban.md" ]; then
         log_error ".ralph/kanban.md not found. Create a kanban file first."
         exit 1
@@ -197,18 +242,42 @@ main() {
     declare -A active_workers  # PID -> task_id mapping
     local all_pids=()
 
-    # Load existing PIDs from previous runs (if any)
-    if [ -f "$RALPH_DIR/.chief.pid" ]; then
-        log "Loading existing worker PIDs from previous runs"
-        while IFS= read -r pid; do
-            # Only keep PIDs that are still running
-            if kill -0 "$pid" 2>/dev/null; then
-                all_pids+=("$pid")
-                log "Preserving tracking for existing worker PID: $pid"
-            else
-                log "Skipping finished worker PID: $pid"
+    # Restore active workers from existing worker directories
+    if [ -d "$RALPH_DIR/workers" ]; then
+        log "Scanning for active workers from previous runs..."
+        for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+            [ -d "$worker_dir" ] || continue
+
+            local pid_file="$worker_dir/worker.pid"
+            [ -f "$pid_file" ] || continue
+
+            local worker_pid=$(cat "$pid_file" 2>/dev/null)
+            local worker_id=$(basename "$worker_dir")
+            local task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')
+
+            # Validate PID is a number
+            if ! [[ "$worker_pid" =~ ^[0-9]+$ ]]; then
+                log "Invalid PID in $pid_file, cleaning up"
+                rm -f "$pid_file"
+                continue
             fi
-        done < "$RALPH_DIR/.chief.pid"
+
+            # Only restore if process is still running and is a worker process
+            if kill -0 "$worker_pid" 2>/dev/null; then
+                # Verify it's actually a worker process (contains 'worker.sh' in command line)
+                if ps -p "$worker_pid" -o args= 2>/dev/null | grep -q "lib/worker.sh"; then
+                    active_workers[$worker_pid]="$task_id"
+                    all_pids+=("$worker_pid")
+                    log "Restored tracking for $task_id (PID: $worker_pid)"
+                else
+                    log "PID $worker_pid is not a worker process (PID reused?), cleaning stale PID file"
+                    rm -f "$pid_file"
+                fi
+            else
+                log "Worker $task_id (PID: $worker_pid) no longer running, cleaning stale PID file"
+                rm -f "$pid_file"
+            fi
+        done
     fi
 
     local iteration=0
@@ -260,11 +329,6 @@ main() {
             log "Spawned worker for $task_id (PID: $worker_pid)"
         done
 
-        # Save all PIDs for wiggum-stop
-        if [ ${#all_pids[@]} -gt 0 ]; then
-            printf '%s\n' "${all_pids[@]}" > "$RALPH_DIR/.chief.pid"
-        fi
-
         # Show status and recent activity
         if [ ${#active_workers[@]} -gt 0 ]; then
             echo ""
@@ -289,9 +353,6 @@ main() {
         # Wait a bit before checking again
         sleep 5
     done
-
-    # Cleanup
-    rm -f "$RALPH_DIR/.chief.pid"
 
     echo ""
     echo "=========================================="

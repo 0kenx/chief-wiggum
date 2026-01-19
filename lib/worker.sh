@@ -59,6 +59,10 @@ setup_worker() {
     export TASK_ID
     export WORKER_WORKSPACE="$WORKER_DIR/workspace"
     export WIGGUM_HOME
+
+    # Store worker PID for tracking by orchestrator
+    echo "$$" > "$WORKER_DIR/worker.pid"
+    log_debug "Stored worker PID $$ in $WORKER_DIR/worker.pid"
 }
 
 detect_workspace_violations() {
@@ -322,6 +326,10 @@ ${metrics_section}
 
     # Log final worker status to audit log
     audit_log_worker_complete "$TASK_ID" "$WORKER_ID" "$final_status"
+
+    # Remove worker PID file
+    rm -f "$WORKER_DIR/worker.pid"
+    log_debug "Removed worker PID file"
 }
 
 main "$@"

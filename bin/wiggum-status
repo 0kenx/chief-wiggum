@@ -41,7 +41,52 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ ! -f "$RALPH_DIR/.chief.pid" ]; then
+# Check for active workers by scanning worker directories
+if [ ! -d "$RALPH_DIR/workers" ]; then
+    echo "No wiggum workers found in this project"
+    exit 0
+fi
+
+# Collect active workers from worker directories
+worker_count=0
+running_count=0
+declare -a worker_pids
+declare -a worker_names
+
+for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+    [ -d "$worker_dir" ] || continue
+
+    pid_file="$worker_dir/worker.pid"
+    [ -f "$pid_file" ] || continue
+
+    pid=$(cat "$pid_file" 2>/dev/null)
+    worker_id=$(basename "$worker_dir")
+
+    # Validate PID is a number
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        rm -f "$pid_file"
+        continue
+    fi
+
+    ((worker_count++))
+    if kill -0 "$pid" 2>/dev/null; then
+        # Verify it's actually a worker process
+        if ps -p "$pid" -o args= 2>/dev/null | grep -q "lib/worker.sh"; then
+            ((running_count++))
+            worker_pids+=("$pid")
+            worker_names+=("$worker_id")
+        else
+            # Stale PID file (PID reused)
+            rm -f "$pid_file"
+        fi
+    else
+        # Process no longer running
+        rm -f "$pid_file"
+    fi
+done
+
+# Check if any workers are running
+if [ $running_count -eq 0 ]; then
     echo "No wiggum process running in this project"
     exit 0
 fi
@@ -50,21 +95,28 @@ echo "=== Chief Wiggum Status ==="
 echo "Project: $PROJECT_DIR"
 echo ""
 
-# Read PIDs and check if still running
-worker_count=0
-running_count=0
-
-while read -r pid; do
-    ((worker_count++))
-    if kill -0 "$pid" 2>/dev/null; then
-        ((running_count++))
-        # Find worker dir for this PID
-        worker_info=$(ps -p "$pid" -o args= 2>/dev/null | grep -oP 'workers/\K[^/]+' || echo "unknown")
-        echo "✓ Worker $worker_info (PID: $pid) - RUNNING"
+# Check orchestrator status
+orchestrator_lock="$RALPH_DIR/.orchestrator.pid"
+if [ -f "$orchestrator_lock" ]; then
+    orchestrator_pid=$(cat "$orchestrator_lock" 2>/dev/null)
+    if [[ "$orchestrator_pid" =~ ^[0-9]+$ ]] && kill -0 "$orchestrator_pid" 2>/dev/null; then
+        if ps -p "$orchestrator_pid" -o args= 2>/dev/null | grep -q "wiggum-run"; then
+            echo "Orchestrator: RUNNING (PID: $orchestrator_pid)"
+        else
+            echo "Orchestrator: NOT RUNNING (stale lock)"
+        fi
     else
-        echo "✗ Worker (PID: $pid) - FINISHED"
+        echo "Orchestrator: NOT RUNNING (stale lock)"
     fi
-done < "$RALPH_DIR/.chief.pid"
+else
+    echo "Orchestrator: NOT RUNNING"
+fi
+echo ""
+
+# Display running workers
+for i in "${!worker_pids[@]}"; do
+    echo "✓ Worker ${worker_names[$i]} (PID: ${worker_pids[$i]}) - RUNNING"
+done
 
 echo ""
 echo "Total: $worker_count workers, $running_count running"
