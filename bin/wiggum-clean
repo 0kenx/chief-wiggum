@@ -3,22 +3,36 @@
 
 PROJECT_DIR="$(pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
+SKIP_CONFIRM=false
 
 show_help() {
     cat << EOF
 wiggum clean - Clean up worktrees and worker directories
 
-Usage: wiggum clean [options]
+Usage: wiggum clean [options] <target>
+
+Targets:
+  <pattern>           Clean workers matching pattern (e.g., TASK-001, 030)
+  <p1>,<p2>,...       Clean multiple patterns (comma-separated)
+  all                 Clean all worktrees and worker directories
 
 Options:
+  -y, --yes           Skip confirmation prompt
   -h, --help          Show this help message
 
 Description:
-  Removes all git worktrees created by workers and cleans up the
+  Removes git worktrees created by workers and cleans up the
   .ralph/workers/ directory. This does not affect the main repository.
 
+  Pattern matching: searches for worker directories matching the pattern.
+  Proceeds only if exactly one match is found per pattern.
+
 Examples:
-  wiggum clean         # Clean up all worktrees and worker directories
+  wiggum clean TASK-001       # Clean workers matching TASK-001
+  wiggum clean 030            # Clean workers matching "030"
+  wiggum clean TASK-001,002   # Clean workers for TASK-001 and those matching "002"
+  wiggum clean all            # Clean up all worktrees and worker directories
+  wiggum clean -y all         # Clean all without confirmation
 
 EOF
 }
@@ -27,55 +41,196 @@ log() {
     echo "[$(date -Iseconds)] $*"
 }
 
+confirm() {
+    local prompt="$1"
+    if [ "$SKIP_CONFIRM" = true ]; then
+        return 0
+    fi
+    read -r -p "$prompt [y/N] " response
+    case "$response" in
+        [yY][eE][sS]|[yY])
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Find matching worker directories for a pattern
+# Returns: matched directory names (one per line)
+find_matches() {
+    local pattern="$1"
+
+    if [ ! -d "$RALPH_DIR/workers" ]; then
+        return
+    fi
+
+    # List directories matching the pattern
+    for dir in "$RALPH_DIR/workers"/worker-*; do
+        if [ -d "$dir" ]; then
+            local dirname=$(basename "$dir")
+            if [[ "$dirname" =~ $pattern ]]; then
+                echo "$dirname"
+            fi
+        fi
+    done
+}
+
+# Find all worker directories
+find_all_workers() {
+    if [ ! -d "$RALPH_DIR/workers" ]; then
+        return
+    fi
+
+    for dir in "$RALPH_DIR/workers"/worker-*; do
+        if [ -d "$dir" ]; then
+            basename "$dir"
+        fi
+    done
+}
+
+clean_worker() {
+    local worker_dir="$RALPH_DIR/workers/$1"
+
+    # Remove worktree if exists
+    if [ -d "$worker_dir/workspace" ]; then
+        log "Removing worktree: $worker_dir/workspace"
+        git worktree remove "$worker_dir/workspace" --force 2>/dev/null || true
+    fi
+
+    # Remove worker directory
+    if [ -d "$worker_dir" ]; then
+        log "Removing worker directory: $1"
+        rm -rf "$worker_dir"
+    fi
+}
+
+# Resolve patterns to worker directories
+# Returns: list of workers to clean (one per line), or error message on stderr
+resolve_patterns() {
+    local input="$1"
+    local resolved=()
+
+    IFS=',' read -ra patterns <<< "$input"
+    for pattern in "${patterns[@]}"; do
+        # Trim whitespace
+        pattern=$(echo "$pattern" | xargs)
+        if [ -z "$pattern" ]; then
+            continue
+        fi
+
+        local matches
+        matches=$(find_matches "$pattern")
+
+        if [ -z "$matches" ]; then
+            echo "No workers found matching: $pattern" >&2
+            return 1
+        fi
+
+        local match_count=$(echo "$matches" | wc -l)
+
+        if [ "$match_count" -gt 1 ]; then
+            echo "Multiple workers match '$pattern':" >&2
+            echo "$matches" | sed 's/^/  /' >&2
+            echo "Please be more specific." >&2
+            return 1
+        fi
+
+        resolved+=("$(echo "$matches" | head -1)")
+    done
+
+    printf '%s\n' "${resolved[@]}"
+}
+
+do_clean() {
+    local workers=("$@")
+
+    for worker in "${workers[@]}"; do
+        clean_worker "$worker"
+    done
+
+    # Prune stale worktree references
+    git worktree prune 2>/dev/null
+
+    log "✓ Cleaned ${#workers[@]} worker(s)"
+
+    # Show current status
+    echo ""
+    log "Current status:"
+    git worktree list
+}
+
 # Parse options
+TARGET=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -y|--yes)
+            SKIP_CONFIRM=true
+            shift
+            ;;
         -h|--help)
             show_help
             exit 0
             ;;
-        *)
+        -*)
             echo "Unknown option: $1"
             echo ""
             show_help
             exit 1
             ;;
+        *)
+            if [ -z "$TARGET" ]; then
+                TARGET="$1"
+            else
+                echo "Unexpected argument: $1"
+                exit 1
+            fi
+            shift
+            ;;
     esac
 done
 
+# Require a target
+if [ -z "$TARGET" ]; then
+    echo "No target specified. Use 'wiggum clean <pattern>' or 'wiggum clean all'."
+    echo ""
+    show_help
+    exit 0
+fi
+
+# Check .ralph directory exists
 if [ ! -d "$RALPH_DIR" ]; then
     echo "ERROR: .ralph/ directory not found"
     exit 1
 fi
 
-log "Cleaning up Chief Wiggum worktrees and workers..."
-
-# Remove all worktrees
-worktree_count=0
-for worktree in "$RALPH_DIR/workers"/worker-*/workspace; do
-    if [ -d "$worktree" ]; then
-        log "Removing worktree: $worktree"
-        git worktree remove "$worktree" --force 2>/dev/null || true
-        ((worktree_count++))
-    fi
-done
-
-# Prune stale worktree references
-git worktree prune
-
-# Clean up worker directories
-if [ -d "$RALPH_DIR/workers" ]; then
-    worker_count=$(find "$RALPH_DIR/workers" -mindepth 1 -maxdepth 1 -type d | wc -l)
-    if [ "$worker_count" -gt 0 ]; then
-        log "Removing $worker_count worker director(y|ies)..."
-        rm -rf "$RALPH_DIR/workers"/*
-    fi
+# Determine workers to clean
+if [ "$TARGET" = "all" ]; then
+    workers_to_clean=$(find_all_workers)
+else
+    workers_to_clean=$(resolve_patterns "$TARGET") || exit 1
 fi
 
-log "✓ Cleanup complete"
-log "  Removed $worktree_count worktree(s)"
+if [ -z "$workers_to_clean" ]; then
+    echo "No workers to clean."
+    exit 0
+fi
 
-# Show current status
+# Convert to array
+mapfile -t workers_array <<< "$workers_to_clean"
+
+# Show what will be cleaned and ask for confirmation
+echo "The following worker directories will be removed:"
+for worker in "${workers_array[@]}"; do
+    echo "  $worker"
+done
 echo ""
-log "Current status:"
-git worktree list
+
+if ! confirm "Proceed with cleanup?"; then
+    echo "Aborted."
+    exit 0
+fi
+
+# Do the cleanup
+do_clean "${workers_array[@]}"

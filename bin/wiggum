@@ -73,13 +73,13 @@ main() {
             exec "$WIGGUM_HOME/bin/wiggum-run" "$@"
             ;;
         stop)
-            exec "$WIGGUM_HOME/bin/wiggum-stop"
+            exec "$WIGGUM_HOME/bin/wiggum-stop" "$@"
             ;;
         clean)
-            exec "$WIGGUM_HOME/bin/wiggum-clean"
+            exec "$WIGGUM_HOME/bin/wiggum-clean" "$@"
             ;;
         status)
-            exec "$WIGGUM_HOME/bin/wiggum-status"
+            exec "$WIGGUM_HOME/bin/wiggum-status" "$@"
             ;;
         monitor)
             exec "$WIGGUM_HOME/bin/wiggum-monitor" "$@"
