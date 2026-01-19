@@ -27,11 +27,8 @@ get_prd_status() {
 
 get_todo_tasks() {
     local kanban="$1"
-    # Extract task IDs from TASKS section - ONLY incomplete tasks (- [ ])
-    awk 'BEGIN{in_tasks=0}
-        /^## TASKS$/{in_tasks=1; next}
-        /^## / && in_tasks{in_tasks=0}
-        in_tasks && /^- \[ \] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
+    # Extract task IDs - ONLY incomplete tasks (- [ ]) matching the task format
+    awk '/^- \[ \] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
             match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"
@@ -39,11 +36,8 @@ get_todo_tasks() {
 
 get_failed_tasks() {
     local kanban="$1"
-    # Extract task IDs from TASKS section - ONLY failed tasks (- [*])
-    awk 'BEGIN{in_tasks=0}
-        /^## TASKS$/{in_tasks=1; next}
-        /^## / && in_tasks{in_tasks=0}
-        in_tasks && /^- \[\*\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
+    # Extract task IDs - ONLY failed tasks (- [*]) matching the task format
+    awk '/^- \[\*\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
             match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"
@@ -53,9 +47,19 @@ extract_task() {
     local task_id="$1"
     local kanban="$2"
 
+    # Extract task title from the first line matching the task ID
+    local task_title
+    task_title=$(awk -v task="$task_id" '
+        $0 ~ "\\*\\*\\[" task "\\]\\*\\*" {
+            # Extract everything after **[TASK-ID]**
+            sub(/.*\*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\* */, "")
+            print
+            exit
+        }' "$kanban")
+
     # Extract task details and create a PRD for worker
     cat <<EOF
-# Task: $task_id
+# Task: $task_id${task_title:+ - $task_title}
 
 $(awk -v task="$task_id" '
     /\*\*\['"$task_id"'\]\*\*/ {found=1; next}
