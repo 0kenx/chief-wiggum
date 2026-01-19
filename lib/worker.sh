@@ -271,13 +271,15 @@ $(tail -n +3 "$WORKER_DIR/metrics.txt")
 "
                         fi
 
-                        local pr_body="## Summary
-Automated PR for $TASK_ID created by Chief Wiggum worker.
+                        # Read prd.md body for PR description
+                        local prd_body=""
+                        if [ -f "$WORKER_DIR/prd.md" ]; then
+                            prd_body=$(cat "$WORKER_DIR/prd.md")
+                        fi
 
-**Task Description:** $task_desc
-**Priority:** ${task_priority:-MEDIUM}
-**Dependencies:** ${task_deps:-none}
-**Worker ID:** $WORKER_ID
+                        local pr_body="## Summary
+
+$prd_body
 
 ## Changes
 

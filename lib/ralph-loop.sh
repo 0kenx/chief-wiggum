@@ -98,13 +98,7 @@ ralph_loop() {
 
     # Record start time
     local start_time=$(date +%s)
-    {
-        echo ""
-        echo "=== WORKER STARTED ==="
-        echo "Start time: $(date -Iseconds)"
-        echo "WORKER_START_TIME=$start_time"
-        echo ""
-    } >> "../worker.log"
+    echo "[$(date -Iseconds)] WORKER_STARTED start_time=$start_time" >> "../worker.log"
 
     log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
 
@@ -258,15 +252,8 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
 
         log_debug "Iteration $iteration: Session $session_id (max $max_turns_per_session turns)"
 
-        # Log iteration start to worker.log (clean format)
-        {
-            echo ""
-            echo "=== ITERATION $iteration ==="
-            echo "Session ID: $session_id"
-            echo "Max turns: $max_turns_per_session"
-            echo "PWD: $(pwd)"
-            echo "=== WORK PHASE ==="
-        } >> "../worker.log"
+        # Log iteration start to worker.log
+        echo "[$(date -Iseconds)] ITERATION_START iteration=$iteration session_id=$session_id max_turns=$max_turns_per_session" >> "../worker.log"
 
         log "Work phase starting (see logs/iteration-$iteration.log for details)"
 
@@ -304,9 +291,7 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
         log "Work phase completed (exit code: $exit_code, session: $session_id)"
 
         # Log work phase completion to worker.log
-        {
-            echo "Work phase exit code: $exit_code"
-        } >> "../worker.log"
+        echo "[$(date -Iseconds)] WORK_PHASE_COMPLETE iteration=$iteration exit_code=$exit_code" >> "../worker.log"
 
         # Check if interrupted (SIGINT typically gives exit code 130)
         if [ $exit_code -eq 130 ] || [ $exit_code -eq 143 ]; then
@@ -323,10 +308,6 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
 
         # PHASE 2: ALWAYS generate summary for context continuity (not conditional)
         log "Generating summary for iteration $iteration (session: $session_id)"
-
-        {
-            echo "=== SUMMARY PHASE ==="
-        } >> "../worker.log"
 
         local summary_prompt="Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
@@ -414,24 +395,7 @@ Please provide your summary based on the conversation so far, following this str
             summary="[Summary generation failed or produced no output]"
         fi
 
-        # Append clean summary to worker.log
-        {
-            echo "--- Session $iteration Summary ---"
-            echo "$summary"
-            echo "--- End Summary ---"
-            echo ""
-        } >> "../worker.log"
-
-        # Append summary to PRD changelog section
-        {
-            echo ""
-            echo "## Session $iteration Changelog ($(date -u +"%Y-%m-%d %H:%M:%S UTC"))"
-            echo ""
-            echo "$summary"
-            echo ""
-        } >> "$prd_file"
-
-        log "Summary appended to PRD and worker.log"
+        log "Summary generated for iteration $iteration"
 
         # Log iteration completion to iteration log file as JSON
         {
@@ -464,14 +428,7 @@ Please provide your summary based on the conversation so far, following this str
 
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
-        {
-            echo ""
-            echo "=== WORKER STATUS: INCOMPLETE ==="
-            echo "End time: $(date -Iseconds)"
-            echo "WORKER_END_TIME=$end_time"
-            echo "Total duration: $duration seconds ($((duration / 60)) minutes)"
-            echo "Status: Reached max iterations ($max_iterations) without completing all tasks"
-        } >> "../worker.log"
+        echo "[$(date -Iseconds)] WORKER_INCOMPLETE end_time=$end_time duration_sec=$duration iterations=$iteration max_iterations=$max_iterations" >> "../worker.log"
 
         # Stop violation monitor before returning
         if [[ -n "$VIOLATION_MONITOR_PID" ]]; then
@@ -485,11 +442,6 @@ Please provide your summary based on the conversation so far, following this str
     # PHASE 3: Generate final comprehensive summary for changelog
     if [ -n "$last_session_id" ]; then
         log "Generating final summary for changelog"
-
-        {
-            echo ""
-            echo "=== FINAL SUMMARY PHASE ==="
-        } >> "../worker.log"
 
         local summary_prompt="FINAL COMPREHENSIVE SUMMARY REQUEST:
 
@@ -607,26 +559,13 @@ Please provide your comprehensive summary following this structure."
         # Save to summary.txt (for PR description) - extract content between <summary> tags                  
         sed -n '/<summary>/,/<\/summary>/p' "../logs/final-summary.log" | sed '1d;$d' > "../summary.txt" 
 
-        # Append clean summary to worker.log
-        {
-            echo "--- Final Summary written to summary.txt ---"
-            echo ""
-        } >> "../worker.log"
-
         log "Final summary saved to summary.txt"
     fi
 
     # Record end time
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
-    {
-        echo ""
-        echo "=== WORKER COMPLETED ==="
-        echo "End time: $(date -Iseconds)"
-        echo "WORKER_END_TIME=$end_time"
-        echo "Total duration: $duration seconds ($((duration / 60)) minutes)"
-        echo "Status: All tasks completed successfully"
-    } >> "../worker.log"
+    echo "[$(date -Iseconds)] WORKER_COMPLETED end_time=$end_time duration_sec=$duration iterations=$iteration" >> "../worker.log"
 
     log "Worker finished after $iteration iterations (duration: $duration seconds)"
 
