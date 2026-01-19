@@ -21,6 +21,9 @@ source "$WIGGUM_HOME/lib/calculate-cost.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
 source "$WIGGUM_HOME/lib/task-parser.sh"
 
+# Set log file for this worker - all log() calls will also write here
+export LOG_FILE="$WORKER_DIR/worker.log"
+
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
 

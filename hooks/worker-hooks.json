@@ -2,40 +2,55 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matchers": {"tool": "Edit|Write|Bash|Read|Glob|Grep"},
-        "hooks": [{
-          "type": "command",
-          "command": "bash ${WIGGUM_HOME}/hooks/callbacks/validate-workspace-path.sh",
-          "stdin": "tool_call"
-        }]
+        "matchers": {
+          "tool": "Edit|Write|Bash|Read|Glob|Grep"
+        },
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/validate-workspace-path.sh",
+            "stdin": "tool_call"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "matchers": {"tool": "Edit", "file": "**/.ralph/workers/*/prd.md"},
-        "hooks": [{
-          "type": "command",
-          "command": "bash ${CHIEF_HOME}/hooks/callbacks/on-task-progress.sh '${WORKER_ID}'"
-        }]
+        "matchers": {
+          "tool": "Edit",
+          "file": "**/.ralph/workers/*/prd.md"
+        },
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-task-progress.sh '${WORKER_ID}'"
+          }
+        ]
       }
     ],
     "PermissionRequest": [
       {
         "matchers": {},
-        "hooks": [{
-          "type": "command",
-          "command": "bash ${CHIEF_HOME}/hooks/callbacks/on-question.sh '${request_type}'",
-          "decision": "allow"
-        }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-question.sh '${request_type}'",
+            "decision": "allow"
+          }
+        ]
       }
     ],
     "Notification": [
       {
-        "matchers": {"type": "error"},
-        "hooks": [{
-          "type": "command",
-          "command": "bash ${CHIEF_HOME}/hooks/callbacks/on-error.sh '${WORKER_ID}' '${message}'"
-        }]
+        "matchers": {
+          "type": "error"
+        },
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-error.sh '${WORKER_ID}' '${message}'"
+          }
+        ]
       }
     ]
   }

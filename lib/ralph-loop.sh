@@ -381,7 +381,7 @@ Please provide your summary based on the conversation so far, following this str
 
         # Check if summary is empty
         if [ -z "$summary" ]; then
-            log_error "Warning: Summary for iteration $iteration is empty"
+            log_warn "Summary for iteration $iteration is empty"
             summary="[Summary generation failed or produced no output]"
         fi
 
