@@ -57,6 +57,22 @@ confirm() {
     esac
 }
 
+# Check if a worker is running
+# Returns 0 if running, 1 if not
+is_worker_running() {
+    local worker_name="$1"
+    local pid_file="$RALPH_DIR/workers/$worker_name/worker.pid"
+
+    if [ -f "$pid_file" ]; then
+        local pid
+        pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # Find matching worker directories for a pattern
 # Returns: matched directory names (one per line)
 find_matches() {
@@ -219,6 +235,24 @@ fi
 
 # Convert to array
 mapfile -t workers_array <<< "$workers_to_clean"
+
+# Check for running workers
+running_workers=()
+for worker in "${workers_array[@]}"; do
+    if is_worker_running "$worker"; then
+        running_workers+=("$worker")
+    fi
+done
+
+if [ ${#running_workers[@]} -gt 0 ]; then
+    echo "ERROR: Cannot clean running workers. Stop them first with 'wiggum worker <id> stop'."
+    echo ""
+    echo "Running workers:"
+    for worker in "${running_workers[@]}"; do
+        echo "  $worker"
+    done
+    exit 1
+fi
 
 # Show what will be cleaned and ask for confirmation
 echo "The following worker directories will be removed:"
