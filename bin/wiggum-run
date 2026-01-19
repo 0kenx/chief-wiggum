@@ -183,6 +183,14 @@ main() {
         exit 1
     fi
 
+    # Validate kanban format before running
+    log "Validating kanban.md format..."
+    if ! "$WIGGUM_HOME/bin/wiggum-validate" --quiet; then
+        log_error "Kanban validation failed. Run 'wiggum validate' to see details."
+        exit 1
+    fi
+    log "Kanban validation passed"
+
     # Check for clean git status
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         log_error "Git working directory is not clean. Please commit or stash your changes before running."

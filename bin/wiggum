@@ -11,6 +11,7 @@ Usage: wiggum <command> [options]
 
 Commands:
   init             Initialize .ralph/ directory in current project
+  validate         Validate kanban.md format and structure
   run              Orchestrate workers for incomplete tasks
   stop             Stop all running workers
   clean            Clean up worktrees and worker directories
@@ -23,6 +24,7 @@ Run Options:
 
 Examples:
   wiggum init                   # Initialize project
+  wiggum validate               # Validate kanban.md before running
   wiggum run                    # Start orchestration (max 4 workers)
   wiggum run --max-workers 8    # Start with max 8 workers
   wiggum stop                   # Stop all workers
@@ -39,6 +41,7 @@ Behavior:
   - New workers spawn as old ones finish (up to max)
 
 For more help on specific commands:
+  wiggum validate --help
   wiggum review --help
   wiggum monitor --help
 
@@ -61,6 +64,9 @@ main() {
     case "$command" in
         init)
             exec "$WIGGUM_HOME/bin/wiggum-init"
+            ;;
+        validate)
+            exec "$WIGGUM_HOME/bin/wiggum-validate" "$@"
             ;;
         run)
             exec "$WIGGUM_HOME/bin/wiggum-run" "$@"

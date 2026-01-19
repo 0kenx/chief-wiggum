@@ -1,0 +1,332 @@
+#!/usr/bin/env bash
+# Chief Wiggum - Kanban validation command
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
+source "$WIGGUM_HOME/lib/logger.sh"
+
+# Validation error tracking
+declare -a VALIDATION_ERRORS=()
+VALID=true
+
+show_help() {
+    cat << EOF
+wiggum validate - Validate kanban.md format and structure
+
+Usage: wiggum validate [options]
+
+Options:
+  -f, --file FILE   Validate a specific kanban file (default: .ralph/kanban.md)
+  -q, --quiet       Only output errors, no success message
+  -h, --help        Show this help message
+
+Validates:
+  - Task ID format ([A-Za-z]{2,8}-[0-9]+)
+  - Required fields (Description, Priority)
+  - Priority values (HIGH, MEDIUM, LOW)
+  - Unique task IDs
+  - Dependency references exist
+  - Proper indentation (2 spaces for fields, 4 spaces for sub-items)
+  - TASKS section exists
+
+Examples:
+  wiggum validate                          # Validate .ralph/kanban.md
+  wiggum validate -f custom-kanban.md      # Validate specific file
+  wiggum validate --quiet                  # Only show errors
+
+Exit codes:
+  0 - Kanban file is valid
+  1 - Validation errors found
+  2 - File not found or other error
+
+EOF
+}
+
+add_error() {
+    local line_num="$1"
+    local message="$2"
+    VALIDATION_ERRORS+=("Line $line_num: $message")
+    VALID=false
+}
+
+validate_kanban() {
+    local kanban_file="$1"
+
+    if [ ! -f "$kanban_file" ]; then
+        echo "Error: Kanban file not found: $kanban_file" >&2
+        return 2
+    fi
+
+    local line_num=0
+    local in_tasks_section=false
+    local current_task_id=""
+    local current_task_line=0
+    local has_description=false
+    local has_priority=false
+    local in_scope=false
+    local in_oos=false
+    local in_ac=false
+
+    # Track all task IDs for uniqueness and dependency validation
+    declare -A task_ids
+    declare -a all_task_ids=()
+    declare -A task_dependencies
+
+    # First pass: collect all task IDs and their dependencies
+    while IFS= read -r line || [ -n "$line" ]; do
+        ((line_num++))
+
+        # Check for TASKS section
+        if [[ "$line" =~ ^##[[:space:]]+TASKS[[:space:]]*$ ]]; then
+            in_tasks_section=true
+            continue
+        fi
+
+        # Skip if not in TASKS section
+        if [ "$in_tasks_section" = false ]; then
+            continue
+        fi
+
+        # Stop at next section (## something)
+        if [[ "$line" =~ ^##[[:space:]] ]] && [[ ! "$line" =~ ^##[[:space:]]+TASKS ]]; then
+            break
+        fi
+
+        # Check for task line: - [ ] **[TASK-ID]** or - [x] **[TASK-ID]** etc.
+        if [[ "$line" =~ ^-[[:space:]]\[[[:space:]x=\*]\][[:space:]]\*\*\[([A-Za-z0-9-]+)\]\*\* ]]; then
+            local task_id="${BASH_REMATCH[1]}"
+
+            # Validate task ID format
+            if [[ ! "$task_id" =~ ^[A-Za-z]{2,8}-[0-9]+$ ]]; then
+                add_error "$line_num" "Malformed task ID '$task_id' - must match pattern [A-Za-z]{2,8}-[0-9]+ (e.g., TASK-001)"
+            fi
+
+            # Check for duplicate task IDs
+            if [ -n "${task_ids[$task_id]}" ]; then
+                add_error "$line_num" "Duplicate task ID '$task_id' (first occurrence at line ${task_ids[$task_id]})"
+            else
+                task_ids[$task_id]=$line_num
+                all_task_ids+=("$task_id")
+            fi
+
+            # If we were processing a previous task, check it had required fields
+            if [ -n "$current_task_id" ]; then
+                if [ "$has_description" = false ]; then
+                    add_error "$current_task_line" "Task '$current_task_id' missing required field: Description"
+                fi
+                if [ "$has_priority" = false ]; then
+                    add_error "$current_task_line" "Task '$current_task_id' missing required field: Priority"
+                fi
+            fi
+
+            # Start tracking new task
+            current_task_id="$task_id"
+            current_task_line=$line_num
+            has_description=false
+            has_priority=false
+            in_scope=false
+            in_oos=false
+            in_ac=false
+            continue
+        fi
+
+        # Check field lines (must be indented with exactly 2 spaces)
+        if [ -n "$current_task_id" ]; then
+            # Check for Description field
+            if [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]Description:[[:space:]]* ]]; then
+                # Validate indentation
+                if [[ ! "$line" =~ ^\ \ - ]]; then
+                    add_error "$line_num" "Incorrect indentation for Description field (expected 2 spaces)"
+                fi
+                has_description=true
+                # Check Description is not empty
+                local desc_value="${line#*Description: }"
+                if [ -z "$desc_value" ] || [ "$desc_value" = "$line" ]; then
+                    add_error "$line_num" "Description field is empty for task '$current_task_id'"
+                fi
+                in_scope=false
+                in_oos=false
+                in_ac=false
+                continue
+            fi
+
+            # Check for Priority field
+            if [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]Priority:[[:space:]]* ]]; then
+                if [[ ! "$line" =~ ^\ \ - ]]; then
+                    add_error "$line_num" "Incorrect indentation for Priority field (expected 2 spaces)"
+                fi
+                has_priority=true
+                # Validate priority value
+                local priority_value="${line#*Priority: }"
+                priority_value="${priority_value%%[[:space:]]*}"  # Trim trailing whitespace
+                if [[ ! "$priority_value" =~ ^(HIGH|MEDIUM|LOW)$ ]]; then
+                    add_error "$line_num" "Invalid priority '$priority_value' for task '$current_task_id' - must be HIGH, MEDIUM, or LOW"
+                fi
+                in_scope=false
+                in_oos=false
+                in_ac=false
+                continue
+            fi
+
+            # Check for Dependencies field
+            if [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]Dependencies:[[:space:]]* ]]; then
+                if [[ ! "$line" =~ ^\ \ - ]]; then
+                    add_error "$line_num" "Incorrect indentation for Dependencies field (expected 2 spaces)"
+                fi
+                local deps_value="${line#*Dependencies: }"
+                # Trim trailing whitespace only (not internal spaces)
+                deps_value="${deps_value%"${deps_value##*[![:space:]]}"}"
+
+                # Store dependencies for validation (if not "none")
+                if [ "$deps_value" != "none" ] && [ -n "$deps_value" ]; then
+                    task_dependencies[$current_task_id]="$deps_value:$line_num"
+                fi
+                in_scope=false
+                in_oos=false
+                in_ac=false
+                continue
+            fi
+
+            # Check for Scope, Out of Scope, Acceptance Criteria sections
+            if [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]Scope:?[[:space:]]*$ ]]; then
+                if [[ ! "$line" =~ ^\ \ - ]]; then
+                    add_error "$line_num" "Incorrect indentation for Scope field (expected 2 spaces)"
+                fi
+                in_scope=true
+                in_oos=false
+                in_ac=false
+                continue
+            fi
+
+            if [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]Out\ of\ Scope:?[[:space:]]*$ ]]; then
+                if [[ ! "$line" =~ ^\ \ - ]]; then
+                    add_error "$line_num" "Incorrect indentation for Out of Scope field (expected 2 spaces)"
+                fi
+                in_scope=false
+                in_oos=true
+                in_ac=false
+                continue
+            fi
+
+            if [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]Acceptance\ Criteria:?[[:space:]]*$ ]]; then
+                if [[ ! "$line" =~ ^\ \ - ]]; then
+                    add_error "$line_num" "Incorrect indentation for Acceptance Criteria field (expected 2 spaces)"
+                fi
+                in_scope=false
+                in_oos=false
+                in_ac=true
+                continue
+            fi
+
+            # Check sub-item indentation (4 spaces)
+            if [ "$in_scope" = true ] || [ "$in_oos" = true ] || [ "$in_ac" = true ]; then
+                if [[ "$line" =~ ^[[:space:]]{4}-[[:space:]] ]]; then
+                    if [[ ! "$line" =~ ^\ \ \ \ - ]]; then
+                        add_error "$line_num" "Incorrect indentation for sub-item (expected 4 spaces)"
+                    fi
+                fi
+            fi
+        fi
+    done < "$kanban_file"
+
+    # Check the last task had required fields
+    if [ -n "$current_task_id" ]; then
+        if [ "$has_description" = false ]; then
+            add_error "$current_task_line" "Task '$current_task_id' missing required field: Description"
+        fi
+        if [ "$has_priority" = false ]; then
+            add_error "$current_task_line" "Task '$current_task_id' missing required field: Priority"
+        fi
+    fi
+
+    # Check if TASKS section was found
+    if [ "$in_tasks_section" = false ]; then
+        add_error 1 "Missing required '## TASKS' section header"
+    fi
+
+    # Validate dependency references
+    for task_id in "${!task_dependencies[@]}"; do
+        local deps_info="${task_dependencies[$task_id]}"
+        local deps_str="${deps_info%:*}"
+        local deps_line="${deps_info#*:}"
+
+        # Parse comma-separated dependencies
+        IFS=',' read -ra deps <<< "$deps_str"
+        for dep in "${deps[@]}"; do
+            dep="${dep#"${dep%%[![:space:]]*}"}"  # Trim leading whitespace
+            dep="${dep%"${dep##*[![:space:]]}"}"  # Trim trailing whitespace
+
+            if [ -z "${task_ids[$dep]}" ]; then
+                add_error "$deps_line" "Task '$task_id' references non-existent dependency '$dep'"
+            fi
+        done
+    done
+
+    return 0
+}
+
+main() {
+    local kanban_file="$RALPH_DIR/kanban.md"
+    local quiet=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--file)
+                if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                    echo "Error: --file requires a path argument"
+                    exit 2
+                fi
+                kanban_file="$2"
+                shift 2
+                ;;
+            -q|--quiet)
+                quiet=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                echo ""
+                show_help
+                exit 2
+                ;;
+            *)
+                echo "Unknown argument: $1"
+                echo ""
+                show_help
+                exit 2
+                ;;
+        esac
+    done
+
+    # Run validation
+    validate_kanban "$kanban_file"
+    local validate_result=$?
+
+    if [ $validate_result -eq 2 ]; then
+        exit 2
+    fi
+
+    # Report results
+    if [ "$VALID" = false ]; then
+        echo "Validation failed with ${#VALIDATION_ERRORS[@]} error(s):"
+        echo ""
+        for error in "${VALIDATION_ERRORS[@]}"; do
+            echo "  ERROR: $error"
+        done
+        exit 1
+    else
+        if [ "$quiet" = false ]; then
+            echo "Validation passed: $kanban_file is valid"
+        fi
+        exit 0
+    fi
+}
+
+main "$@"
