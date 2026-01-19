@@ -4,6 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task-parser.sh"
 source "$SCRIPT_DIR/logger.sh"
+source "$SCRIPT_DIR/circuit-breaker.sh"
 
 # Extract clean text from Claude CLI stream-JSON output
 # Filters out JSON and returns only assistant text responses
@@ -44,6 +45,11 @@ ralph_loop() {
     } >> "../worker.log"
 
     log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
+
+    # Initialize circuit breaker for this worker
+    local worker_base_dir=$(dirname "$prd_file")
+    cb_init "$worker_base_dir"
+    log_debug "Circuit breaker initialized"
 
     # Change to workspace BEFORE the loop
     cd "$workspace" || exit 1
@@ -355,6 +361,33 @@ Please provide your summary based on the conversation so far, following this str
             log "Shutdown requested during summary phase - exiting loop"
             break
         fi
+
+        # Circuit breaker check - detect stuck workers and repeated failures
+        local worker_base_dir=$(dirname "$prd_file")
+        local iteration_log="$worker_base_dir/logs/iteration-$iteration.log"
+
+        # Run circuit breaker checks
+        if ! cb_check_iteration "$worker_base_dir" "$iteration" "$workspace" "$prd_file" "$iteration_log"; then
+            log_error "Circuit breaker tripped - stopping worker"
+            local cb_status=$(cb_get_status_line "$worker_base_dir")
+            log_error "$cb_status"
+
+            local end_time=$(date +%s)
+            local duration=$((end_time - start_time))
+            {
+                echo ""
+                echo "=== WORKER STATUS: CIRCUIT_BREAKER_TRIPPED ==="
+                echo "End time: $(date -Iseconds)"
+                echo "WORKER_END_TIME=$end_time"
+                echo "Total duration: $duration seconds ($((duration / 60)) minutes)"
+                echo "Status: $cb_status"
+            } >> "../worker.log"
+
+            return 2  # Special exit code for circuit breaker trip
+        fi
+
+        # Check for error patterns
+        cb_check_errors "$worker_base_dir" "$iteration_log"
 
         iteration=$((iteration + 1))
         sleep 2  # Prevent tight loop

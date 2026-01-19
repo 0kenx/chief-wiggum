@@ -9,11 +9,13 @@ source "$WIGGUM_HOME/lib/task-parser.sh"
 source "$WIGGUM_HOME/lib/logger.sh"
 source "$WIGGUM_HOME/lib/file-lock.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
+source "$WIGGUM_HOME/lib/circuit-breaker.sh"
 
 # Default configuration
 MAX_WORKERS=4
 MAX_ITERATIONS=20       # Max outer loop iterations per worker
 MAX_TURNS=50           # Max turns per Claude session
+RESET_CIRCUIT=false    # Reset circuit breakers before starting
 
 show_help() {
     cat << EOF
@@ -25,12 +27,14 @@ Options:
   --max-workers N      Maximum concurrent workers (default: 4)
   --max-iters N        Maximum iterations per worker (default: 50)
   --max-turns N        Maximum turns per Claude session (default: 20)
+  --reset-circuit      Reset circuit breakers for failed workers before starting
   -h, --help          Show this help message
 
 Examples:
   wiggum run                              # Start orchestration with defaults
   wiggum run --max-workers 8              # Start with max 8 workers
   wiggum run --max-iters 100 --max-turns 30  # Customize iteration/turn limits
+  wiggum run --reset-circuit              # Reset tripped circuit breakers and retry
 
 Behavior:
   - Chief assigns pending tasks [ ] to workers
@@ -38,6 +42,11 @@ Behavior:
   - Workers mark tasks complete [x] when done
   - Chief waits until all tasks are complete
   - New workers spawn as old ones finish (up to max)
+
+Circuit Breaker:
+  - Workers stop after 3 loops without progress (no file changes, PRD updates)
+  - Workers stop after 5 loops with identical error patterns
+  - Use --reset-circuit to manually override and retry stuck workers
 
 EOF
 }
@@ -90,6 +99,10 @@ main() {
                 fi
                 MAX_TURNS="$2"
                 shift 2
+                ;;
+            --reset-circuit)
+                RESET_CIRCUIT=true
+                shift
                 ;;
             -h|--help)
                 show_help
@@ -250,6 +263,32 @@ main() {
                 log_error "Failed to reset $task_id to pending"
             fi
         done
+        echo ""
+    fi
+
+    # Reset circuit breakers if requested
+    if [ "$RESET_CIRCUIT" = true ]; then
+        log "Resetting circuit breakers for existing workers..."
+        local reset_count=0
+        if [ -d "$RALPH_DIR/workers" ]; then
+            for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+                [ -d "$worker_dir" ] || continue
+                local state_file="$worker_dir/circuit-state.json"
+                if [ -f "$state_file" ]; then
+                    local state=$(cb_get_state "$worker_dir")
+                    if [ "$state" = "OPEN" ]; then
+                        cb_reset "$worker_dir"
+                        echo "  → Reset circuit for $(basename "$worker_dir")"
+                        ((reset_count++))
+                    fi
+                fi
+            done
+        fi
+        if [ $reset_count -eq 0 ]; then
+            echo "  No tripped circuit breakers found"
+        else
+            echo "  Reset $reset_count circuit breaker(s)"
+        fi
         echo ""
     fi
 

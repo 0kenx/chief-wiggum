@@ -20,6 +20,7 @@ source "$WIGGUM_HOME/lib/file-lock.sh"
 source "$WIGGUM_HOME/lib/calculate-cost.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
 source "$WIGGUM_HOME/lib/task-parser.sh"
+source "$WIGGUM_HOME/lib/circuit-breaker.sh"
 
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
@@ -60,17 +61,25 @@ main() {
     ralph_loop_pid=$!
 
     # Wait for ralph_loop to complete
-    if wait "$ralph_loop_pid"; then
+    local ralph_exit_code=0
+    wait "$ralph_loop_pid" || ralph_exit_code=$?
+
+    if [ $ralph_exit_code -eq 0 ]; then
         if [ "$worker_interrupted" = true ]; then
             log "Worker $WORKER_ID interrupted by signal"
         else
             log "Worker $WORKER_ID completed successfully"
         fi
+    elif [ $ralph_exit_code -eq 2 ]; then
+        # Circuit breaker tripped
+        log_error "Worker $WORKER_ID stopped by circuit breaker"
+        local cb_status=$(cb_get_status_line "$WORKER_DIR")
+        log_error "$cb_status"
     else
         if [ "$worker_interrupted" = true ]; then
             log "Worker $WORKER_ID interrupted by signal"
         else
-            log_error "Worker $WORKER_ID failed or timed out"
+            log_error "Worker $WORKER_ID failed or timed out (exit code: $ralph_exit_code)"
         fi
     fi
 
@@ -176,10 +185,26 @@ cleanup_worker() {
     local prd_status=$(get_prd_status "$WORKER_DIR/prd.md")
     log "PRD status: $prd_status"
 
+    # Check if circuit breaker was tripped
+    local cb_tripped=false
+    if [ -f "$WORKER_DIR/circuit-state.json" ]; then
+        local cb_state=$(cb_get_state "$WORKER_DIR")
+        if [ "$cb_state" = "OPEN" ]; then
+            cb_tripped=true
+        fi
+    fi
+
     # Determine final task status
     if [ "$has_violations" = true ]; then
         final_status="FAILED"
         log_error "Task marked as FAILED due to workspace violations"
+    elif [ "$cb_tripped" = true ]; then
+        final_status="FAILED"
+        local cb_reason=$(jq -r '.trip_reason // "UNKNOWN"' "$WORKER_DIR/circuit-state.json")
+        local cb_message=$(jq -r '.trip_message // ""' "$WORKER_DIR/circuit-state.json")
+        log_error "Task marked as FAILED - Circuit breaker tripped: $cb_reason"
+        log_error "  Reason: $cb_message"
+        log_error "  Use 'wiggum run --reset-circuit' to retry"
     elif [ "$prd_status" = "FAILED" ]; then
         final_status="FAILED"
         log_error "Task marked as FAILED - PRD contains failed tasks"

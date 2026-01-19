@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Show status of workers
 
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 PROJECT_DIR="$(pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
+
+source "$WIGGUM_HOME/lib/circuit-breaker.sh" 2>/dev/null || true
 
 show_help() {
     cat << EOF
@@ -113,13 +116,51 @@ else
 fi
 echo ""
 
-# Display running workers
+# Display running workers with circuit breaker status
 for i in "${!worker_pids[@]}"; do
-    echo "✓ Worker ${worker_names[$i]} (PID: ${worker_pids[$i]}) - RUNNING"
+    worker_name="${worker_names[$i]}"
+    worker_pid="${worker_pids[$i]}"
+    worker_dir="$RALPH_DIR/workers/$worker_name"
+
+    echo "✓ Worker $worker_name (PID: $worker_pid) - RUNNING"
+
+    # Show circuit breaker status if available
+    if [ -f "$worker_dir/circuit-state.json" ] && type cb_get_status_line &>/dev/null; then
+        cb_status=$(cb_get_status_line "$worker_dir")
+        echo "    $cb_status"
+    fi
 done
 
 echo ""
 echo "Total: $worker_count workers, $running_count running"
+
+# Show any workers with tripped circuit breakers (even if not running)
+tripped_count=0
+if [ -d "$RALPH_DIR/workers" ]; then
+    for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+        state_file="$worker_dir/circuit-state.json"
+        if [ -f "$state_file" ]; then
+            state=$(jq -r '.state // "CLOSED"' "$state_file" 2>/dev/null)
+            if [ "$state" = "OPEN" ]; then
+                if [ $tripped_count -eq 0 ]; then
+                    echo ""
+                    echo "Tripped Circuit Breakers:"
+                fi
+                ((tripped_count++))
+                worker_name=$(basename "$worker_dir")
+                reason=$(jq -r '.trip_reason // "UNKNOWN"' "$state_file")
+                message=$(jq -r '.trip_message // ""' "$state_file")
+                echo "  ✗ $worker_name: $reason - $message"
+            fi
+        fi
+    done
+fi
+
+if [ $tripped_count -gt 0 ]; then
+    echo ""
+    echo "Use 'wiggum run --reset-circuit' to reset and retry"
+fi
 
 # Show recent activity from logs
 if [ -f "$RALPH_DIR/logs/workers.log" ]; then
