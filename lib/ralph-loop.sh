@@ -26,7 +26,13 @@ ralph_loop() {
 
     # Record start time
     local start_time=$(date +%s)
-    echo "WORKER_START_TIME=$start_time" >> "../worker.log"
+    {
+        echo ""
+        echo "=== WORKER STARTED ==="
+        echo "Start time: $(date -Iseconds)"
+        echo "WORKER_START_TIME=$start_time"
+        echo ""
+    } >> "../worker.log"
 
     log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
 
@@ -106,7 +112,19 @@ IMPORTANT NOTES:
 - All work must stay within the workspace directory"
 
         # Add context from previous iterations if available
-        if [ $iteration -gt 0 ] && [ -f "../worker.log" ]; then
+        if [ $iteration -gt 0 ]; then
+            # Build list of summary files to read
+            local summary_files=""
+            for ((i=0; i<iteration; i++)); do
+                if [ -f "../iteration-$i-summary.txt" ]; then
+                    if [ -z "$summary_files" ]; then
+                        summary_files="iteration-$i-summary.txt"
+                    else
+                        summary_files="$summary_files, iteration-$i-summary.txt"
+                    fi
+                fi
+            done
+
             user_prompt="$user_prompt
 
 CONTEXT FROM PREVIOUS ITERATIONS:
@@ -114,10 +132,14 @@ CONTEXT FROM PREVIOUS ITERATIONS:
 This is iteration $iteration of a multi-iteration work session. Previous work has been completed in earlier iterations.
 
 To understand what has already been accomplished and maintain continuity:
-- Read ../worker.log which contains detailed summaries of all previous iterations
-- Review the session summaries to understand completed work, decisions made, and context
+- Read the following summary files (in order) to understand completed work and context:
+  $summary_files
+- These summaries are located in the parent directory (../iteration-X-summary.txt)
+- Each summary describes what was done in that iteration, decisions made, and files modified
 - Use this information to avoid duplicating work and to build upon previous progress
-- Ensure your approach aligns with patterns and decisions from earlier iterations"
+- Ensure your approach aligns with patterns and decisions from earlier iterations
+
+CRITICAL: Do NOT read files in the logs/ directory - they contain full conversation JSON streams that are too large (100KB-500KB each) and will deplete your context window. Only read the iteration-X-summary.txt files for context."
         fi
 
         log_debug "Iteration $iteration: Session $session_id (max $max_turns_per_session turns)"
@@ -149,13 +171,12 @@ To understand what has already been accomplished and maintain continuity:
         local exit_code=$?
         log "Work phase completed (exit code: $exit_code)"
 
-        # PHASE 2: If session hit turn limit (exit code 1), resume for summary
-        if [ $exit_code -ne 0 ]; then
-            log "Session $session_id hit turn limit, requesting summary"
+        # PHASE 2: ALWAYS generate summary for context continuity (not conditional)
+        log "Generating summary for iteration $iteration"
 
-            {
-                echo "=== SUMMARY PHASE ==="
-            } >> "../worker.log"
+        {
+            echo "=== SUMMARY PHASE ==="
+        } >> "../worker.log"
 
             local summary_prompt="Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
@@ -226,10 +247,10 @@ Please provide your summary based on the conversation so far, following this str
 
             log "Requesting summary for session $session_id"
 
-            # Capture full output to iteration summary file
+            # Capture full output to iteration summary file (in worker root, not logs/)
             local summary_full=$(claude --resume "$session_id" --max-turns 2 \
                 --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | \
-                tee "../logs/iteration-$iteration-summary.log")
+                tee "../iteration-$iteration-summary.txt")
 
             # Extract clean text from JSON stream
             local summary=$(extract_summary_text "$summary_full")
@@ -252,7 +273,6 @@ Please provide your summary based on the conversation so far, following this str
             } >> "$prd_file"
 
             log "Summary appended to PRD and worker.log"
-        fi
 
         iteration=$((iteration + 1))
         sleep 2  # Prevent tight loop
@@ -260,6 +280,18 @@ Please provide your summary based on the conversation so far, following this str
 
     if [ $iteration -ge $max_iterations ]; then
         log_error "Worker reached max iterations ($max_iterations) without completing all tasks"
+
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        {
+            echo ""
+            echo "=== WORKER STATUS: INCOMPLETE ==="
+            echo "End time: $(date -Iseconds)"
+            echo "WORKER_END_TIME=$end_time"
+            echo "Total duration: $duration seconds ($((duration / 60)) minutes)"
+            echo "Status: Reached max iterations ($max_iterations) without completing all tasks"
+        } >> "../worker.log"
+
         return 1
     fi
 
@@ -404,8 +436,16 @@ Please provide your comprehensive summary following this structure."
 
     # Record end time
     local end_time=$(date +%s)
-    echo "WORKER_END_TIME=$end_time" >> "../worker.log"
+    local duration=$((end_time - start_time))
+    {
+        echo ""
+        echo "=== WORKER COMPLETED ==="
+        echo "End time: $(date -Iseconds)"
+        echo "WORKER_END_TIME=$end_time"
+        echo "Total duration: $duration seconds ($((duration / 60)) minutes)"
+        echo "Status: All tasks completed successfully"
+    } >> "../worker.log"
 
-    log "Worker finished after $iteration iterations"
+    log "Worker finished after $iteration iterations (duration: $duration seconds)"
     return 0
 }
