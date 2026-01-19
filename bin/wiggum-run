@@ -14,6 +14,7 @@ source "$WIGGUM_HOME/lib/audit-logger.sh"
 MAX_WORKERS=4
 MAX_ITERATIONS=20       # Max outer loop iterations per worker
 MAX_TURNS=50           # Max turns per Claude session
+RATE_LIMIT=100         # Max API calls per hour (0 = unlimited)
 
 show_help() {
     cat << EOF
@@ -23,14 +24,17 @@ Usage: wiggum run [options]
 
 Options:
   --max-workers N      Maximum concurrent workers (default: 4)
-  --max-iters N        Maximum iterations per worker (default: 50)
-  --max-turns N        Maximum turns per Claude session (default: 20)
+  --max-iters N        Maximum iterations per worker (default: 20)
+  --max-turns N        Maximum turns per Claude session (default: 50)
+  --rate-limit N       Maximum API calls per hour (default: 100, 0 = unlimited)
   -h, --help          Show this help message
 
 Examples:
   wiggum run                              # Start orchestration with defaults
   wiggum run --max-workers 8              # Start with max 8 workers
   wiggum run --max-iters 100 --max-turns 30  # Customize iteration/turn limits
+  wiggum run --rate-limit 50              # Limit to 50 API calls per hour
+  wiggum run --rate-limit 0               # Disable rate limiting
 
 Behavior:
   - Chief assigns pending tasks [ ] to workers
@@ -38,6 +42,7 @@ Behavior:
   - Workers mark tasks complete [x] when done
   - Chief waits until all tasks are complete
   - New workers spawn as old ones finish (up to max)
+  - Workers pause when rate limit is reached (80% warning, 100% pause)
 
 EOF
 }
@@ -60,6 +65,7 @@ spawn_worker() {
     export WIGGUM_HOME
     export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
     export WIGGUM_MAX_TURNS="$MAX_TURNS"
+    export WIGGUM_RATE_LIMIT="$RATE_LIMIT"
     bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" >> "$RALPH_DIR/logs/workers.log" 2>&1
 }
 
@@ -89,6 +95,14 @@ main() {
                     exit 1
                 fi
                 MAX_TURNS="$2"
+                shift 2
+                ;;
+            --rate-limit)
+                if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                    echo "Error: --rate-limit requires a number argument"
+                    exit 1
+                fi
+                RATE_LIMIT="$2"
                 shift 2
                 ;;
             -h|--help)
@@ -253,7 +267,13 @@ main() {
         echo ""
     fi
 
-    log "Starting Chief Wiggum in $PROJECT_DIR (max $MAX_WORKERS concurrent workers)"
+    local rate_limit_msg=""
+    if [ "$RATE_LIMIT" -gt 0 ]; then
+        rate_limit_msg=", rate limit: $RATE_LIMIT calls/hour"
+    else
+        rate_limit_msg=", rate limit: disabled"
+    fi
+    log "Starting Chief Wiggum in $PROJECT_DIR (max $MAX_WORKERS concurrent workers$rate_limit_msg)"
     echo ""
     echo "⚠️  WARNING: Do NOT edit files in the main repository while workers are running!"
     echo "    Workers run in isolated git worktrees. Any uncommitted changes in the main"

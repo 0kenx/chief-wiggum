@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Show current rate limit status
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
+source "$WIGGUM_HOME/lib/rate-limiter.sh"
+
+# Default rate limit (matches wiggum-run default)
+DEFAULT_RATE_LIMIT=100
+
+show_help() {
+    cat << EOF
+wiggum rate-status - Show current API rate limit status
+
+Usage: wiggum rate-status [options]
+
+Options:
+  --limit N      Override rate limit for display purposes (default: 100)
+  --json         Output status in JSON format
+  -h, --help     Show this help message
+
+Description:
+  Displays the current API call rate limit status across all workers.
+  Shows how many API calls have been made in the last hour, the current
+  limit, and when the limit will reset.
+
+Examples:
+  wiggum rate-status                 # Show current status
+  wiggum rate-status --limit 50      # Show status relative to a 50 call/hour limit
+  wiggum rate-status --json          # Output status as JSON
+
+EOF
+}
+
+main() {
+    local rate_limit="$DEFAULT_RATE_LIMIT"
+    local json_output=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit)
+                if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                    echo "Error: --limit requires a number argument"
+                    exit 1
+                fi
+                rate_limit="$2"
+                shift 2
+                ;;
+            --json)
+                json_output=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                echo ""
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+
+    # Check if .ralph directory exists
+    if [ ! -d "$RALPH_DIR" ]; then
+        echo "Error: .ralph/ directory not found. Run 'wiggum init' first."
+        exit 1
+    fi
+
+    local rate_limit_file="$RALPH_DIR/rate-limit.json"
+
+    if [ "$json_output" = true ]; then
+        # JSON output mode
+        if [ ! -f "$rate_limit_file" ]; then
+            jq -n --argjson limit "$rate_limit" \
+                '{
+                    status: "ok",
+                    current_calls: 0,
+                    limit: $limit,
+                    percentage: 0,
+                    remaining: $limit,
+                    message: "No API calls recorded yet"
+                }'
+        else
+            check_rate_limit "$rate_limit_file" "$rate_limit"
+        fi
+    else
+        # Human-readable output mode
+        echo ""
+        print_rate_status "$rate_limit_file" "$rate_limit"
+        echo ""
+    fi
+}
+
+main "$@"

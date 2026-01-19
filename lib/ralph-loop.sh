@@ -4,6 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task-parser.sh"
 source "$SCRIPT_DIR/logger.sh"
+source "$SCRIPT_DIR/rate-limiter.sh"
 
 # Extract clean text from Claude CLI stream-JSON output
 # Filters out JSON and returns only assistant text responses
@@ -21,7 +22,12 @@ ralph_loop() {
     local workspace="$2"                   # Worker's git worktree
     local max_iterations="${3:-20}"
     local max_turns_per_session="${4:-50}" # Limit turns to control context window
+    local rate_limit="${5:-100}"           # Max API calls per hour (0 = unlimited)
     local iteration=0
+
+    # Get rate limit file path (in .ralph directory, shared across all workers)
+    local ralph_dir="$(dirname "$(dirname "$prd_file")")"
+    local rate_limit_file="$ralph_dir/rate-limit.json"
 
     # Track if shutdown was requested
     local shutdown_requested=false
@@ -190,6 +196,25 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
         } > "../logs/iteration-$iteration.log"
 
         # PHASE 1: Work session with turn limit
+        # Check rate limit before making API call (if rate limiting is enabled)
+        if [ "$rate_limit" -gt 0 ]; then
+            local rate_status
+            rate_status=$(check_rate_limit "$rate_limit_file" "$rate_limit")
+            local rate_check=$?
+
+            if [ $rate_check -eq 1 ]; then
+                # Warning at 80%
+                local current_calls=$(echo "$rate_status" | jq -r '.current_calls')
+                local percentage=$(echo "$rate_status" | jq -r '.percentage')
+                log "⚠️  Rate limit warning: $current_calls/$rate_limit calls ($percentage%) - approaching limit"
+            elif [ $rate_check -eq 2 ]; then
+                # Exceeded - wait for rate limit to reset
+                log "Rate limit exceeded - pausing worker"
+                wait_for_rate_limit "$rate_limit_file" "$rate_limit"
+                log "Rate limit reset - resuming worker"
+            fi
+        fi
+
         # Use --dangerously-skip-permissions to allow PRD edits (hooks still enforce workspace boundaries)
         # Append verbose output to iteration-specific file (after the initial prompt JSON)
         claude --verbose \
@@ -202,6 +227,12 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
             -p "$user_prompt" >> "../logs/iteration-$iteration.log" 2>&1
 
         local exit_code=$?
+
+        # Record API call for rate limiting (work phase counts as 1 call)
+        if [ "$rate_limit" -gt 0 ]; then
+            record_api_call "$rate_limit_file"
+        fi
+
         log "Work phase completed (exit code: $exit_code, session: $session_id)"
 
         # Log work phase completion to worker.log
@@ -298,12 +329,32 @@ Please provide your summary based on the conversation so far, following this str
 
         log "Requesting summary for session $session_id"
 
+        # Check rate limit before summary API call (if rate limiting is enabled)
+        if [ "$rate_limit" -gt 0 ]; then
+            local rate_status
+            rate_status=$(check_rate_limit "$rate_limit_file" "$rate_limit")
+            local rate_check=$?
+
+            if [ $rate_check -eq 2 ]; then
+                # Exceeded - wait for rate limit to reset
+                log "Rate limit exceeded before summary - pausing worker"
+                wait_for_rate_limit "$rate_limit_file" "$rate_limit"
+                log "Rate limit reset - resuming summary generation"
+            fi
+        fi
+
         # Capture full output to iteration summary file (in worker root, not logs/)
         local summary_full=$(claude --resume "$session_id" --max-turns 2 \
             --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | \
             tee "../iteration-$iteration-summary.txt")
 
         local summary_exit_code=$?
+
+        # Record API call for rate limiting (summary phase counts as 1 call)
+        if [ "$rate_limit" -gt 0 ]; then
+            record_api_call "$rate_limit_file"
+        fi
+
         log "Summary generation completed (exit code: $summary_exit_code)"
 
         # Extract clean text from JSON stream
@@ -494,10 +545,29 @@ IMPORTANT GUIDELINES:
 
 Please provide your comprehensive summary following this structure."
 
+        # Check rate limit before final summary API call (if rate limiting is enabled)
+        if [ "$rate_limit" -gt 0 ]; then
+            local rate_status
+            rate_status=$(check_rate_limit "$rate_limit_file" "$rate_limit")
+            local rate_check=$?
+
+            if [ $rate_check -eq 2 ]; then
+                # Exceeded - wait for rate limit to reset
+                log "Rate limit exceeded before final summary - pausing worker"
+                wait_for_rate_limit "$rate_limit_file" "$rate_limit"
+                log "Rate limit reset - resuming final summary generation"
+            fi
+        fi
+
         # Capture full output to final summary log
         local summary_full=$(claude --resume "$last_session_id" --max-turns 3 \
             --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | \
             tee "../logs/final-summary.log")
+
+        # Record API call for rate limiting (final summary counts as 1 call)
+        if [ "$rate_limit" -gt 0 ]; then
+            record_api_call "$rate_limit_file"
+        fi
 
         # Extract clean text from JSON stream
         local final_summary=$(extract_summary_text "$summary_full")

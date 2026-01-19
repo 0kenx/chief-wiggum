@@ -16,6 +16,7 @@ Commands:
   stop             Stop all running workers
   clean            Clean up worktrees and worker directories
   status           Show status of workers and tasks
+  rate-status      Show API rate limit status
   monitor          Monitor worker logs in real-time
   review           Review and manage worker Pull Requests
 
@@ -27,9 +28,11 @@ Examples:
   wiggum validate               # Validate kanban.md before running
   wiggum run                    # Start orchestration (max 4 workers)
   wiggum run --max-workers 8    # Start with max 8 workers
+  wiggum run --rate-limit 50    # Start with 50 calls/hour limit
   wiggum stop                   # Stop all workers
   wiggum clean                  # Clean up worktrees
   wiggum status                 # Show worker status
+  wiggum rate-status            # Show API rate limit usage
   wiggum monitor                # Monitor worker output
   wiggum review                 # Review and manage PRs
 
@@ -79,6 +82,9 @@ main() {
             ;;
         status)
             exec "$WIGGUM_HOME/bin/wiggum-status"
+            ;;
+        rate-status)
+            exec "$WIGGUM_HOME/bin/wiggum-rate-status" "$@"
             ;;
         monitor)
             exec "$WIGGUM_HOME/bin/wiggum-monitor" "$@"

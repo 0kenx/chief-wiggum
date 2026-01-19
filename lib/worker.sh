@@ -13,6 +13,7 @@ TASK_ID=$(echo "$WORKER_ID" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')  # e.g., T
 # Configuration for ralph loop
 MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"           # Max outer loop iterations
 MAX_TURNS_PER_SESSION="${WIGGUM_MAX_TURNS:-50}"         # Max turns per Claude session (controls context window)
+RATE_LIMIT="${WIGGUM_RATE_LIMIT:-100}"                  # Max API calls per hour (0 = unlimited)
 
 source "$WIGGUM_HOME/lib/ralph-loop.sh"
 source "$WIGGUM_HOME/lib/logger.sh"
@@ -51,12 +52,13 @@ main() {
     setup_worker
 
     # Start Ralph loop for this worker's task in background to capture PID
-    # Params: prd_file, workspace, max_iterations, max_turns_per_session
+    # Params: prd_file, workspace, max_iterations, max_turns_per_session, rate_limit
     ralph_loop \
         "$WORKER_DIR/prd.md" \
         "$WORKER_DIR/workspace" \
         "$MAX_ITERATIONS" \
-        "$MAX_TURNS_PER_SESSION" &
+        "$MAX_TURNS_PER_SESSION" \
+        "$RATE_LIMIT" &
     ralph_loop_pid=$!
 
     # Wait for ralph_loop to complete
