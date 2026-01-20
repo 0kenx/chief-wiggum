@@ -19,6 +19,7 @@ source "$WIGGUM_HOME/lib/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/agent-registry.sh"
 source "$WIGGUM_HOME/lib/agents/validation-review.sh"
 source "$WIGGUM_HOME/lib/git-operations.sh"
+source "$WIGGUM_HOME/lib/file-lock.sh"
 
 # Default configuration (can be overridden by env vars)
 MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
