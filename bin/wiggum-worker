@@ -182,8 +182,14 @@ resume_from_validation() {
     local worker_dir="$1"
     local task_id="$2"
 
+    # Register as worker with PID (same as worker.sh does)
+    echo "$$" > "$worker_dir/worker.pid"
+
+    # Cleanup PID on exit (success or failure)
+    trap 'rm -f "$worker_dir/worker.pid"' EXIT
+
     # Run validation review using shared library
-    run_validation_review "$worker_dir" 5
+    run_validation_review "$worker_dir" 50
 
     # Check validation result
     if ! check_validation_result "$worker_dir"; then
@@ -228,6 +234,23 @@ cmd_resume() {
             echo "Error: Worker $worker_id is already running (PID: $existing_pid)"
             exit 1
         fi
+    fi
+
+    # Check main repo is clean (prevents workspace violations)
+    local dirty_files
+    dirty_files=$(cd "$PROJECT_DIR" && git status --porcelain 2>/dev/null | grep -v "^.. .ralph/")
+    if [ -n "$dirty_files" ]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "⚠️  MAIN REPO HAS UNCOMMITTED CHANGES"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Cannot resume worker - main repository has uncommitted changes:"
+        echo "$dirty_files" | head -10
+        echo ""
+        echo "This would cause workspace boundary violations."
+        echo "Please commit or stash your changes first."
+        echo ""
+        exit 1
     fi
 
     # Check for workspace violations
