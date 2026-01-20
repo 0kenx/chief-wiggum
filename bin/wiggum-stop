@@ -85,14 +85,14 @@ stop_all_workers() {
     fi
 
     # Collect active workers using shared library
-    declare -A worker_pids_map  # pid -> worker_id
+    declare -A worker_pids_map=()  # pid -> worker_id (initialize empty)
     while read -r pid task_id worker_id; do
         [ -n "$pid" ] || continue
         worker_pids_map[$pid]="$worker_id"
     done < <(scan_active_workers "$RALPH_DIR")
 
     # Check if any workers are running
-    if [ ${#worker_pids_map[@]} -eq 0 ]; then
+    if [ "${#worker_pids_map[@]}" -eq 0 ]; then
         echo "No wiggum workers running"
         exit $EXIT_OK
     fi
