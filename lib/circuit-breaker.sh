@@ -9,7 +9,9 @@
 # Circuit states:
 #   CLOSED  - Normal operation (default)
 #   OPEN    - Circuit tripped, worker should stop
-#   RESET   - Manual override, force reset to CLOSED
+#
+# Actions:
+#   reset   - Manual override to force circuit back to CLOSED state
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/logger.sh"
@@ -35,6 +37,7 @@ cb_init() {
         last_progress_time: null,
         trip_reason: null,
         trip_time: null,
+        trip_message: null,
         created_at: now | strftime("%Y-%m-%dT%H:%M:%SZ")
     }' > "$state_file"
 
@@ -49,7 +52,7 @@ cb_init() {
 
 # Get current circuit state
 # Usage: cb_get_state <worker_dir>
-# Returns: CLOSED, OPEN, or RESET
+# Returns: CLOSED or OPEN
 cb_get_state() {
     local worker_dir="$1"
     local state_file="$worker_dir/circuit-state.json"
@@ -109,23 +112,34 @@ cb_record_progress() {
         }')
 
     # Append to progress log
-    local temp_file=$(mktemp)
+    local temp_file
+    temp_file=$(mktemp)
     jq --argjson entry "$entry" '. + [$entry]' "$progress_file" > "$temp_file"
     mv "$temp_file" "$progress_file"
 
+    # Temporary file for safely updating state
+    local state_temp_file
+    state_temp_file=$(mktemp)
+
     # Update state based on progress
     if [ "$has_progress" -eq 1 ]; then
-        # Reset no-progress counter on any progress
-        jq '.no_progress_count = 0 | .last_progress_time = (now | strftime("%Y-%m-%dT%H:%M:%SZ"))' \
-            "$state_file" > "$temp_file"
-        mv "$temp_file" "$state_file"
+        # Reset no-progress counter on any progress and update iteration
+        jq --arg iteration "$iteration" \
+            '.no_progress_count = 0
+             | .last_progress_time = (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+             | .iteration = ($iteration | tonumber)' \
+            "$state_file" > "$state_temp_file"
+        mv "$state_temp_file" "$state_file"
         log_debug "Progress detected in iteration $iteration (files: $file_changes, prd: $prd_updated)"
     else
-        # Increment no-progress counter
-        local new_count=$(jq '.no_progress_count + 1' "$state_file")
-        jq --arg count "$new_count" '.no_progress_count = ($count | tonumber) | .iteration = .iteration + 1' \
-            "$state_file" > "$temp_file"
-        mv "$temp_file" "$state_file"
+        # Increment no-progress counter and update iteration
+        local new_count
+        new_count=$(jq '.no_progress_count + 1' "$state_file")
+        jq --arg count "$new_count" --arg iteration "$iteration" \
+            '.no_progress_count = ($count | tonumber)
+             | .iteration = ($iteration | tonumber)' \
+            "$state_file" > "$state_temp_file"
+        mv "$state_temp_file" "$state_file"
         log_debug "No progress in iteration $iteration (count: $new_count)"
 
         # Check if we should open the circuit
@@ -197,8 +211,8 @@ cb_classify_error() {
         return
     fi
 
-    # Count occurrences of this error hash
-    local count=$(grep -c "$error_hash" "$hash_file" 2>/dev/null || echo "0")
+    # Count occurrences of this error hash (fixed-string, whole-word match)
+    local count=$(grep -Fwc -- "$error_hash" "$hash_file" 2>/dev/null || echo "0")
 
     if [ "$count" -le "$CB_TRANSIENT_ERROR_THRESHOLD" ]; then
         echo "transient"
@@ -227,7 +241,10 @@ cb_get_error_summary() {
     local unique=0
 
     while read -r count hash; do
+        # Skip empty lines or invalid entries
         [ -z "$hash" ] && continue
+        # Ensure count is a valid number before comparison
+        [[ ! "$count" =~ ^[0-9]+$ ]] && continue
         ((unique++))
         if [ "$count" -le "$CB_TRANSIENT_ERROR_THRESHOLD" ]; then
             ((transient++))
@@ -368,10 +385,11 @@ cb_detect_file_changes() {
         return
     fi
 
-    cd "$workspace" 2>/dev/null || { echo "0"; return; }
-
-    # Count modified, added, and deleted files
-    local changes=$(git status --porcelain 2>/dev/null | wc -l)
+    # Run in a subshell so the caller's working directory is not changed
+    local changes=$(
+        cd "$workspace" 2>/dev/null || { echo "0"; exit; }
+        git status --porcelain 2>/dev/null | wc -l
+    )
     echo "$changes"
 }
 

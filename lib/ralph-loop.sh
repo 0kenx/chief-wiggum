@@ -387,7 +387,24 @@ Please provide your summary based on the conversation so far, following this str
         fi
 
         # Check for error patterns
-        cb_check_errors "$worker_base_dir" "$iteration_log"
+        if ! cb_check_errors "$worker_base_dir" "$iteration_log"; then
+            log_error "Circuit breaker tripped due to error patterns - stopping worker"
+            local cb_status=$(cb_get_status_line "$worker_base_dir")
+            log_error "$cb_status"
+
+            local end_time=$(date +%s)
+            local duration=$((end_time - start_time))
+            {
+                echo ""
+                echo "=== WORKER STATUS: CIRCUIT_BREAKER_TRIPPED ==="
+                echo "End time: $(date -Iseconds)"
+                echo "WORKER_END_TIME=$end_time"
+                echo "Total duration: $duration seconds ($((duration / 60)) minutes)"
+                echo "Status: $cb_status"
+            } >> "../worker.log"
+
+            return 2  # Special exit code for circuit breaker trip
+        fi
 
         iteration=$((iteration + 1))
         sleep 2  # Prevent tight loop
