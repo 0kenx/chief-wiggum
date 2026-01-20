@@ -3,6 +3,8 @@
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/defaults.sh"
+source "$WIGGUM_HOME/lib/pr-comments.sh"
+source "$WIGGUM_HOME/lib/pr-comment-fix.sh"
 
 show_help() {
     cat << EOF
@@ -11,18 +13,31 @@ wiggum review - Review and manage worker Pull Requests
 Usage: wiggum review [command] [options]
 
 Commands:
-  list              List all open worker PRs
-  pr [PR#] view     View a specific PR with diff
-  pr [PR#] merge    Merge a specific PR
-  merge-all         Merge all worker PRs (with confirmation)
-  cleanup           Delete merged branches
-  status            Show integration status
+  list                      List all open worker PRs
+  pr [PR#] view             View a specific PR with diff
+  pr [PR#] merge            Merge a specific PR
+  merge-all                 Merge all worker PRs (with confirmation)
+  cleanup                   Delete merged branches
+  status                    Show integration status
+  task <patterns> sync      Sync PR comments for tasks matching patterns
+  task <patterns> fix       Fix PR comments using ralph loop
 
 Options:
   -h, --help        Show this help message
   --auto-merge      Auto-merge without confirmation (use with caution)
   --squash          Squash commits when merging
   --rebase          Rebase instead of merge
+
+Task Pattern Examples:
+  TASK-030                  Single task
+  TASK-030,TASK-031         Multiple tasks (comma-separated)
+
+Environment Variables:
+  WIGGUM_APPROVED_AUTHORS           Comma-separated list of comment authors to include
+                                    (default: copilot,dependabot,github-actions[bot],...)
+  WIGGUM_COMMENT_FIX_MAX_ITERATIONS Maximum fix loop iterations (default: 10)
+  WIGGUM_COMMENT_FIX_MAX_TURNS      Max turns per fix session (default: 30)
+  WIGGUM_AUTO_COMMIT_AFTER_FIX      Auto commit/push after fix (default: true)
 
 Examples:
   wiggum review list                    # List all worker PRs
@@ -32,6 +47,9 @@ Examples:
   wiggum review merge-all               # Merge all worker PRs (with confirmation)
   wiggum review merge-all --auto-merge  # Auto-merge all without asking
   wiggum review cleanup                 # Delete merged branches
+  wiggum review task TASK-030 sync      # Sync comments for TASK-030
+  wiggum review task TASK-030,TASK-031 sync  # Sync multiple tasks
+  wiggum review task TASK-030 fix       # Fix synced comments
 
 EOF
 }
@@ -215,6 +233,71 @@ show_status() {
     fi
 }
 
+# Sync PR comments for task patterns
+cmd_task_sync() {
+    local patterns="$1"
+
+    if [ -z "$patterns" ]; then
+        error "Task pattern(s) required"
+        echo "Usage: wiggum review task <patterns> sync"
+        return 1
+    fi
+
+    # Determine output directory
+    # Use the worker directory if one exists for the pattern, else use .ralph/review/
+    local output_dir="$RALPH_DIR/review"
+
+    # Try to find existing worker for primary pattern
+    local primary_pattern=$(echo "$patterns" | cut -d',' -f1)
+    local worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$primary_pattern" 2>/dev/null)
+
+    if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+        output_dir="$worker_dir"
+        log "Using worker directory: $output_dir"
+    else
+        mkdir -p "$output_dir"
+        log "Using review directory: $output_dir"
+    fi
+
+    sync_pr_comments "$patterns" "$output_dir"
+}
+
+# Fix PR comments for a task
+cmd_task_fix() {
+    local pattern="$1"
+
+    if [ -z "$pattern" ]; then
+        error "Task pattern required"
+        echo "Usage: wiggum review task <pattern> fix"
+        return 1
+    fi
+
+    # Find worker directory for this task
+    local worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
+
+    if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+        # Try the review directory as fallback
+        worker_dir="$RALPH_DIR/review"
+        if [ ! -f "$worker_dir/task-comments.md" ]; then
+            error "No worker or review directory found for pattern: $pattern"
+            echo "Ensure a worker exists for this task or run sync first:"
+            echo "  wiggum review task $pattern sync"
+            return 1
+        fi
+        log "Using review directory: $worker_dir"
+    fi
+
+    # Verify comments file exists
+    if [ ! -f "$worker_dir/task-comments.md" ]; then
+        error "No comments file found. Run sync first:"
+        echo "  wiggum review task $pattern sync"
+        return 1
+    fi
+
+    log "Starting comment fix loop for $(basename "$worker_dir")"
+    run_comment_fix "$pattern" "$worker_dir"
+}
+
 # Parse arguments
 AUTO_MERGE=false
 MERGE_METHOD="merge"
@@ -275,6 +358,30 @@ case "$COMMAND" in
             *)
                 error "Unknown PR action: $PR_ACTION"
                 echo "Usage: wiggum review pr [PR#] [view|merge]"
+                exit 1
+                ;;
+        esac
+        ;;
+    task)
+        TASK_PATTERNS="${ARGS[0]}"
+        TASK_ACTION="${ARGS[1]}"
+
+        if [ -z "$TASK_PATTERNS" ]; then
+            error "Task pattern(s) required"
+            echo "Usage: wiggum review task <patterns> [sync|fix]"
+            exit 1
+        fi
+
+        case "${TASK_ACTION:-sync}" in
+            sync)
+                cmd_task_sync "$TASK_PATTERNS"
+                ;;
+            fix)
+                cmd_task_fix "$TASK_PATTERNS"
+                ;;
+            *)
+                error "Unknown task action: $TASK_ACTION"
+                echo "Valid actions: sync, fix"
                 exit 1
                 ;;
         esac

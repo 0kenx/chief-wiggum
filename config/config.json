@@ -13,5 +13,11 @@
     "results_dir": "results",
     "workers_dir": "workers",
     "logs_dir": "logs"
+  },
+  "review": {
+    "approved_authors": ["copilot", "dependabot", "github-actions[bot]", "dependabot[bot]", "renovate[bot]", "codecov[bot]"],
+    "fix_max_iterations": 10,
+    "fix_max_turns": 30,
+    "auto_commit_after_fix": true
   }
 }
