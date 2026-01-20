@@ -12,6 +12,18 @@
             "stdin": "tool_call"
           }
         ]
+      },
+      {
+        "matchers": {
+          "tool": "Task"
+        },
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/inject-workspace-boundary.sh",
+            "stdin": "tool_call"
+          }
+        ]
       }
     ],
     "PostToolUse": [

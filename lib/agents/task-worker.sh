@@ -109,11 +109,11 @@ WORKSPACE BOUNDARY ENFORCEMENT:
 
 Your allowed workspace is: $workspace and $prd_relative
 
-CRITICAL SECURITY RULE: You MUST NOT directly or indirectly:
-- cd into, read, or modify files outside this workspace
-- Use relative paths that escape this workspace (e.g., ../../)
-- Follow symlinks that point outside this workspace
-- Execute commands that affect files outside this workspace
+CRITICAL SECURITY RULE:
+- You MUST NOT cd into, read, or modify files outside this workspace
+- You MUST NOT use relative paths that escape this workspace (e.g., ../../)
+- You MUST NOT follow symlinks that point outside this workspace
+- You MUST NOT execute commands that affect files outside this workspace
 
 All file operations must remain within the workspace boundary. Violations will cause validation to fail.
 EOF
