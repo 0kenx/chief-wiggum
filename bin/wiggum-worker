@@ -238,7 +238,7 @@ cmd_resume() {
 
     # Check main repo is clean (prevents workspace violations)
     local dirty_files
-    dirty_files=$(cd "$PROJECT_DIR" && git status --porcelain 2>/dev/null | grep -v "^.. .ralph/")
+    dirty_files=$(cd "$PROJECT_DIR" && git status --porcelain 2>/dev/null | grep -v "^.. .ralph/" || true)
     if [ -n "$dirty_files" ]; then
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "⚠️  MAIN REPO HAS UNCOMMITTED CHANGES"
