@@ -123,6 +123,9 @@ run_validation_review() {
 
     mkdir -p "$worker_dir/logs"
 
+    # Clean up old validation files before re-running
+    rm -f "$log_file" "$worker_dir/validation-result.txt" "$worker_dir/validation-review.md"
+
     local system_prompt
     system_prompt=$(get_validation_system_prompt "$workspace")
     local user_prompt
