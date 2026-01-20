@@ -54,9 +54,9 @@ agent_runner_init() {
     # Ensure agent directory exists
     mkdir -p "$agent_dir"
 
-    # Record PID
-    echo "$$" > "$agent_dir/agent.pid"
-    log_debug "Agent PID $$ recorded in $agent_dir/agent.pid"
+    # Record PID - use BASHPID to get actual process ID (not parent's $$ in subshells)
+    echo "$BASHPID" > "$agent_dir/agent.pid"
+    log_debug "Agent PID $BASHPID recorded in $agent_dir/agent.pid"
 
     # Setup signal handlers
     trap '_agent_runner_signal_handler' INT TERM
