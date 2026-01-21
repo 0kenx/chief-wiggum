@@ -44,6 +44,9 @@ agent_source_lock
 agent_source_metrics
 agent_source_registry
 
+# Source exit codes for standardized returns
+source "$WIGGUM_HOME/lib/core/exit-codes.sh"
+
 # Save references to sourced kanban functions before defining wrappers
 eval "_kanban_mark_done() $(declare -f update_kanban | sed '1d')"
 eval "_kanban_mark_failed() $(declare -f update_kanban_failed | sed '1d')"
@@ -157,18 +160,16 @@ agent_run() {
     local has_violations="$FINALITY_HAS_VIOLATIONS"
     local final_status="$FINALITY_STATUS"
 
-    # Check validation result - override final_status if validation failed
-    if [ -f "$worker_dir/validation-result.txt" ]; then
-        local validation_result
-        validation_result=$(cat "$worker_dir/validation-result.txt")
-        if [ "$validation_result" = "FAIL" ]; then
-            log_error "Validation review FAILED - marking task as failed"
-            final_status="FAILED"
-        elif [ "$validation_result" = "UNKNOWN" ]; then
-            log_error "Validation result UNKNOWN - cannot proceed safely"
-            log_error "Worker exiting without commit/PR or status update"
-            return 1
-        fi
+    # Check validation result using communication protocol
+    local validation_result
+    validation_result=$(agent_read_validation "$worker_dir")
+    if [ "$validation_result" = "FAIL" ]; then
+        log_error "Validation review FAILED - marking task as failed"
+        final_status="FAILED"
+    elif [ "$validation_result" = "UNKNOWN" ]; then
+        log_error "Validation result UNKNOWN - cannot proceed safely"
+        log_error "Worker exiting without commit/PR or status update"
+        return "$EXIT_AGENT_VALIDATION_FAILED"
     fi
 
     local pr_url="N/A"
@@ -216,6 +217,31 @@ agent_run() {
 
     # Record completion
     agent_log_complete "$worker_dir" "$loop_result" "$start_time"
+
+    # Write structured agent result
+    local result_status="failure"
+    local result_exit_code="$loop_result"
+    if [ "$final_status" = "COMPLETE" ] && [ "$loop_result" -eq 0 ]; then
+        result_status="success"
+    elif [ "$final_status" = "COMPLETE" ]; then
+        result_status="partial"
+    fi
+
+    # Build outputs JSON
+    local outputs_json
+    outputs_json=$(jq -n \
+        --arg pr_url "$pr_url" \
+        --arg branch "${GIT_COMMIT_BRANCH:-}" \
+        --arg commit_sha "$(cd "$workspace" 2>/dev/null && git rev-parse HEAD 2>/dev/null || echo "")" \
+        --arg validation_result "$validation_result" \
+        '{
+            pr_url: $pr_url,
+            branch: $branch,
+            commit_sha: $commit_sha,
+            validation_result: $validation_result
+        }')
+
+    agent_write_result "$worker_dir" "$result_status" "$result_exit_code" "$outputs_json"
 
     log "Task worker finished: $worker_id"
     return $loop_result

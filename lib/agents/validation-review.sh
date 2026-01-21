@@ -234,8 +234,10 @@ _extract_validation_result() {
 
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
         # Extract review content between <review> tags
+        local review_path
+        review_path=$(agent_comm_path "$worker_dir" "validation-review")
         if grep -q '<review>' "$log_file"; then
-            sed -n '/<review>/,/<\/review>/p' "$log_file" | sed '1d;$d' > "$worker_dir/validation-review.md"
+            sed -n '/<review>/,/<\/review>/p' "$log_file" | sed '1d;$d' > "$review_path"
             log "Validation review saved to validation-review.md"
         fi
 
@@ -246,22 +248,16 @@ _extract_validation_result() {
         fi
     fi
 
-    # Store result for other scripts to read
-    echo "$VALIDATION_RESULT" > "$worker_dir/validation-result.txt"
+    # Store result using communication protocol
+    agent_write_validation "$worker_dir" "$VALIDATION_RESULT"
 }
 
 # Check validation result from a worker directory (utility for callers)
 # Returns: 0 if PASS, 1 if FAIL or UNKNOWN
 check_validation_result() {
     local worker_dir="$1"
-    local result_file="$worker_dir/validation-result.txt"
-
-    if [ ! -f "$result_file" ]; then
-        return 1
-    fi
-
     local result
-    result=$(cat "$result_file")
+    result=$(agent_read_validation "$worker_dir")
 
     if [ "$result" = "PASS" ]; then
         return 0

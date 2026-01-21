@@ -19,6 +19,7 @@
 #   - run_sub_agent() - Execution only, for nested agents (no lifecycle management)
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
 source "$WIGGUM_HOME/lib/worker/agent-runner.sh"
 
@@ -186,9 +187,9 @@ run_agent() {
         if ! agent_on_init "$worker_dir" "$project_dir"; then
             log_error "agent_on_init hook failed"
             if type agent_on_error &>/dev/null; then
-                agent_on_error "$worker_dir" 1 "init"
+                agent_on_error "$worker_dir" "$EXIT_AGENT_INIT_FAILED" "init"
             fi
-            return 1
+            return "$EXIT_AGENT_INIT_FAILED"
         fi
     fi
 
@@ -196,9 +197,9 @@ run_agent() {
     if ! agent_runner_init "$worker_dir" "$project_dir" "$monitor_interval"; then
         log_error "Failed to initialize agent lifecycle"
         if type agent_on_error &>/dev/null; then
-            agent_on_error "$worker_dir" 1 "init"
+            agent_on_error "$worker_dir" "$EXIT_AGENT_INIT_FAILED" "init"
         fi
-        return 1
+        return "$EXIT_AGENT_INIT_FAILED"
     fi
 
     # Setup cleanup on exit with signal handling
@@ -210,9 +211,9 @@ run_agent() {
     if ! validate_agent_prerequisites "$worker_dir"; then
         log_error "Agent prerequisites not met"
         if type agent_on_error &>/dev/null; then
-            agent_on_error "$worker_dir" 1 "prereq"
+            agent_on_error "$worker_dir" "$EXIT_AGENT_PREREQ_FAILED" "prereq"
         fi
-        return 1
+        return "$EXIT_AGENT_PREREQ_FAILED"
     fi
 
     # Call on_ready hook before agent_run
@@ -221,9 +222,9 @@ run_agent() {
         if ! agent_on_ready "$worker_dir" "$project_dir"; then
             log_error "agent_on_ready hook failed"
             if type agent_on_error &>/dev/null; then
-                agent_on_error "$worker_dir" 1 "ready"
+                agent_on_error "$worker_dir" "$EXIT_AGENT_READY_FAILED" "ready"
             fi
-            return 1
+            return "$EXIT_AGENT_READY_FAILED"
         fi
     fi
 
@@ -235,10 +236,10 @@ run_agent() {
     if ! validate_agent_outputs "$worker_dir"; then
         log_error "Agent output validation failed"
         if type agent_on_error &>/dev/null; then
-            agent_on_error "$worker_dir" "$exit_code" "output"
+            agent_on_error "$worker_dir" "$EXIT_AGENT_OUTPUT_MISSING" "output"
         fi
         if [ $exit_code -eq 0 ]; then
-            exit_code=1  # Override success if outputs are missing/empty
+            exit_code="$EXIT_AGENT_OUTPUT_MISSING"
         fi
     fi
 
@@ -321,9 +322,9 @@ run_sub_agent() {
         if ! agent_on_init "$worker_dir" "$project_dir"; then
             log_error "Sub-agent agent_on_init hook failed"
             if type agent_on_error &>/dev/null; then
-                agent_on_error "$worker_dir" 1 "init"
+                agent_on_error "$worker_dir" "$EXIT_AGENT_INIT_FAILED" "init"
             fi
-            return 1
+            return "$EXIT_AGENT_INIT_FAILED"
         fi
     fi
 
@@ -331,9 +332,9 @@ run_sub_agent() {
     if ! validate_agent_prerequisites "$worker_dir"; then
         log_error "Agent prerequisites not met"
         if type agent_on_error &>/dev/null; then
-            agent_on_error "$worker_dir" 1 "prereq"
+            agent_on_error "$worker_dir" "$EXIT_AGENT_PREREQ_FAILED" "prereq"
         fi
-        return 1
+        return "$EXIT_AGENT_PREREQ_FAILED"
     fi
 
     # Call on_ready hook before agent_run
@@ -342,9 +343,9 @@ run_sub_agent() {
         if ! agent_on_ready "$worker_dir" "$project_dir"; then
             log_error "Sub-agent agent_on_ready hook failed"
             if type agent_on_error &>/dev/null; then
-                agent_on_error "$worker_dir" 1 "ready"
+                agent_on_error "$worker_dir" "$EXIT_AGENT_READY_FAILED" "ready"
             fi
-            return 1
+            return "$EXIT_AGENT_READY_FAILED"
         fi
     fi
 
@@ -356,10 +357,10 @@ run_sub_agent() {
     if ! validate_agent_outputs "$worker_dir"; then
         log_error "Sub-agent output validation failed"
         if type agent_on_error &>/dev/null; then
-            agent_on_error "$worker_dir" "$exit_code" "output"
+            agent_on_error "$worker_dir" "$EXIT_AGENT_OUTPUT_MISSING" "output"
         fi
         if [ $exit_code -eq 0 ]; then
-            exit_code=1  # Override success if outputs are missing/empty
+            exit_code="$EXIT_AGENT_OUTPUT_MISSING"
         fi
     fi
 

@@ -290,3 +290,292 @@ agent_log_complete() {
 
     echo "[$(date -Iseconds)] AGENT_COMPLETED agent=$AGENT_TYPE duration_sec=$duration exit_code=$exit_code" >> "$worker_dir/worker.log"
 }
+
+# =============================================================================
+# STRUCTURED AGENT RESULTS
+# =============================================================================
+# Standard schema for agent results (agent-result.json):
+# {
+#   "agent_type": "task-worker",
+#   "status": "success|failure|partial|unknown",
+#   "exit_code": 0,
+#   "started_at": "2024-01-15T10:30:00Z",
+#   "completed_at": "2024-01-15T10:45:00Z",
+#   "duration_seconds": 900,
+#   "task_id": "TASK-001",
+#   "worker_id": "worker-TASK-001-abc123",
+#   "iterations_completed": 3,
+#   "outputs": {
+#     "pr_url": "https://github.com/...",
+#     "branch": "task/TASK-001",
+#     "commit_sha": "abc123...",
+#     "validation_result": "PASS"
+#   },
+#   "errors": [],
+#   "metadata": {}
+# }
+
+# Standard result file name
+AGENT_RESULT_FILE="agent-result.json"
+
+# Write agent result to JSON file
+#
+# Args:
+#   worker_dir - Worker directory path
+#   status     - Result status: success, failure, partial, unknown
+#   exit_code  - Numeric exit code
+#   outputs    - JSON object string of output values (optional)
+#   errors     - JSON array string of error messages (optional)
+#   metadata   - JSON object string of additional metadata (optional)
+agent_write_result() {
+    local worker_dir="$1"
+    local status="$2"
+    local exit_code="$3"
+    local outputs="${4:-{}}"
+    local errors="${5:-[]}"
+    local metadata="${6:-{}}"
+
+    local result_file="$worker_dir/$AGENT_RESULT_FILE"
+    local worker_id task_id
+    worker_id=$(basename "$worker_dir")
+    task_id="${_AGENT_TASK_ID:-unknown}"
+
+    # Get timing info from context or estimate
+    local started_at completed_at duration_seconds
+    completed_at=$(date -Iseconds)
+
+    # Try to get start time from worker.log
+    if [ -f "$worker_dir/worker.log" ]; then
+        local start_epoch
+        start_epoch=$(grep "AGENT_STARTED" "$worker_dir/worker.log" | tail -1 | grep -oP 'start_time=\K\d+' || echo "")
+        if [ -n "$start_epoch" ]; then
+            started_at=$(date -Iseconds -d "@$start_epoch" 2>/dev/null || date -Iseconds)
+            duration_seconds=$(($(date +%s) - start_epoch))
+        else
+            started_at="$completed_at"
+            duration_seconds=0
+        fi
+    else
+        started_at="$completed_at"
+        duration_seconds=0
+    fi
+
+    # Get iterations from logs directory
+    local iterations_completed=0
+    if [ -d "$worker_dir/logs" ]; then
+        iterations_completed=$(find "$worker_dir/logs" -maxdepth 1 -name "iteration-*.log" -o -name "validation-*.log" -o -name "fix-*.log" 2>/dev/null | wc -l)
+    fi
+
+    # Build JSON result
+    jq -n \
+        --arg agent_type "${AGENT_TYPE:-unknown}" \
+        --arg status "$status" \
+        --argjson exit_code "$exit_code" \
+        --arg started_at "$started_at" \
+        --arg completed_at "$completed_at" \
+        --argjson duration_seconds "$duration_seconds" \
+        --arg task_id "$task_id" \
+        --arg worker_id "$worker_id" \
+        --argjson iterations_completed "$iterations_completed" \
+        --argjson outputs "$outputs" \
+        --argjson errors "$errors" \
+        --argjson metadata "$metadata" \
+        '{
+            agent_type: $agent_type,
+            status: $status,
+            exit_code: $exit_code,
+            started_at: $started_at,
+            completed_at: $completed_at,
+            duration_seconds: $duration_seconds,
+            task_id: $task_id,
+            worker_id: $worker_id,
+            iterations_completed: $iterations_completed,
+            outputs: $outputs,
+            errors: $errors,
+            metadata: $metadata
+        }' > "$result_file"
+}
+
+# Read agent result from JSON file
+#
+# Args:
+#   worker_dir - Worker directory path
+#   field      - Optional: specific field to extract (uses jq path syntax)
+#
+# Returns: Full JSON or specific field value
+agent_read_result() {
+    local worker_dir="$1"
+    local field="${2:-}"
+    local result_file="$worker_dir/$AGENT_RESULT_FILE"
+
+    if [ ! -f "$result_file" ]; then
+        echo ""
+        return 1
+    fi
+
+    if [ -n "$field" ]; then
+        jq -r "$field // empty" "$result_file" 2>/dev/null
+    else
+        cat "$result_file"
+    fi
+}
+
+# Check if agent result indicates success
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if success, 1 otherwise
+agent_result_is_success() {
+    local worker_dir="$1"
+    local status
+    status=$(agent_read_result "$worker_dir" ".status")
+    [ "$status" = "success" ]
+}
+
+# Get specific output value from agent result
+#
+# Args:
+#   worker_dir - Worker directory path
+#   key        - Output key to retrieve
+#
+# Returns: Output value or empty string
+agent_get_output() {
+    local worker_dir="$1"
+    local key="$2"
+    agent_read_result "$worker_dir" ".outputs.$key"
+}
+
+# Set a single output value in existing result
+#
+# Args:
+#   worker_dir - Worker directory path
+#   key        - Output key
+#   value      - Output value
+agent_set_output() {
+    local worker_dir="$1"
+    local key="$2"
+    local value="$3"
+    local result_file="$worker_dir/$AGENT_RESULT_FILE"
+
+    if [ -f "$result_file" ]; then
+        local tmp_file
+        tmp_file=$(mktemp)
+        jq --arg key "$key" --arg value "$value" '.outputs[$key] = $value' "$result_file" > "$tmp_file"
+        mv "$tmp_file" "$result_file"
+    fi
+}
+
+# Add error to agent result
+#
+# Args:
+#   worker_dir - Worker directory path
+#   error_msg  - Error message to add
+agent_add_error() {
+    local worker_dir="$1"
+    local error_msg="$2"
+    local result_file="$worker_dir/$AGENT_RESULT_FILE"
+
+    if [ -f "$result_file" ]; then
+        local tmp_file
+        tmp_file=$(mktemp)
+        jq --arg err "$error_msg" '.errors += [$err]' "$result_file" > "$tmp_file"
+        mv "$tmp_file" "$result_file"
+    fi
+}
+
+# =============================================================================
+# AGENT COMMUNICATION PROTOCOL
+# =============================================================================
+# Standard file paths for inter-agent communication.
+# These replace hardcoded paths with consistent conventions.
+
+# Get the standard path for a communication file
+#
+# Args:
+#   worker_dir - Worker directory path
+#   file_type  - Type of file: result, validation, status, comments, summary
+#
+# Returns: Full path to the file
+agent_comm_path() {
+    local worker_dir="$1"
+    local file_type="$2"
+
+    case "$file_type" in
+        result)
+            echo "$worker_dir/agent-result.json"
+            ;;
+        validation)
+            echo "$worker_dir/validation-result.txt"
+            ;;
+        validation-review)
+            echo "$worker_dir/validation-review.md"
+            ;;
+        status)
+            echo "$worker_dir/comment-status.md"
+            ;;
+        comments)
+            echo "$worker_dir/task-comments.md"
+            ;;
+        summary)
+            echo "$worker_dir/summaries/summary.txt"
+            ;;
+        prd)
+            echo "$worker_dir/prd.md"
+            ;;
+        workspace)
+            echo "$worker_dir/workspace"
+            ;;
+        *)
+            echo "$worker_dir/$file_type"
+            ;;
+    esac
+}
+
+# Check if a communication file exists and is non-empty
+#
+# Args:
+#   worker_dir - Worker directory path
+#   file_type  - Type of file
+#
+# Returns: 0 if exists and non-empty, 1 otherwise
+agent_comm_exists() {
+    local worker_dir="$1"
+    local file_type="$2"
+    local path
+    path=$(agent_comm_path "$worker_dir" "$file_type")
+
+    [ -e "$path" ] && [ -s "$path" ]
+}
+
+# Read validation result using standard protocol
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: PASS, FAIL, or UNKNOWN
+agent_read_validation() {
+    local worker_dir="$1"
+    local validation_file
+    validation_file=$(agent_comm_path "$worker_dir" "validation")
+
+    if [ -f "$validation_file" ]; then
+        cat "$validation_file"
+    else
+        echo "UNKNOWN"
+    fi
+}
+
+# Write validation result using standard protocol
+#
+# Args:
+#   worker_dir - Worker directory path
+#   result     - PASS, FAIL, or UNKNOWN
+agent_write_validation() {
+    local worker_dir="$1"
+    local result="$2"
+    local validation_file
+    validation_file=$(agent_comm_path "$worker_dir" "validation")
+
+    echo "$result" > "$validation_file"
+}
