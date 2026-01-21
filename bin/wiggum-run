@@ -418,7 +418,8 @@ main() {
         fi
 
         # Show ready tasks waiting for worker slots
-        local ready_count=$(echo "$ready_tasks" | grep -c . 2>/dev/null || echo 0)
+        local ready_count=$(echo "$ready_tasks" | grep -c . 2>/dev/null)
+        ready_count=${ready_count:-0}
         if [ "$ready_count" -gt 0 ] && [ ${#active_workers[@]} -ge $MAX_WORKERS ]; then
             echo "Ready (waiting for worker slots): $ready_count tasks"
         fi

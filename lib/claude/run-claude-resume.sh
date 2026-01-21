@@ -30,7 +30,8 @@ run_agent_resume() {
     log_debug "Resuming session $session_id (max_turns: $max_turns)"
 
     if [ -n "$output_file" ]; then
-        "$CLAUDE" --resume "$session_id" \
+        "$CLAUDE" --verbose \
+            --resume "$session_id" \
             --output-format stream-json \
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
