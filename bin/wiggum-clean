@@ -80,7 +80,8 @@ find_matches() {
     # List directories matching the pattern
     for dir in "$RALPH_DIR/workers"/worker-*; do
         if [ -d "$dir" ]; then
-            local dirname=$(basename "$dir")
+            local dirname
+            dirname=$(basename "$dir")
             if [[ "$dirname" =~ $pattern ]]; then
                 echo "$dirname"
             fi
@@ -139,7 +140,8 @@ resolve_patterns() {
             return 1
         fi
 
-        local match_count=$(echo "$matches" | wc -l)
+        local match_count
+        match_count=$(echo "$matches" | wc -l)
 
         if [ "$match_count" -gt 1 ]; then
             echo "Multiple workers match '$pattern':" >&2

@@ -65,7 +65,7 @@ if [[ "${1:-}" != "tui" ]] && ! tui_available; then
     has_active_workers=false
     if [ -d "$RALPH_DIR/workers" ]; then
         # Use scan_active_workers to check for running workers
-        while read -r pid task_id worker_id; do
+        while read -r pid _task_id _worker_id; do
             if [ -n "$pid" ]; then
                 has_active_workers=true
                 break

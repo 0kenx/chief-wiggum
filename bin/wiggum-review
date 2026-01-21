@@ -138,14 +138,16 @@ merge_all_prs() {
     log "Finding all worker PRs..."
 
     # Get list of PR numbers
-    local pr_numbers=$(gh pr list --search "task/ in:head" --state open --json number -q '.[].number')
+    local pr_numbers
+    pr_numbers=$(gh pr list --search "task/ in:head" --state open --json number -q '.[].number')
 
     if [ -z "$pr_numbers" ]; then
         log "No worker PRs found to merge"
         return 0
     fi
 
-    local pr_count=$(echo "$pr_numbers" | wc -l)
+    local pr_count
+    pr_count=$(echo "$pr_numbers" | wc -l)
     log "Found $pr_count worker PR(s) to merge"
 
     echo ""
@@ -185,7 +187,8 @@ cleanup_branches() {
     log "Cleaning up merged branches..."
 
     # Find branches that match task/* pattern and are merged
-    local merged_branches=$(git branch -r --merged main | grep 'origin/task/' | sed 's/origin\///')
+    local merged_branches
+    merged_branches=$(git branch -r --merged main | grep 'origin/task/' | sed 's/origin\///')
 
     if [ -z "$merged_branches" ]; then
         log "No merged task branches to clean up"
@@ -224,7 +227,8 @@ show_status() {
     echo ""
 
     echo "=== Local Branch Status ==="
-    local current_branch=$(git rev-parse --abbrev-ref HEAD)
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
     echo "Current branch: $current_branch"
 
     if [ "$current_branch" = "main" ]; then
@@ -249,8 +253,10 @@ cmd_task_sync() {
     local output_dir="$RALPH_DIR/review"
 
     # Try to find existing worker for primary pattern
-    local primary_pattern=$(echo "$patterns" | cut -d',' -f1)
-    local worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$primary_pattern" 2>/dev/null)
+    local primary_pattern
+    primary_pattern=$(echo "$patterns" | cut -d',' -f1)
+    local worker_dir
+    worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$primary_pattern" 2>/dev/null)
 
     if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
         output_dir="$worker_dir"
@@ -274,7 +280,8 @@ cmd_task_fix() {
     fi
 
     # Find worker directory for this task
-    local worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
+    local worker_dir
+    worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
 
     if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
         # Try the review directory as fallback

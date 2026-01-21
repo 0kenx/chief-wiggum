@@ -171,7 +171,8 @@ main() {
 
     # Check if another orchestrator is already running
     if [ -f "$orchestrator_lock" ]; then
-        local existing_pid=$(cat "$orchestrator_lock" 2>/dev/null)
+        local existing_pid
+        existing_pid=$(cat "$orchestrator_lock" 2>/dev/null)
 
         # Validate PID is a number
         if [[ "$existing_pid" =~ ^[0-9]+$ ]]; then
@@ -264,7 +265,8 @@ main() {
     log "Running pre-flight checks..."
 
     # Extract hostname from git remote
-    local git_remote=$(git remote get-url origin 2>/dev/null)
+    local git_remote
+    git_remote=$(git remote get-url origin 2>/dev/null)
     if [ -n "$git_remote" ]; then
         # Extract hostname from SSH URLs (git@github.com:user/repo.git or ssh://git@github.com/user/repo.git)
         local git_host=""
@@ -301,7 +303,8 @@ main() {
     echo ""
 
     # Check for failed tasks and reset them to pending for retry
-    local failed_tasks=$(get_failed_tasks "$RALPH_DIR/kanban.md")
+    local failed_tasks
+    failed_tasks=$(get_failed_tasks "$RALPH_DIR/kanban.md")
     if [ -n "$failed_tasks" ]; then
         log "Found failed tasks - resetting for retry:"
         for task_id in $failed_tasks; do
@@ -330,7 +333,7 @@ main() {
     # Restore active workers from existing worker directories (using shared library)
     if [ -d "$RALPH_DIR/workers" ]; then
         log "Scanning for active workers from previous runs..."
-        while read -r worker_pid task_id worker_id; do
+        while read -r worker_pid task_id _worker_id; do
             [ -n "$worker_pid" ] || continue
             active_workers[$worker_pid]="$task_id"
             all_pids+=("$worker_pid")
@@ -344,15 +347,18 @@ main() {
     while true; do
         ((iteration++))
         # Get tasks ready to run (pending with satisfied dependencies, sorted by priority)
-        local ready_tasks=$(get_ready_tasks "$RALPH_DIR/kanban.md")
-        local blocked_tasks=$(get_blocked_tasks "$RALPH_DIR/kanban.md")
-        local all_pending=$(get_todo_tasks "$RALPH_DIR/kanban.md")
+        local ready_tasks
+        ready_tasks=$(get_ready_tasks "$RALPH_DIR/kanban.md")
+        local blocked_tasks
+        blocked_tasks=$(get_blocked_tasks "$RALPH_DIR/kanban.md")
+        local all_pending
+        all_pending=$(get_todo_tasks "$RALPH_DIR/kanban.md")
 
         # Clean up finished workers
         for pid in "${!active_workers[@]}"; do
             if ! kill -0 "$pid" 2>/dev/null; then
                 log "Worker for ${active_workers[$pid]} finished (PID: $pid)"
-                unset active_workers[$pid]
+                unset "active_workers[$pid]"
             fi
         done
 
@@ -370,7 +376,8 @@ main() {
             fi
 
             # Get task priority for logging
-            local task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
+            local task_priority
+            task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
 
             # Mark task as in-progress in kanban
             log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
@@ -387,7 +394,7 @@ main() {
             fi
 
             active_workers[$SPAWNED_WORKER_PID]="$task_id"
-            all_pids+=($SPAWNED_WORKER_PID)
+            all_pids+=("$SPAWNED_WORKER_PID")
 
             # Log task assignment to audit log
             audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
@@ -412,13 +419,15 @@ main() {
         if [ -n "$blocked_tasks" ]; then
             echo "Blocked (waiting on dependencies):"
             for task_id in $blocked_tasks; do
-                local waiting_on=$(get_unsatisfied_dependencies "$RALPH_DIR/kanban.md" "$task_id" | tr '\n' ',' | sed 's/,$//')
+                local waiting_on
+                waiting_on=$(get_unsatisfied_dependencies "$RALPH_DIR/kanban.md" "$task_id" | tr '\n' ',' | sed 's/,$//')
                 echo "  - $task_id (waiting on: $waiting_on)"
             done
         fi
 
         # Show ready tasks waiting for worker slots
-        local ready_count=$(echo "$ready_tasks" | grep -c . 2>/dev/null)
+        local ready_count
+        ready_count=$(echo "$ready_tasks" | grep -c . 2>/dev/null)
         ready_count=${ready_count:-0}
         if [ "$ready_count" -gt 0 ] && [ ${#active_workers[@]} -ge $MAX_WORKERS ]; then
             echo "Ready (waiting for worker slots): $ready_count tasks"
@@ -442,7 +451,8 @@ main() {
     echo ""
 
     # Show final summary
-    local completed_count=$(grep -c '^\- \[x\]' "$RALPH_DIR/kanban.md" 2>/dev/null || echo "0")
+    local completed_count
+    completed_count=$(grep -c '^\- \[x\]' "$RALPH_DIR/kanban.md" 2>/dev/null || echo "0")
     echo "Summary:"
     echo "  - Total tasks completed: $completed_count"
     echo "  - Changelog: .ralph/changelog.md"

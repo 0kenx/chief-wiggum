@@ -87,7 +87,8 @@ do_start() {
     fi
 
     # Create worker directory with unique timestamp
-    local timestamp=$(date +%s)
+    local timestamp
+    timestamp=$(date +%s)
     local worker_id="worker-${task_id}-${timestamp}"
     local worker_dir="$RALPH_DIR/workers/$worker_id"
 
@@ -120,7 +121,8 @@ do_start() {
     done
 
     if [ -f "$worker_dir/agent.pid" ]; then
-        local worker_pid=$(cat "$worker_dir/agent.pid")
+        local worker_pid
+        worker_pid=$(cat "$worker_dir/agent.pid")
         echo "Worker running (PID: $worker_pid)"
     else
         echo "Worker started (PID file pending)"

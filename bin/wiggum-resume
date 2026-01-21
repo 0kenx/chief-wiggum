@@ -275,7 +275,8 @@ do_resume() {
     done
 
     if [ -f "$worker_dir/agent.pid" ]; then
-        local worker_pid=$(cat "$worker_dir/agent.pid")
+        local worker_pid
+        worker_pid=$(cat "$worker_dir/agent.pid")
         echo "Worker running (PID: $worker_pid)"
     else
         echo "Worker started (PID file pending)"
