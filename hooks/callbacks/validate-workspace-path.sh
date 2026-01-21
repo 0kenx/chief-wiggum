@@ -27,7 +27,8 @@ log_hook_decision() {
     # Only log if WORKER_DIR is set (we're in a worker context)
     if [[ -n "$worker_dir" ]]; then
         local log_file="$worker_dir/hook-decisions.log"
-        local timestamp=$(date -Iseconds)
+        local timestamp
+        timestamp=$(date -Iseconds)
         if [[ -n "$reason" ]]; then
             echo "[$timestamp] $decision | tool=$tool | path=$path | reason=$reason" >> "$log_file"
         else
@@ -59,7 +60,8 @@ fi
 # Returns 0 if valid, 1 if invalid
 validate_path_within_workspace() {
     local path="$1"
-    local workspace_abs=$(realpath "$workspace" 2>/dev/null)
+    local workspace_abs
+    workspace_abs=$(realpath "$workspace" 2>/dev/null)
 
     # Check for path traversal patterns
     if [[ "$path" =~ \.\. ]]; then
@@ -68,12 +70,14 @@ validate_path_within_workspace() {
     fi
 
     # Resolve to absolute path (use -m to allow non-existent files)
-    local abs_path=$(realpath -m "$path" 2>/dev/null || echo "$path")
+    local abs_path
+    abs_path=$(realpath -m "$path" 2>/dev/null || echo "$path")
 
     # Check if it's a symlink and resolve it
     if [[ -L "$path" ]]; then
         # Symlink detected - resolve to actual target
-        local link_target=$(readlink -f "$path" 2>/dev/null || readlink "$path" 2>/dev/null)
+        local link_target
+        link_target=$(readlink -f "$path" 2>/dev/null || readlink "$path" 2>/dev/null)
         if [[ -n "$link_target" ]]; then
             echo "[VALIDATION] Symlink detected: $path -> $link_target" >&2
             abs_path=$(realpath -m "$link_target" 2>/dev/null || echo "$link_target")
@@ -82,7 +86,8 @@ validate_path_within_workspace() {
 
     # Check if path is the PRD file (allowed exception)
     local prd_path="$workspace/../prd.md"
-    local prd_abs=$(realpath -m "$prd_path" 2>/dev/null)
+    local prd_abs
+    prd_abs=$(realpath -m "$prd_path" 2>/dev/null)
 
     if [[ "$abs_path" == "$prd_abs" ]]; then
         # Allow PRD access (needed to mark tasks complete)

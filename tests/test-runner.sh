@@ -63,7 +63,8 @@ print_footer() {
 # Run a single test file
 run_test_file() {
     local test_file="$1"
-    local test_name=$(basename "$test_file" .sh)
+    local test_name
+    test_name=$(basename "$test_file" .sh)
 
     echo -e "${YELLOW}Running: ${test_name}${NC}"
 

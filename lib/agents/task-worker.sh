@@ -271,7 +271,8 @@ _determine_finality() {
     fi
 
     # Check PRD status
-    local prd_status=$(get_prd_status "$prd_file")
+    local prd_status
+    prd_status=$(get_prd_status "$prd_file")
     log "PRD status: $prd_status"
 
     # Determine final task status

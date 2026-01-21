@@ -165,6 +165,7 @@ agent_on_ready() {
 agent_on_error() {
     local worker_dir="$1"
     local exit_code="$2"
+    # shellcheck disable=SC2034  # error_type is available for subclass implementations
     local error_type="$3"
     # Default: no-op
     return 0

@@ -9,7 +9,8 @@ source "$SCRIPT_DIR/test-framework.sh"
 
 # Test: Fixture loading
 test_fixture_loading() {
-    local fixture_content=$(load_fixture "simple-kanban.md")
+    local fixture_content
+    fixture_content=$(load_fixture "simple-kanban.md")
     assert_output_contains "$fixture_content" "TASK-001" "Fixture should contain TASK-001"
     assert_output_contains "$fixture_content" "Create README file" "Fixture should contain task description"
 }

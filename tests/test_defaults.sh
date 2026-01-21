@@ -66,7 +66,7 @@ test_wiggum_home_env_override() {
 
 test_project_dir_default() {
     (
-        cd "$TEST_DIR"
+        cd "$TEST_DIR" || exit 1
         source "$WIGGUM_HOME_BACKUP/lib/core/defaults.sh"
         echo "$PROJECT_DIR"
     ) > "$TEST_DIR/result.txt"
@@ -78,7 +78,7 @@ test_project_dir_default() {
 
 test_ralph_dir_default() {
     (
-        cd "$TEST_DIR"
+        cd "$TEST_DIR" || exit 1
         source "$WIGGUM_HOME_BACKUP/lib/core/defaults.sh"
         echo "$RALPH_DIR"
     ) > "$TEST_DIR/result.txt"

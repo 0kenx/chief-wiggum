@@ -63,7 +63,7 @@ echo "Test 4: Concurrent file access"
 CONCURRENT_FILE="$TEST_DIR/concurrent.txt"
 echo "0" > "$CONCURRENT_FILE"
 
-for i in {1..5}; do
+for _ in {1..5}; do
     (
         with_file_lock "$CONCURRENT_FILE" 10 bash -c '
             current=$(cat "$1")

@@ -115,7 +115,7 @@ _validation_completion_check() {
     local worker_dir
     worker_dir=$(agent_get_worker_dir)
     local latest_log
-    latest_log=$(ls -t "$worker_dir/logs"/validation-*.log 2>/dev/null | grep -v summary | head -1)
+    latest_log=$(find "$worker_dir/logs" -maxdepth 1 -name "validation-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
         if grep -qP '<result>(PASS|FAIL)</result>' "$latest_log" 2>/dev/null; then
@@ -230,7 +230,7 @@ _extract_validation_result() {
 
     # Find the latest validation log (excluding summary logs)
     local log_file
-    log_file=$(ls -t "$worker_dir/logs"/validation-*.log 2>/dev/null | grep -v summary | head -1)
+    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "validation-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
         # Extract review content between <review> tags

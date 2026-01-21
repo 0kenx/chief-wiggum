@@ -135,7 +135,8 @@ test_calculate_worker_cost_exports_variables() {
 }
 
 test_calculate_worker_cost_missing_logs_dir() {
-    local tmp_dir=$(mktemp -d)
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
     echo "dummy log" > "$tmp_dir/worker.log"
     # No logs/ subdirectory
 
