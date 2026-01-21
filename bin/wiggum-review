@@ -4,7 +4,9 @@
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
+source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/git/pr-comments.sh"
+source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 
 show_help() {
@@ -22,6 +24,9 @@ Commands:
   status                    Show integration status
   task <patterns> sync      Sync PR comments for tasks matching patterns
   task <patterns> fix       Fix PR comments using ralph loop
+  task <pattern> commit     Create commit in worker workspace
+  task <pattern> push       Push worker branch to remote
+  task <pattern> pr         Create PR for worker branch
 
 Options:
   -h, --help        Show this help message
@@ -51,6 +56,9 @@ Examples:
   wiggum review task TASK-030 sync      # Sync comments for TASK-030
   wiggum review task TASK-030,TASK-031 sync  # Sync multiple tasks
   wiggum review task TASK-030 fix       # Fix synced comments
+  wiggum review task TASK-030 commit    # Create commit for task
+  wiggum review task TASK-030 push      # Push branch to remote
+  wiggum review task TASK-030 pr        # Create PR (pushes first if needed)
 
 EOF
 }
@@ -306,6 +314,174 @@ cmd_task_fix() {
     run_agent "pr-comment-fix" "$worker_dir" "$(pwd)"
 }
 
+# Create commit in worker workspace
+cmd_task_commit() {
+    local pattern="$1"
+
+    if [ -z "$pattern" ]; then
+        error "Task pattern required"
+        echo "Usage: wiggum review task <pattern> commit"
+        return 1
+    fi
+
+    # Find worker directory for this task
+    local worker_dir
+    worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
+
+    if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+        error "No worker directory found for pattern: $pattern"
+        return 1
+    fi
+
+    local workspace="$worker_dir/workspace"
+    if [ ! -d "$workspace" ]; then
+        error "Workspace not found: $workspace"
+        return 1
+    fi
+
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+    # Extract task ID from worker ID (handles TASK-001, PIPELINE-001, etc.)
+    local task_id
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+
+    log "Creating commit for $task_id in $workspace"
+
+    # Get task description from kanban
+    local task_desc=""
+    local task_priority=""
+    if [ -f "$RALPH_DIR/kanban.md" ]; then
+        task_desc=$(grep -F "**[$task_id]**" "$RALPH_DIR/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+        task_priority=$(grep -F -A2 "**[$task_id]**" "$RALPH_DIR/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
+    fi
+
+    log "Task: $task_id - ${task_desc:-<no description>}"
+
+    if git_create_commit "$workspace" "$task_id" "$task_desc" "$task_priority" "$worker_id"; then
+        log "✓ Commit created on branch: $GIT_COMMIT_BRANCH"
+        echo "$GIT_COMMIT_BRANCH" > "$worker_dir/branch.txt"
+        return 0
+    else
+        error "Failed to create commit"
+        return 1
+    fi
+}
+
+# Push worker branch to remote
+cmd_task_push() {
+    local pattern="$1"
+
+    if [ -z "$pattern" ]; then
+        error "Task pattern required"
+        echo "Usage: wiggum review task <pattern> push"
+        return 1
+    fi
+
+    # Find worker directory for this task
+    local worker_dir
+    worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
+
+    if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+        error "No worker directory found for pattern: $pattern"
+        return 1
+    fi
+
+    local workspace="$worker_dir/workspace"
+    if [ ! -d "$workspace" ]; then
+        error "Workspace not found: $workspace"
+        return 1
+    fi
+
+    cd "$workspace" || return 1
+
+    # Get current branch
+    local branch_name
+    branch_name=$(git rev-parse --abbrev-ref HEAD)
+
+    if [ "$branch_name" = "HEAD" ]; then
+        error "Not on a branch (detached HEAD). Run 'commit' first."
+        return 1
+    fi
+
+    log "Pushing branch $branch_name to remote..."
+
+    if git push -u origin "$branch_name" 2>&1; then
+        log "✓ Pushed branch $branch_name"
+        echo "$branch_name" > "$worker_dir/branch.txt"
+        return 0
+    else
+        error "Failed to push branch"
+        return 1
+    fi
+}
+
+# Create PR for worker branch
+cmd_task_pr() {
+    local pattern="$1"
+
+    if [ -z "$pattern" ]; then
+        error "Task pattern required"
+        echo "Usage: wiggum review task <pattern> pr"
+        return 1
+    fi
+
+    # Find worker directory for this task
+    local worker_dir
+    worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
+
+    if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+        error "No worker directory found for pattern: $pattern"
+        return 1
+    fi
+
+    local workspace="$worker_dir/workspace"
+    if [ ! -d "$workspace" ]; then
+        error "Workspace not found: $workspace"
+        return 1
+    fi
+
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+    local task_id
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+
+    cd "$workspace" || return 1
+
+    # Get current branch
+    local branch_name
+    branch_name=$(git rev-parse --abbrev-ref HEAD)
+
+    if [ "$branch_name" = "HEAD" ]; then
+        error "Not on a branch (detached HEAD). Run 'commit' first."
+        return 1
+    fi
+
+    # Check if branch is pushed
+    if ! git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
+        log "Branch not pushed. Pushing now..."
+        if ! git push -u origin "$branch_name" 2>&1; then
+            error "Failed to push branch"
+            return 1
+        fi
+    fi
+
+    # Get task description
+    local task_desc=""
+    if [ -f "$RALPH_DIR/kanban.md" ]; then
+        task_desc=$(grep -F "**[$task_id]**" "$RALPH_DIR/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+    fi
+
+    log "Creating PR for $task_id on branch $branch_name"
+
+    if git_create_pr "$branch_name" "$task_id" "$task_desc" "$worker_dir" "$(pwd)"; then
+        log "✓ PR created: $GIT_PR_URL"
+        return 0
+    else
+        error "Failed to create PR (branch may already have a PR)"
+        return 1
+    fi
+}
+
 # Parse arguments
 AUTO_MERGE=false
 MERGE_METHOD="merge"
@@ -387,9 +563,18 @@ case "$COMMAND" in
             fix)
                 cmd_task_fix "$TASK_PATTERNS"
                 ;;
+            commit)
+                cmd_task_commit "$TASK_PATTERNS"
+                ;;
+            push)
+                cmd_task_push "$TASK_PATTERNS"
+                ;;
+            pr)
+                cmd_task_pr "$TASK_PATTERNS"
+                ;;
             *)
                 error "Unknown task action: $TASK_ACTION"
-                echo "Valid actions: sync, fix"
+                echo "Valid actions: sync, fix, commit, push, pr"
                 exit $EXIT_USAGE
                 ;;
         esac

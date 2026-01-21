@@ -160,6 +160,9 @@ comments_to_markdown() {
 # Find worker directory by task ID pattern
 # Args: <ralph_dir> <task_pattern>
 # Output: Worker directory path or empty string
+# Supports:
+#   - Full task ID: PIPELINE-001, TASK-030
+#   - Partial number: 001, 030 (matches *-001-*, *-030-*)
 find_worker_by_task_id() {
     local ralph_dir="$1"
     local task_pattern="$2"
@@ -169,9 +172,15 @@ find_worker_by_task_id() {
         return
     fi
 
-    # Find most recent worker directory matching the pattern
     local worker_dir
+
+    # Try exact prefix match first: worker-PIPELINE-001-*
     worker_dir=$(find "$workers_dir" -maxdepth 1 -type d -name "worker-$task_pattern-*" 2>/dev/null | sort -r | head -1)
+
+    # If not found, try matching pattern anywhere (e.g., "001" matches "worker-PIPELINE-001-*")
+    if [ -z "$worker_dir" ]; then
+        worker_dir=$(find "$workers_dir" -maxdepth 1 -type d -name "worker-*$task_pattern*" 2>/dev/null | sort -r | head -1)
+    fi
 
     if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
         echo "$worker_dir"
