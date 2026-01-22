@@ -163,12 +163,44 @@ WORKSPACE: $workspace
 EOF
 }
 
+# Get context files section for user prompt
+_get_context_section() {
+    local worker_dir
+    worker_dir=$(agent_get_worker_dir)
+
+    cat << 'EOF'
+## Context
+
+Before auditing, understand what was implemented:
+
+EOF
+
+    # Check for PRD
+    if [ -f "$worker_dir/prd.md" ]; then
+        cat << 'EOF'
+1. **Read the PRD** (@../prd.md) - Understand what was supposed to be built
+EOF
+    fi
+
+    # Check for implementation summary
+    if [ -f "$worker_dir/summaries/summary.txt" ]; then
+        cat << 'EOF'
+2. **Read the Implementation Summary** (@../summaries/summary.txt) - Understand what was actually built and how
+EOF
+    fi
+
+    echo ""
+}
+
 # User prompt
 _get_user_prompt() {
+    # Include context section first
+    _get_context_section
+
     cat << 'EOF'
 SECURITY AUDIT TASK:
 
-Scan the codebase for security vulnerabilities.
+Scan the codebase for security vulnerabilities, focusing on the code that was implemented for this task.
 
 ## Priority Scan Areas
 
