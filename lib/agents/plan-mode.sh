@@ -11,7 +11,7 @@
 # REQUIRED_PATHS:
 #   - prd.md : Product Requirements Document containing task to plan
 # OUTPUT_FILES:
-#   - plan-output.md : The generated implementation plan
+#   - .ralph/plans/TASK-xxx.md : The generated implementation plan (TASK-xxx from input)
 # =============================================================================
 
 # Source base library and initialize metadata
@@ -24,8 +24,10 @@ agent_required_paths() {
 }
 
 # Output files that must exist (non-empty) after agent completes
+# Note: Actual path is .ralph/plans/${TASK_ID}.md - checked dynamically
 agent_output_files() {
-    echo "plan-output.md"
+    # Return empty - we check dynamically since path depends on task_id
+    echo ""
 }
 
 # Source dependencies using base library helpers
@@ -77,10 +79,12 @@ agent_run() {
     # Note: No worktree - we use project_dir directly (read-only access)
     agent_setup_context "$worker_dir" "$project_dir" "$project_dir" "$task_id"
     _PLAN_PRD_FILE="$prd_file"
+    _PLAN_TASK_ID="$task_id"
+    _PLAN_OUTPUT_FILE=".ralph/plans/${task_id}.md"
 
     # Run planning loop (operates on project_dir, not a worktree)
     run_ralph_loop "$project_dir" \
-        "$(_get_system_prompt "$project_dir")" \
+        "$(_get_system_prompt "$project_dir" "$task_id")" \
         "_plan_user_prompt" \
         "_plan_completion_check" \
         "$max_iterations" "$max_turns" "$worker_dir" "plan"
@@ -88,13 +92,12 @@ agent_run() {
     local loop_result=$?
 
     # === FINALIZATION PHASE ===
-    # Copy plan to .ralph/plans/${task_id}.md if complete
-    if [ -f "$worker_dir/plan-output.md" ] && [ -s "$worker_dir/plan-output.md" ]; then
-        local plan_dest="$project_dir/.ralph/plans/${task_id}.md"
-        cp "$worker_dir/plan-output.md" "$plan_dest"
-        log "Plan saved to $plan_dest"
+    # Check if plan was written to the correct location
+    local plan_file="$project_dir/.ralph/plans/${task_id}.md"
+    if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
+        log "Plan saved to $plan_file"
     else
-        log_warn "No plan output generated"
+        log_warn "No plan output generated at $plan_file"
     fi
 
     # Record completion
@@ -102,7 +105,7 @@ agent_run() {
 
     # Write structured agent result
     local result_status="failure"
-    if [ $loop_result -eq 0 ] && [ -f "$worker_dir/plan-output.md" ]; then
+    if [ $loop_result -eq 0 ] && [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
         result_status="success"
     fi
 
@@ -125,30 +128,33 @@ agent_run() {
 # System prompt - READ-ONLY mode emphasis
 _get_system_prompt() {
     local project_dir="$1"
-    local prd_relative="../prd.md"
+    local task_id="$2"
+    local plan_output=".ralph/plans/${task_id}.md"
 
     cat << EOF
-IMPLEMENTATION PLANNING MODE - READ-ONLY EXPLORATION
+You are a software architect and planning specialist. Your role is to explore the codebase and design implementation plans.
 
-You are in READ-ONLY planning mode. Your task is to explore the codebase and create a detailed implementation plan.
+PROJECT: $project_dir
+TASK: $task_id
+OUTPUT: $plan_output
 
-PROJECT DIRECTORY: $project_dir
-PRD LOCATION: $prd_relative
+=== CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
 
-CRITICAL RULES:
-1. READ-ONLY: You MUST NOT modify any files in the project
-2. EXPLORATION ONLY: Use Glob, Grep, and Read to understand the codebase
-3. SINGLE OUTPUT: You may ONLY write to the file: plan-output.md
-4. NO CODE CHANGES: Do not write code, create files, or execute commands that modify state
+This is a READ-ONLY planning task. You are STRICTLY PROHIBITED from:
+* Creating new files (no Write, touch, or file creation)
+* Modifying existing files (no Edit operations)
+* Deleting, moving, or copying files
+* Running commands that change state (npm install, pip install, git commit, etc.)
 
-Your goal is to thoroughly understand:
-- What the task requires (from the PRD)
-- How the existing codebase is structured
-- What patterns and conventions are used
-- What files will need to be modified or created
-- What dependencies or challenges exist
+EXCEPTION: You may ONLY write to $plan_output
 
-After exploration, document your findings in plan-output.md following the required format.
+## Allowed Operations
+
+* Glob, Grep, Read - for exploring the codebase
+* Bash (read-only only): ls, git status, git log, git diff, find
+* Write - ONLY to $plan_output
+
+Your role is EXCLUSIVELY to explore and plan. You do NOT implement.
 EOF
 }
 
@@ -157,92 +163,92 @@ _plan_user_prompt() {
     local iteration="$1"
     # shellcheck disable=SC2034  # output_dir is part of callback signature
     local output_dir="$2"
+    local task_id="$_PLAN_TASK_ID"
+    local plan_output="$_PLAN_OUTPUT_FILE"
 
     # Always include the initial prompt to ensure full context after summarization
-    cat << 'PROMPT_EOF'
-IMPLEMENTATION PLANNING TASK:
+    cat << PROMPT_EOF
+PLANNING TASK: $task_id
 
-Create a comprehensive implementation plan by exploring the codebase and analyzing the requirements.
+## Your Process
 
-STEP-BY-STEP PROCESS:
+1. **Understand Requirements**: Read @../prd.md to understand what needs to be built
 
-1. **Read the PRD**: Examine @../prd.md to understand what needs to be implemented
+2. **Explore Thoroughly**:
+   - Find existing patterns and conventions using Glob, Grep, Read
+   - Understand the current architecture
+   - Identify similar features as reference
+   - Trace through relevant code paths
+   - Use Bash ONLY for read-only operations (ls, git status, git log, git diff, find)
 
-2. **Explore the Codebase**: Use Glob, Grep, and Read to understand:
-   - Project structure and organization
-   - Existing patterns and conventions
-   - Related code that will need to be modified
-   - Dependencies and integrations
+3. **Design Solution**:
+   - Create implementation approach based on findings
+   - Consider trade-offs and architectural decisions
+   - Follow existing patterns where appropriate
 
-3. **Identify Critical Files**: Determine which files will be:
-   - Modified (existing files that need changes)
-   - Created (new files that need to be added)
-   - Referenced (files to use as patterns/templates)
+4. **Write the Plan**: Document in $plan_output
 
-4. **Analyze Dependencies**: Understand:
-   - What order tasks should be done in
-   - What depends on what
-   - Potential blockers or challenges
+## Required Output
 
-5. **Write the Plan**: Create plan-output.md with the following sections:
+Write to $plan_output with this structure:
 
-```markdown
+\`\`\`markdown
+# Implementation Plan: $task_id
+
 ## Overview
-[Brief summary of what will be implemented and why]
+[1-2 sentences: what will be implemented and why]
 
 ## Requirements Analysis
-[Breakdown of requirements from PRD with acceptance criteria]
+| Requirement | Acceptance Criteria | Complexity |
+|-------------|---------------------|------------|
+| [from PRD] | [how to verify] | Low/Med/High |
 
 ## Existing Patterns
-[Patterns, conventions, and structures found in the codebase that should be followed]
+[Patterns found in codebase that implementation should follow, with file references]
 
 ## Implementation Approach
-[Detailed step-by-step approach for implementing each requirement]
+[Step-by-step strategy with specific file/function references]
 
 ## Dependencies and Sequencing
-[Order of operations, what depends on what, integration points]
+[Order of operations, what depends on what]
 
 ## Potential Challenges
-[Technical challenges, edge cases, risks to consider]
+[Technical risks, edge cases, things to watch out for]
 
 ### Critical Files
-[List of files that will be created or modified, with brief description of changes]
-```
+| Action | File | Reason |
+|--------|------|--------|
+| CREATE | path/file.ext | [Purpose] |
+| MODIFY | path/file.ext | [What changes] |
+| REFERENCE | path/file.ext | [Pattern to follow] |
+\`\`\`
 
-IMPORTANT:
-- The plan MUST include a "### Critical Files" section
-- Be specific about file paths and what changes are needed
-- Reference actual code patterns you found in the codebase
-- Think through edge cases and potential issues
-- The plan should be detailed enough that another developer could implement it
+The "### Critical Files" section is REQUIRED - list 3-5 files most critical for implementation.
 
-Write your complete plan to: plan-output.md
+REMEMBER: You can ONLY explore and plan. Do NOT write, edit, or modify any files except $plan_output.
 PROMPT_EOF
 
     if [ "$iteration" -gt 0 ]; then
         # Add continuation context for subsequent iterations
         cat << CONTINUE_EOF
 
-CONTINUATION CONTEXT (Iteration $iteration):
+CONTINUATION (Iteration $iteration):
 
-If the plan-output.md file exists, review it and ensure it is complete:
-1. Check that all sections are filled in with meaningful content
-2. Verify the "### Critical Files" section exists and lists specific files
-3. Ensure the implementation approach is detailed and actionable
+Check if $plan_output exists and is complete:
+1. All sections filled with meaningful content
+2. "### Critical Files" section exists with specific files listed
+3. Implementation approach is detailed and actionable
 
-If the plan is incomplete, continue your exploration and update plan-output.md.
-If the plan is complete, no further action is needed.
-
-Remember: This is READ-ONLY mode. Only write to plan-output.md.
+If incomplete, continue exploration and update. If complete, no action needed.
 CONTINUE_EOF
     fi
 }
 
 # Completion check - returns 0 if plan is complete
 _plan_completion_check() {
-    local worker_dir
-    worker_dir=$(agent_get_worker_dir)
-    local plan_file="$worker_dir/plan-output.md"
+    local project_dir
+    project_dir=$(agent_get_project_dir)
+    local plan_file="$project_dir/$_PLAN_OUTPUT_FILE"
 
     # Check if plan file exists and contains the critical section
     if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then

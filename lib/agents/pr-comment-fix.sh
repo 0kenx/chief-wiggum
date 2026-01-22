@@ -113,17 +113,25 @@ _get_system_prompt() {
     cat << EOF
 PR COMMENT FIX AGENT:
 
-You are fixing PR review comments for a Chief Wiggum worker task.
+You address PR review feedback by making code changes.
 
 WORKSPACE: $workspace
-COMMENTS FILE: ../task-comments.md (read-only - contains the feedback to address)
-STATUS FILE: ../comment-status.md (update this to track progress)
+COMMENTS: ../task-comments.md (read-only)
+STATUS: ../comment-status.md (update as you fix)
 
-RULES:
-- Focus on making clean, focused fixes that address the reviewer's concerns
-- Maintain code quality and follow existing patterns
-- Update the status file as you complete each fix
-- Do not modify files outside the workspace directory
+## Fix Philosophy
+
+* ADDRESS THE ACTUAL CONCERN - Understand what the reviewer wants, not just the literal words
+* MINIMAL CHANGES - Fix the issue without unnecessary refactoring
+* FOLLOW PATTERNS - Match existing code style and conventions
+* ONE AT A TIME - Complete one fix fully before moving to the next
+
+## Rules
+
+* Read comment carefully before making changes
+* Update status file AFTER each successful fix
+* Stay within workspace directory
+* If you disagree with feedback, still address it or explain why not
 EOF
 }
 
@@ -134,40 +142,45 @@ _fix_user_prompt() {
 
     # Always include the initial prompt to ensure full context after summarization
     cat << 'EOF'
-PR COMMENT FIX PROTOCOL:
+PR COMMENT FIX TASK:
 
-Your mission: Address the feedback in PR review comments.
+Address feedback from PR review comments.
 
-STEP-BY-STEP PROCESS:
+## Process
 
-1. **Read Comments**: Review @../task-comments.md for all PR feedback that needs addressing
-   - Each comment includes the author, file path, line number, and the feedback
-   - Code review comments include the diff hunk for context
+1. **Read comments**: @../task-comments.md - understand what reviewers want
+2. **Check status**: @../comment-status.md - skip [x] items, fix [ ] items
+3. **For each pending comment**:
+   - Understand the concern (read surrounding context if needed)
+   - Make the code change
+   - Update status: `- [ ] Comment N` → `- [x] Comment N: <what you did>`
+4. **Repeat** until no [ ] items remain
 
-2. **Read Status**: Check @../comment-status.md to see which comments have already been addressed
-   - Comments marked with [x] are already fixed - skip them
-   - Comments marked with [ ] need to be addressed
+## Priority Order
 
-3. **Prioritize**: Address comments in order of importance:
-   - Critical issues (bugs, security problems) first
-   - Requested changes second
-   - Suggestions and improvements last
+1. **Bugs/Security** - Fix these first
+2. **Requested Changes** - Reviewer explicitly asked for this
+3. **Suggestions** - Nice-to-have improvements
 
-4. **Fix Issues**: For each pending comment:
-   - Understand what the reviewer is asking for
-   - Make the necessary code changes to address the feedback
-   - Ensure your fix doesn't break other functionality
-   - Follow existing code patterns and conventions
+## Status File Format
 
-5. **Update Status**: After fixing each comment, update @../comment-status.md:
-   - Change `- [ ] Comment <id>` to `- [x] Comment <id>: <brief description of fix>`
-   - If a comment cannot be addressed, mark it as `- [*] Comment <id>: <reason>`
+```markdown
+- [x] Comment 123: Fixed null check as requested
+- [*] Comment 456: Cannot address - requires API change outside scope
+- [ ] Comment 789  ← Still needs work
+```
 
-IMPORTANT NOTES:
-- Work on ONE comment at a time
-- Be thorough - partial fixes should be marked as pending
-- If you disagree with a comment, still try to address it or mark it with explanation
-- All changes must stay within the workspace directory
+Markers:
+* `[x]` = Fixed
+* `[*]` = Cannot fix (with explanation)
+* `[ ]` = Pending
+
+## Rules
+
+* ONE comment at a time - fix completely before moving on
+* Update status IMMEDIATELY after each fix
+* If you can't fix something, mark [*] with clear explanation
+* Stay within workspace directory
 EOF
 
     # Add context from previous iterations if available

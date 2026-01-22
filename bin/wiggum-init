@@ -65,6 +65,12 @@ if [ ! -f "$RALPH_DIR/kanban.md" ]; then
     cat > "$RALPH_DIR/kanban.md" <<'EOF'
 # Project Kanban
 
+<!-- Task format: - [ ] **[ID-###]** Title
+     Task ID: 2-8 letter prefix, dash, number (e.g., TASK-001, BUG-42, FEATURE-1)
+     Required: Description, Priority (CRITICAL|HIGH|MEDIUM|LOW), Dependencies (task IDs or "none")
+     Optional: Complexity (HIGH|MEDIUM|LOW), Agent (task-worker|task-worker-plan-mode), Scope, Out of Scope, Acceptance Criteria
+     Status: [ ] pending, [=] in-progress, [P] pending approval, [x] complete, [*] failed, [N] not planned -->
+
 ## TASKS
 
 - [ ] **[TASK-001]** Example task demonstrating all available fields

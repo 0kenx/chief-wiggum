@@ -70,58 +70,72 @@ _default_supervisor_prompt() {
     local last_summary="$3"
 
     cat << SUPERVISOR_PROMPT_EOF
-SUPERVISOR REVIEW TASK:
+SUPERVISOR REVIEW:
 
-You are a supervisor reviewing the progress of an iterative work loop. Your job is to assess
-the current state of work and decide how the loop should proceed.
+You oversee an iterative work loop. Review progress and decide how to proceed.
 
-## Current State
+**Iteration**: ${iteration}
+**Summary**: @../summaries/${last_summary}
 
-- **Iteration**: ${iteration}
-- **Previous Summary**: Review the summary file at @../summaries/${last_summary}
+## Supervisor Philosophy
 
-## Your Task
+* DEFAULT TO CONTINUE - Only intervene when you have HIGH CONFIDENCE (>90%) something is wrong
+* Let workers work - Minor issues, slow progress, or imperfect approaches are NOT reasons to stop
+* Restarts are expensive - Only restart if the fundamental approach is broken
+* Trust the process - The completion check will detect when work is actually done
 
-1. **Review Progress**: Analyze what has been accomplished and what remains
-2. **Assess Quality**: Check if the work is on track and meeting requirements
-3. **Make Decision**: Determine the best course of action
+## Decision Criteria
 
-## Decision Options
+### CONTINUE
 
-| Decision | When to Use |
-|----------|-------------|
-| \`CONTINUE\` | Work is progressing well, continue with current approach |
-| \`STOP\` | Goal achieved OR fundamental blocker OR continuing is futile |
-| \`RESTART\` | Approach is wrong, need fresh start with different strategy |
+Use CONTINUE when:
+* Work is progressing (even slowly)
+* There are minor issues but forward momentum exists
+* You're uncertain whether there's a problem
+* The approach seems reasonable even if not optimal
 
-## Output Format
+### STOP
 
-You MUST provide your response with these EXACT tags:
+Use STOP ONLY when one of these is TRUE:
+* Hard blocker exists that CANNOT be resolved (missing permissions, impossible requirement)
+* Continuing would cause harm (runaway resource usage, destructive actions)
+
+DO NOT use STOP for:
+* Slow progress
+* Minor bugs or issues
+* Approaches you'd do differently
+* Uncertainty about completion
+
+### RESTART
+
+Use RESTART ONLY when:
+* The fundamental approach is PROVABLY wrong (not just suboptimal)
+* Significant work has gone in a completely wrong direction
+* Starting fresh with a different strategy is clearly better than course-correcting
+* Worker is stuck in an infinite loop doing the exact same thing repeatedly
+
+DO NOT use RESTART for:
+* Minor course corrections (use CONTINUE with guidance instead)
+* Slow progress
+* Code quality concerns
+
+## Response Format
+
+Be concise. Analyze then decide.
 
 <review>
-## Progress Assessment
-
-[What has been accomplished so far]
-
-## Quality Check
-
-[Are things on track? Any concerns?]
-
-## Decision Rationale
-
-[Why you chose this decision]
+**Progress**: [1-2 sentences - what was accomplished]
+**Assessment**: [1-2 sentences - on track or concern]
+**Rationale**: [1-2 sentences - why this decision]
 </review>
 
 <decision>CONTINUE</decision>
 
 <guidance>
-[Specific guidance for next round - always provide this even for STOP]
-[For CONTINUE: What to focus on next, any corrections needed]
-[For STOP: Summary of completion or explanation of blocker]
-[For RESTART: What went wrong and what approach to try instead]
+[3-5 sentences max. For CONTINUE: what to focus on next. For STOP: why halting. For RESTART: what to try instead.]
 </guidance>
 
-CRITICAL: The <decision> tag MUST contain exactly one word: CONTINUE, STOP, or RESTART.
+The <decision> tag MUST be exactly: CONTINUE, STOP, or RESTART.
 SUPERVISOR_PROMPT_EOF
 }
 
@@ -370,7 +384,7 @@ Please provide your summary based on the conversation so far, following this str
             local supervisor_prompt
             supervisor_prompt=$($supervisor_prompt_fn "$iteration" "$output_dir" "$last_summary_file")
 
-            local supervisor_system_prompt="You are a supervisor overseeing an iterative work process. Review the progress and make control flow decisions."
+            local supervisor_system_prompt="You are a supervisor overseeing an iterative work process. Your bias is toward CONTINUE - only intervene with STOP or RESTART when you have high confidence something is fundamentally wrong. Let workers work."
 
             log "Running supervisor session $supervisor_session_id"
             echo "[$(date -Iseconds)] SUPERVISOR_START iteration=$iteration session_id=$supervisor_session_id" >> "$output_dir/worker.log" 2>/dev/null || true
