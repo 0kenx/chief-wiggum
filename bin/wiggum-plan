@@ -96,11 +96,6 @@ do_plan() {
     echo "Worker: $worker_id"
 
     # Run plan-mode agent in foreground (blocking)
-    export WORKER_ID="$worker_id"
-    export TASK_ID="$task_id"
-    export WIGGUM_HOME
-
-    # Run agent directly (not in background)
     run_agent "plan-mode" "$worker_dir" "$PROJECT_DIR"
     local result=$?
 

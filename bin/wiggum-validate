@@ -112,7 +112,7 @@ validate_kanban() {
 
     # First pass: collect all task IDs and their dependencies
     while IFS= read -r line || [ -n "$line" ]; do
-        ((line_num++))
+        ((++line_num))
 
         # Check for TASKS section
         if [[ "$line" =~ ^##[[:space:]]+TASKS[[:space:]]*$ ]]; then
@@ -137,14 +137,14 @@ validate_kanban() {
             local task_id="${BASH_REMATCH[2]}"
 
             # Track task state
-            ((TASK_COUNT_TOTAL++))
+            ((++TASK_COUNT_TOTAL))
             case "$task_state" in
-                " ") ((TASK_COUNT_TODO++)) ;;
-                "x") ((TASK_COUNT_DONE++)) ;;
-                "=") ((TASK_COUNT_IN_PROGRESS++)) ;;
-                "P") ((TASK_COUNT_PENDING_APPROVAL++)) ;;
-                "N") ((TASK_COUNT_NOT_PLANNED++)) ;;
-                "*") ((TASK_COUNT_FAILED++)) ;;
+                " ") ((++TASK_COUNT_TODO)) ;;
+                "x") ((++TASK_COUNT_DONE)) ;;
+                "=") ((++TASK_COUNT_IN_PROGRESS)) ;;
+                "P") ((++TASK_COUNT_PENDING_APPROVAL)) ;;
+                "N") ((++TASK_COUNT_NOT_PLANNED)) ;;
+                "*") ((++TASK_COUNT_FAILED)) ;;
             esac
 
             # Validate task ID format
@@ -153,7 +153,7 @@ validate_kanban() {
             fi
 
             # Check for duplicate task IDs
-            if [ -n "${task_ids[$task_id]}" ]; then
+            if [ -n "${task_ids[$task_id]:-}" ]; then
                 add_error "$line_num" "Duplicate task ID '$task_id' (first occurrence at line ${task_ids[$task_id]})"
             else
                 task_ids[$task_id]=$line_num
@@ -215,10 +215,10 @@ validate_kanban() {
                 else
                     # Track priority counts
                     case "$priority_value" in
-                        "CRITICAL") ((PRIORITY_CRITICAL++)) ;;
-                        "HIGH") ((PRIORITY_HIGH++)) ;;
-                        "MEDIUM") ((PRIORITY_MEDIUM++)) ;;
-                        "LOW") ((PRIORITY_LOW++)) ;;
+                        "CRITICAL") ((++PRIORITY_CRITICAL)) ;;
+                        "HIGH") ((++PRIORITY_HIGH)) ;;
+                        "MEDIUM") ((++PRIORITY_MEDIUM)) ;;
+                        "LOW") ((++PRIORITY_LOW)) ;;
                     esac
                 fi
                 in_scope=false
@@ -315,7 +315,7 @@ validate_kanban() {
             dep="${dep#"${dep%%[![:space:]]*}"}"  # Trim leading whitespace
             dep="${dep%"${dep##*[![:space:]]}"}"  # Trim trailing whitespace
 
-            if [ -z "${task_ids[$dep]}" ]; then
+            if [ -z "${task_ids[$dep]:-}" ]; then
                 add_error "$deps_line" "Task '$task_id' references non-existent dependency '$dep'"
             fi
         done

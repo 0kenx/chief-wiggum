@@ -39,17 +39,17 @@ _print_check() {
         pass)
             echo -e "${GREEN}[PASS]${NC} $name"
             [ -n "$message" ] && echo "       $message"
-            ((CHECK_PASSED++))
+            ((++CHECK_PASSED))
             ;;
         fail)
             echo -e "${RED}[FAIL]${NC} $name"
             [ -n "$message" ] && echo "       $message"
-            ((CHECK_FAILED++))
+            ((++CHECK_FAILED))
             ;;
         warn)
             echo -e "${YELLOW}[WARN]${NC} $name"
             [ -n "$message" ] && echo "       $message"
-            ((CHECK_WARNED++))
+            ((++CHECK_WARNED))
             ;;
         info)
             echo -e "${BLUE}[INFO]${NC} $name"

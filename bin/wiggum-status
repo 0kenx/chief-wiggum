@@ -62,13 +62,13 @@ declare -a worker_names
 for worker_dir in "$RALPH_DIR/workers"/worker-*; do
     [ -d "$worker_dir" ] || continue
     [ -f "$worker_dir/agent.pid" ] || continue
-    ((worker_count++))
+    ((++worker_count))
 done
 
 # Get running workers using shared library
 while read -r pid _task_id worker_id; do
     [ -n "$pid" ] || continue
-    ((running_count++))
+    ((++running_count))
     worker_pids+=("$pid")
     worker_names+=("$worker_id")
 done < <(scan_active_workers "$RALPH_DIR")

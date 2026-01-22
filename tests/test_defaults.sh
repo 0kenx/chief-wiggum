@@ -19,8 +19,6 @@ setup() {
     unset RALPH_DIR
     unset CLAUDE
     unset WIGGUM_MAX_WORKERS
-    unset WIGGUM_MAX_ITERATIONS
-    unset WIGGUM_MAX_TURNS
     unset WIGGUM_APPROVED_AUTHORS
     unset WIGGUM_COMMENT_FIX_MAX_ITERATIONS
     unset WIGGUM_COMMENT_FIX_MAX_TURNS
@@ -111,28 +109,6 @@ test_max_workers_default() {
     local result
     result=$(cat "$TEST_DIR/result.txt")
     assert_equals "4" "$result" "MAX_WORKERS should default to 4"
-}
-
-test_max_iterations_default() {
-    (
-        source "$WIGGUM_HOME_BACKUP/lib/core/defaults.sh"
-        echo "$MAX_ITERATIONS"
-    ) > "$TEST_DIR/result.txt"
-
-    local result
-    result=$(cat "$TEST_DIR/result.txt")
-    assert_equals "20" "$result" "MAX_ITERATIONS should default to 20"
-}
-
-test_max_turns_default() {
-    (
-        source "$WIGGUM_HOME_BACKUP/lib/core/defaults.sh"
-        echo "$MAX_TURNS"
-    ) > "$TEST_DIR/result.txt"
-
-    local result
-    result=$(cat "$TEST_DIR/result.txt")
-    assert_equals "50" "$result" "MAX_TURNS should default to 50"
 }
 
 test_max_workers_env_override() {
@@ -260,8 +236,6 @@ run_test test_project_dir_default
 run_test test_ralph_dir_default
 run_test test_claude_binary_default
 run_test test_max_workers_default
-run_test test_max_iterations_default
-run_test test_max_turns_default
 run_test test_max_workers_env_override
 
 # load_review_config tests

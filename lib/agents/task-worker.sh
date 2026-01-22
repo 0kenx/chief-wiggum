@@ -62,13 +62,11 @@ _TASK_PLAN_FILE=""
 # Args:
 #   workspace   - The workspace directory
 #   agent_name  - Name of the sub-agent (for commit message)
-#   file_pattern - Optional glob pattern to add (defaults to ".")
 #
 # Returns: 0 on success or if nothing to commit, 1 on error
 _commit_subagent_changes() {
     local workspace="$1"
     local agent_name="$2"
-    local file_pattern="${3:-.}"
 
     cd "$workspace" || return 1
 
@@ -78,8 +76,8 @@ _commit_subagent_changes() {
         return 0
     fi
 
-    # Stage changes
-    git add "$file_pattern" 2>/dev/null || true
+    # Stage all changes
+    git add . 2>/dev/null || true
 
     # Check if there are staged changes
     if git diff --staged --quiet; then
@@ -87,7 +85,6 @@ _commit_subagent_changes() {
         return 0
     fi
 
-    # Create commit
     local commit_msg="chore($agent_name): automated changes
 
 Co-Authored-By: Ralph Wiggum <ralph@wiggum.local>"
@@ -111,9 +108,8 @@ Co-Authored-By: Ralph Wiggum <ralph@wiggum.local>"
 agent_run() {
     local worker_dir="$1"
     local project_dir="$2"
-    # Use config values (set by load_agent_config in agent-registry)
-    local max_iterations="${WIGGUM_MAX_ITERATIONS:-${AGENT_CONFIG_MAX_ITERATIONS:-20}}"
-    local max_turns="${WIGGUM_MAX_TURNS:-${AGENT_CONFIG_MAX_TURNS:-50}}"
+    local max_iterations="${3:-${AGENT_CONFIG_MAX_ITERATIONS:-20}}"
+    local max_turns="${4:-${AGENT_CONFIG_MAX_TURNS:-50}}"
 
     # Resume mode support
     local resume_iteration="${WIGGUM_RESUME_ITERATION:-0}"
@@ -125,11 +121,8 @@ agent_run() {
     # Match any task prefix format: TASK-001, PIPELINE-001, etc.
     task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
 
-    # Setup environment
-    export WORKER_ID="$worker_id"
-    export TASK_ID="$task_id"
+    # Setup logging
     export LOG_FILE="$worker_dir/worker.log"
-    export WIGGUM_HOME
 
     local prd_file="$worker_dir/prd.md"
 

@@ -22,9 +22,9 @@ source "$WIGGUM_HOME/lib/agents/validation-review.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
 
-# Default configuration (can be overridden by env vars)
-MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
-MAX_TURNS="${WIGGUM_MAX_TURNS:-50}"
+# Default configuration
+MAX_ITERATIONS=20
+MAX_TURNS=50
 
 show_help() {
     cat << EOF
@@ -42,9 +42,11 @@ Worker ID Resolution:
   - worker-TASK-030-1891712  (full ID)
 
 Options:
-  -f            Force resume, clearing any workspace violation status.
-                Use this after manually resolving violations.
-  -h, --help    Show this help message
+  --max-iters N  Maximum iterations per worker (default: 20)
+  --max-turns N  Maximum turns per Claude session (default: 50)
+  -f             Force resume, clearing any workspace violation status.
+                 Use this after manually resolving violations.
+  -h, --help     Show this help message
 
 Examples:
   wiggum resume TASK-030        # Resume worker for TASK-030
@@ -261,18 +263,13 @@ do_resume() {
     prepare_resume_context "$worker_dir" "$resume_iteration"
 
     # Launch task-worker agent with resume context
-    export WORKER_ID="$worker_id"
-    export TASK_ID="$task_id"
-    export WIGGUM_HOME
-    export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
-    export WIGGUM_MAX_TURNS="$MAX_TURNS"
     export WIGGUM_RESUME_ITERATION="$resume_iteration"
     export WIGGUM_RESUME_CONTEXT="$worker_dir/resume-context.md"
 
     mkdir -p "$RALPH_DIR/logs"
     (
         # Run agent in subshell to isolate it
-        run_agent "task-worker" "$worker_dir" "$PROJECT_DIR"
+        run_agent "task-worker" "$worker_dir" "$PROJECT_DIR" 30 "$MAX_ITERATIONS" "$MAX_TURNS"
     ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
     # Wait briefly for agent.pid to be created
@@ -307,6 +304,14 @@ main() {
             -f)
                 force_mode=true
                 shift
+                ;;
+            --max-iters)
+                MAX_ITERATIONS="$2"
+                shift 2
+                ;;
+            --max-turns)
+                MAX_TURNS="$2"
+                shift 2
                 ;;
             -*)
                 echo "Unknown option: $1"

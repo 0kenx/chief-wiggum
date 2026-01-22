@@ -30,7 +30,7 @@ with_file_lock() {
         fi
 
         # Failed - retry after delay
-        ((retry++))
+        ((++retry))
         if [ $retry -lt "$max_retries" ]; then
             sleep $((retry * 2))  # Exponential backoff
         fi

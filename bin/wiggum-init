@@ -61,6 +61,12 @@ mkdir -p "$RALPH_DIR/workers"
 mkdir -p "$RALPH_DIR/results"
 mkdir -p "$RALPH_DIR/logs"
 
+# Create .gitignore to exclude .ralph/ contents from version control
+cat > "$RALPH_DIR/.gitignore" <<'EOF'
+*
+!.gitignore
+EOF
+
 # Create kanban template if it doesn't exist
 if [ ! -f "$RALPH_DIR/kanban.md" ]; then
     cat > "$RALPH_DIR/kanban.md" <<'EOF'

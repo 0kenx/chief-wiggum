@@ -39,17 +39,17 @@ export_metrics() {
         local prd_file="$worker_dir/prd.md"
         local log_dir="$worker_dir/logs"
 
-        ((total_workers++))
+        ((++total_workers))
 
         # Determine worker status from PRD
         local status="in_progress"
         if [ -f "$prd_file" ]; then
             if grep -q '^\- \[\*\]' "$prd_file" 2>/dev/null; then
                 status="failed"
-                ((failed_workers++))
+                ((++failed_workers))
             elif ! grep -q '^\- \[ \]' "$prd_file" 2>/dev/null && grep -q '^\- \[x\]' "$prd_file" 2>/dev/null; then
                 status="success"
-                ((successful_workers++))
+                ((++successful_workers))
             fi
         fi
 

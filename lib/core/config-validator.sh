@@ -61,14 +61,14 @@ validate_config() {
         max_iter=$(jq -r '.workers.max_iterations // 50' "$config_file")
         if [ "$max_iter" -lt 1 ] || [ "$max_iter" -gt 100 ]; then
             log_error "workers.max_iterations must be between 1 and 100 (got: $max_iter)"
-            ((errors++))
+            ((++errors))
         fi
 
         local sleep_sec
         sleep_sec=$(jq -r '.workers.sleep_seconds // 2' "$config_file")
         if [ "$sleep_sec" -lt 0 ] || [ "$sleep_sec" -gt 60 ]; then
             log_error "workers.sleep_seconds must be between 0 and 60 (got: $sleep_sec)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -78,7 +78,7 @@ validate_config() {
         hooks_enabled=$(jq -r '.hooks.enabled // "true"' "$config_file")
         if [ "$hooks_enabled" != "true" ] && [ "$hooks_enabled" != "false" ]; then
             log_error "hooks.enabled must be boolean (got: $hooks_enabled)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -88,21 +88,21 @@ validate_config() {
         fix_max_iter=$(jq -r '.review.fix_max_iterations // 10' "$config_file")
         if [ "$fix_max_iter" -lt 1 ] || [ "$fix_max_iter" -gt 50 ]; then
             log_error "review.fix_max_iterations must be between 1 and 50 (got: $fix_max_iter)"
-            ((errors++))
+            ((++errors))
         fi
 
         local fix_max_turns
         fix_max_turns=$(jq -r '.review.fix_max_turns // 30' "$config_file")
         if [ "$fix_max_turns" -lt 1 ] || [ "$fix_max_turns" -gt 100 ]; then
             log_error "review.fix_max_turns must be between 1 and 100 (got: $fix_max_turns)"
-            ((errors++))
+            ((++errors))
         fi
 
         # Validate approved_authors is an array if present
         if jq -e '.review.approved_authors' "$config_file" > /dev/null 2>&1; then
             if ! jq -e '.review.approved_authors | type == "array"' "$config_file" > /dev/null 2>&1; then
                 log_error "review.approved_authors must be an array"
-                ((errors++))
+                ((++errors))
             fi
         fi
     fi
@@ -154,12 +154,12 @@ validate_agents_config() {
     # Check required sections exist
     if ! jq -e '.agents' "$agents_file" > /dev/null 2>&1; then
         log_error "Missing required section: agents"
-        ((errors++))
+        ((++errors))
     fi
 
     if ! jq -e '.defaults' "$agents_file" > /dev/null 2>&1; then
         log_error "Missing required section: defaults"
-        ((errors++))
+        ((++errors))
     fi
 
     # Validate each agent definition
@@ -172,16 +172,16 @@ validate_agents_config() {
         # Validate agent name format
         if ! [[ "$agent_name" =~ ^[a-z][a-z0-9-]*$ ]]; then
             log_error "Invalid agent name: '$agent_name' (must be lowercase with hyphens)"
-            ((errors++))
+            ((++errors))
             continue
         fi
 
         # Validate agent parameters
-        _validate_agent_params "$agents_file" ".agents[\"$agent_name\"]" "$agent_name" || ((errors++))
+        _validate_agent_params "$agents_file" ".agents[\"$agent_name\"]" "$agent_name" || ((++errors))
     done <<< "$agent_names"
 
     # Validate defaults section
-    _validate_agent_params "$agents_file" ".defaults" "defaults" || ((errors++))
+    _validate_agent_params "$agents_file" ".defaults" "defaults" || ((++errors))
 
     if [ $errors -gt 0 ]; then
         log_error "Agents config validation failed with $errors error(s)"
@@ -212,7 +212,7 @@ _validate_agent_params() {
     if [ "$max_iter" != "null" ]; then
         if ! [[ "$max_iter" =~ ^[0-9]+$ ]] || [ "$max_iter" -lt 1 ] || [ "$max_iter" -gt 100 ]; then
             log_error "$name: max_iterations must be between 1 and 100 (got: $max_iter)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -222,7 +222,7 @@ _validate_agent_params() {
     if [ "$max_turns" != "null" ]; then
         if ! [[ "$max_turns" =~ ^[0-9]+$ ]] || [ "$max_turns" -lt 1 ] || [ "$max_turns" -gt 200 ]; then
             log_error "$name: max_turns must be between 1 and 200 (got: $max_turns)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -232,7 +232,7 @@ _validate_agent_params() {
     if [ "$timeout" != "null" ]; then
         if ! [[ "$timeout" =~ ^[0-9]+$ ]] || [ "$timeout" -lt 60 ] || [ "$timeout" -gt 86400 ]; then
             log_error "$name: timeout_seconds must be between 60 and 86400 (got: $timeout)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -242,7 +242,7 @@ _validate_agent_params() {
     if [ "$interval" != "null" ]; then
         if ! [[ "$interval" =~ ^[0-9]+$ ]] || [ "$interval" -lt 1 ] || [ "$interval" -gt 20 ]; then
             log_error "$name: supervisor_interval must be between 1 and 20 (got: $interval)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -252,7 +252,7 @@ _validate_agent_params() {
     if [ "$restarts" != "null" ]; then
         if ! [[ "$restarts" =~ ^[0-9]+$ ]] || [ "$restarts" -gt 10 ]; then
             log_error "$name: max_restarts must be between 0 and 10 (got: $restarts)"
-            ((errors++))
+            ((++errors))
         fi
     fi
 
@@ -261,7 +261,7 @@ _validate_agent_params() {
     auto_commit=$(jq -r "$path.auto_commit // \"null\"" "$file")
     if [ "$auto_commit" != "null" ] && [ "$auto_commit" != "true" ] && [ "$auto_commit" != "false" ]; then
         log_error "$name: auto_commit must be boolean (got: $auto_commit)"
-        ((errors++))
+        ((++errors))
     fi
 
     return $errors
@@ -276,11 +276,11 @@ validate_all_config() {
     log_info "Validating configuration files..."
 
     if ! validate_config; then
-        ((errors++))
+        ((++errors))
     fi
 
     if ! validate_agents_config; then
-        ((errors++))
+        ((++errors))
     fi
 
     if [ $errors -gt 0 ]; then

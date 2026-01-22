@@ -92,7 +92,7 @@ agent_run() {
         --workspace "$worker_dir/workspace" \
         --system-prompt "$system_prompt" \
         --user-prompt-fn "my_prompt_fn" \
-        --max-iterations "${MAX_ITERATIONS:-10}"
+        --max-iterations "$max_iterations"
 
     return $?
 }
@@ -226,14 +226,30 @@ Excludes lifecycle management - just executes `agent_run()`.
 
 ## Configuration
 
-### Environment Variables
+### Parameters
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WIGGUM_MAX_ITERATIONS` | From agents.json | Override max iterations |
-| `WIGGUM_MAX_TURNS` | From agents.json | Override max turns |
-| `WORKER_ID` | Auto-generated | Worker identifier |
-| `TASK_ID` | From PRD | Current task ID |
+`max_iterations` and `max_turns` are passed as function arguments to `agent_run()`:
+
+```bash
+agent_run() {
+    local worker_dir="$1"
+    local project_dir="$2"
+    local max_iterations="${3:-${AGENT_CONFIG_MAX_ITERATIONS:-20}}"
+    local max_turns="${4:-${AGENT_CONFIG_MAX_TURNS:-50}}"
+    ...
+}
+```
+
+These values originate from CLI flags (`--max-iters`, `--max-turns`) passed to
+`wiggum start`, `wiggum run`, or `wiggum resume`, and flow through `run_agent()`
+in agent-registry.sh.
+
+Worker and task IDs are derived from the worker directory name:
+
+```bash
+worker_id=$(basename "$worker_dir")
+task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+```
 
 ### Agent-Specific Config
 

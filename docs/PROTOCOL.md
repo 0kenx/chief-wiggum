@@ -22,7 +22,7 @@ Chief Wiggum agents operate in isolated worker directories but need to share sta
 │   ├── iteration-0-summary.txt  # Progress summary (iteration 0)
 │   ├── iteration-1-summary.txt  # Progress summary (iteration 1)
 │   └── summary.txt              # Final summary (work complete)
-├── checkpoints/              # Structured checkpoint data (Phase 3.2)
+├── checkpoints/              # Structured checkpoint data
 │   ├── checkpoint-0.json
 │   └── checkpoint-1.json
 └── (agent-specific files)
@@ -103,7 +103,7 @@ Each iteration writes a summary to `summaries/iteration-N-summary.txt`:
 3. Update API documentation
 ```
 
-### Structured Checkpoints (Phase 3.2)
+### Structured Checkpoints
 
 JSON checkpoints at `checkpoints/checkpoint-N.json`:
 
@@ -165,7 +165,7 @@ agent_run() {
 - Sub-agents share the parent's workspace
 - Sub-agents write to the same worker directory
 
-## Event Communication (Phase 3.3)
+## Event Communication
 
 ### Event Log Format
 
@@ -247,6 +247,8 @@ with_file_lock_retry "$pid_file.lock" 10 3 \
 ```
 
 ### Lock Files
+
+Existence of a file with .lock extension marks the underlying file locked and cannot be written to.
 
 | Resource | Lock File |
 |----------|-----------|

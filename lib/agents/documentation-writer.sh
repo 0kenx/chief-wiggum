@@ -135,14 +135,11 @@ The workspace contains uncommitted work from other agents. You MUST NOT destroy 
 - \`git reset --hard\` - DESTROYS uncommitted changes
 - \`git clean\` - DELETES untracked files
 - \`git restore\` - DESTROYS uncommitted changes
+- \`git commit\` - Commits are handled by the orchestrator
+- \`git add\` - Staging is handled by the orchestrator
 
-**ALLOWED git commands:**
-- \`git status\`, \`git diff\`, \`git log\`, \`git show\` (read-only)
-- \`git add <your-doc-files>\` (stage your documentation changes)
-- \`git commit -m "..."\` (commit your work)
-
-**IMPORTANT:** Commit your documentation changes before completing. Use a descriptive commit message.
-Do NOT revert, stash, or reset files - the workspace contains other agents' work.
+**ALLOWED git commands (read-only):**
+- \`git status\`, \`git diff\`, \`git log\`, \`git show\`
 EOF
 }
 

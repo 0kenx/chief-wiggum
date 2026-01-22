@@ -188,9 +188,9 @@ merge_all_prs() {
 
     for pr in $pr_numbers; do
         if merge_pr "$pr" "$merge_method"; then
-            ((merged++))
+            ((++merged))
         else
-            ((failed++))
+            ((++failed))
         fi
     done
 
@@ -319,7 +319,7 @@ cmd_global_sync() {
             if [ "$current_status" = "P" ]; then
                 log "  PR #$pr_number ($task_id): Merged - updating [P] -> [x]"
                 update_kanban_status "$kanban" "$task_id" "x"
-                ((merged_count++))
+                ((++merged_count))
             fi
         fi
 
@@ -338,7 +338,7 @@ cmd_global_sync() {
 
                     # Create .needs-fix marker
                     touch "$worker_dir/.needs-fix"
-                    ((comments_count++))
+                    ((++comments_count))
                 fi
             fi
         fi

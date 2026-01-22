@@ -19,10 +19,10 @@ source "$WIGGUM_HOME/lib/metrics/audit-logger.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 
-# Default configuration (can be overridden by env vars)
-MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
-MAX_TURNS="${WIGGUM_MAX_TURNS:-50}"
-AGENT_TYPE="${WIGGUM_AGENT_TYPE:-task-worker}"
+# Default configuration
+MAX_ITERATIONS=20
+MAX_TURNS=50
+AGENT_TYPE="task-worker"
 
 show_help() {
     cat << EOF
@@ -39,7 +39,10 @@ Task ID Resolution:
   - TASK-030           (full task ID)
 
 Options:
-  -h, --help    Show this help message
+  --max-iters N  Maximum iterations per worker (default: 20)
+  --max-turns N  Maximum turns per Claude session (default: 50)
+  --agent-type T Agent type to use (default: task-worker)
+  -h, --help     Show this help message
 
 Examples:
   wiggum start TASK-030          # Start worker for TASK-030
@@ -114,18 +117,12 @@ do_start() {
 
     # Launch task-worker agent in background
     # run_agent writes PID to agent.pid - orchestrator can poll for it
-    export WORKER_ID="$worker_id"
-    export TASK_ID="$task_id"
-    export WIGGUM_HOME
-    export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
-    export WIGGUM_MAX_TURNS="$MAX_TURNS"
-
     # Use setsid to create a new session/process group for the worker
     # This prevents SIGINT from the orchestrator from killing workers
-    export WIGGUM_AGENT_TYPE="$AGENT_TYPE"
     setsid bash -c '
+        export WIGGUM_HOME="'"$WIGGUM_HOME"'"
         source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
-        run_agent "$WIGGUM_AGENT_TYPE" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
+        run_agent "'"$AGENT_TYPE"'" "'"$worker_dir"'" "'"$PROJECT_DIR"'" 30 "'"$MAX_ITERATIONS"'" "'"$MAX_TURNS"'"
     ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
     # Wait briefly for agent.pid to be created
@@ -147,26 +144,55 @@ do_start() {
 
 # Main
 main() {
-    # Handle help
-    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-        show_help
-        exit $EXIT_OK
-    fi
+    local task_id_arg=""
 
-    # Require task ID
-    if [ $# -eq 0 ]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help
+                exit $EXIT_OK
+                ;;
+            --max-iters)
+                MAX_ITERATIONS="$2"
+                shift 2
+                ;;
+            --max-turns)
+                MAX_TURNS="$2"
+                shift 2
+                ;;
+            --agent-type)
+                AGENT_TYPE="$2"
+                shift 2
+                ;;
+            plan)
+                AGENT_TYPE="task-worker-plan-mode"
+                echo "Using plan mode agent"
+                shift
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                show_help
+                exit $EXIT_USAGE
+                ;;
+            *)
+                if [ -z "$task_id_arg" ]; then
+                    task_id_arg="$1"
+                else
+                    echo "Unexpected argument: $1"
+                    exit $EXIT_USAGE
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$task_id_arg" ]; then
         echo "Error: Task ID required"
-        echo "Usage: wiggum start <TASK-ID> [plan]"
+        echo "Usage: wiggum start <TASK-ID> [plan] [--max-iters N] [--max-turns N]"
         exit $EXIT_USAGE
     fi
 
-    # Check for plan mode
-    if [[ "${2:-}" == "plan" ]]; then
-        AGENT_TYPE="task-worker-plan-mode"
-        echo "Using plan mode agent"
-    fi
-
-    do_start "$1"
+    do_start "$task_id_arg"
 }
 
 main "$@"

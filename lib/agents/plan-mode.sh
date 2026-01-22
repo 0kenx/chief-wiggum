@@ -25,7 +25,7 @@ agent_required_paths() {
 }
 
 # Output files that must exist (non-empty) after agent completes
-# Note: Actual path is .ralph/plans/${TASK_ID}.md - checked dynamically
+# Note: Actual path is .ralph/plans/${task_id}.md - checked dynamically
 agent_output_files() {
     # Return empty - we check dynamically since path depends on task_id
     echo ""
@@ -42,9 +42,8 @@ source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 agent_run() {
     local worker_dir="$1"
     local project_dir="$2"
-    # Use config values (set by load_agent_config in agent-registry)
-    local max_iterations="${WIGGUM_PLAN_MAX_ITERATIONS:-${AGENT_CONFIG_MAX_ITERATIONS:-5}}"
-    local max_turns="${WIGGUM_PLAN_MAX_TURNS:-${AGENT_CONFIG_MAX_TURNS:-30}}"
+    local max_iterations="${3:-${AGENT_CONFIG_MAX_ITERATIONS:-5}}"
+    local max_turns="${4:-${AGENT_CONFIG_MAX_TURNS:-30}}"
 
     # Extract worker and task IDs
     local worker_id task_id
@@ -52,12 +51,7 @@ agent_run() {
     # Match any task prefix format: TASK-001, PIPELINE-001, etc.
     task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
 
-    # Allow task_id override from environment (for standalone invocation)
-    task_id="${TASK_ID:-$task_id}"
-
-    # Setup environment
-    export WORKER_ID="$worker_id"
-    export TASK_ID="$task_id"
+    # Setup logging
     export LOG_FILE="$worker_dir/worker.log"
 
     local prd_file="$worker_dir/prd.md"

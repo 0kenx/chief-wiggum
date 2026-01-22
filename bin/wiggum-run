@@ -34,8 +34,8 @@ Modes:
 
 Options:
   --max-workers N      Maximum concurrent workers (default: 4)
-  --max-iters N        Maximum iterations per worker (default: 50)
-  --max-turns N        Maximum turns per Claude session (default: 20)
+  --max-iters N        Maximum iterations per worker (default: 20)
+  --max-turns N        Maximum turns per Claude session (default: 50)
   -h, --help          Show this help message
 
 Examples:
@@ -63,15 +63,12 @@ EOF
 spawn_worker() {
     local task_id="$1"
 
-    # Pass configuration via environment
-    export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
-    export WIGGUM_MAX_TURNS="$MAX_TURNS"
-    export WIGGUM_AGENT_TYPE="$AGENT_TYPE"
-
     # Use wiggum-start to start the worker, capturing exit code
     local start_output
     local start_exit_code
-    start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" 2>&1) || start_exit_code=$?
+    start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" \
+        --max-iters "$MAX_ITERATIONS" --max-turns "$MAX_TURNS" \
+        --agent-type "$AGENT_TYPE" 2>&1) || start_exit_code=$?
     start_exit_code=${start_exit_code:-0}
 
     # Handle specific exit codes
@@ -95,7 +92,9 @@ spawn_worker() {
             rm -rf "$existing_dir"
             # Retry spawning - reset exit code first
             start_exit_code=0
-            start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" 2>&1) || start_exit_code=$?
+            start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" \
+                --max-iters "$MAX_ITERATIONS" --max-turns "$MAX_TURNS" \
+                --agent-type "$AGENT_TYPE" 2>&1) || start_exit_code=$?
         fi
     fi
 
@@ -462,8 +461,8 @@ main() {
 
     # Main orchestration loop
     while true; do
-        ((iteration++))
-        ((sync_counter++))
+        ((++iteration))
+        ((++sync_counter))
 
         # Run periodic sync every SYNC_INTERVAL iterations
         if [ $sync_counter -ge $SYNC_INTERVAL ]; then

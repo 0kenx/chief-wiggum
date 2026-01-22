@@ -121,20 +121,20 @@ run_syntax_check() {
 
     # Check all .sh files in bin/ and lib/
     while IFS= read -r -d '' script; do
-        ((checked++))
+        ((++checked))
         if ! bash -n "$script" 2>/dev/null; then
             echo "Syntax error: $script"
-            ((errors++))
+            ((++errors))
         fi
     done < <(find "$PROJECT_ROOT/bin" "$PROJECT_ROOT/lib" -name "*.sh" -print0 2>/dev/null)
 
     # Also check bin scripts without .sh extension
     for script in "$PROJECT_ROOT/bin/wiggum"*; do
         [ -f "$script" ] || continue
-        ((checked++))
+        ((++checked))
         if ! bash -n "$script" 2>/dev/null; then
             echo "Syntax error: $script"
-            ((errors++))
+            ((++errors))
         fi
     done
 
@@ -166,9 +166,9 @@ run_shellcheck() {
     local checked=0
 
     while IFS= read -r -d '' script; do
-        ((checked++))
+        ((++checked))
         if ! shellcheck -e SC1090,SC1091,SC2034,SC2154 "$script" 2>/dev/null; then
-            ((errors++))
+            ((++errors))
         fi
     done < <(find "$PROJECT_ROOT/bin" "$PROJECT_ROOT/lib" -name "*.sh" -print0 2>/dev/null)
 

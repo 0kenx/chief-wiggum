@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-task-progress.sh '${WORKER_ID}'"
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-task-progress.sh"
           }
         ]
       }
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-error.sh '${WORKER_ID}' '${message}'"
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-error.sh '${message}'"
           }
         ]
       }

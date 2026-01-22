@@ -26,8 +26,6 @@ CLAUDE="${CLAUDE:-claude}"
 # Worker configuration defaults
 MAX_WORKERS="${WIGGUM_MAX_WORKERS:-4}"
 export MAX_WORKERS
-MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
-MAX_TURNS="${WIGGUM_MAX_TURNS:-50}"
 
 # GitHub CLI timeout (seconds)
 WIGGUM_GH_TIMEOUT="${WIGGUM_GH_TIMEOUT:-30}"
@@ -38,8 +36,6 @@ export WIGGUM_HOME
 export PROJECT_DIR
 export RALPH_DIR
 export CLAUDE
-export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
-export WIGGUM_MAX_TURNS="$MAX_TURNS"
 
 # Load review config from config.json (with env var overrides)
 load_review_config() {

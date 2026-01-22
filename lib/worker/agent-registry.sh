@@ -158,6 +158,8 @@ validate_agent_outputs() {
 #   worker_dir       - Worker directory
 #   project_dir      - Project root directory
 #   monitor_interval - Violation monitor interval in seconds (default: 30, 0 to disable)
+#   max_iterations   - Maximum outer loop iterations (default: 20)
+#   max_turns        - Maximum turns per Claude session (default: 50)
 #   ...              - Additional args passed to agent_run
 #
 # Returns: Exit code from agent_run
@@ -166,7 +168,9 @@ run_agent() {
     local worker_dir="$2"
     local project_dir="$3"
     local monitor_interval="${4:-30}"
-    shift 4 2>/dev/null || shift 3
+    local max_iterations="${5:-20}"
+    local max_turns="${6:-50}"
+    shift 6 2>/dev/null || shift 4 2>/dev/null || shift 3
 
     log "Running top-level agent: $agent_type"
 
@@ -235,7 +239,7 @@ run_agent() {
     fi
 
     # Run the agent
-    agent_run "$worker_dir" "$project_dir" "$@"
+    agent_run "$worker_dir" "$project_dir" "$max_iterations" "$max_turns" "$@"
     local exit_code=$?
 
     # Validate output files exist and are non-empty

@@ -324,7 +324,7 @@ detect_circular_dependencies() {
                 # task_id depends on dep, so edge is dep -> task_id
                 if [ -n "${in_degree[$dep]+x}" ]; then
                     adj_list[$dep]="${adj_list[$dep]} $task_id"
-                    ((in_degree[$task_id]++))
+                    ((++in_degree[$task_id]))
                 fi
             done
         fi
@@ -336,7 +336,7 @@ detect_circular_dependencies() {
     local total_count=0
 
     for task_id in $tasks; do
-        ((total_count++))
+        ((++total_count))
         if [ "${in_degree[$task_id]}" -eq 0 ]; then
             queue+=("$task_id")
         fi
@@ -345,10 +345,10 @@ detect_circular_dependencies() {
     while [ ${#queue[@]} -gt 0 ]; do
         local node="${queue[0]}"
         queue=("${queue[@]:1}")
-        ((visited_count++))
+        ((++visited_count))
 
         for neighbor in ${adj_list[$node]}; do
-            ((in_degree[$neighbor]--))
+            ((in_degree[$neighbor]--)) || true
             if [ "${in_degree[$neighbor]}" -eq 0 ]; then
                 queue+=("$neighbor")
             fi

@@ -17,7 +17,7 @@ declare -A MODEL_CONTEXT_SIZES=(
 # Get context window size for a model
 get_context_size() {
     local model="$1"
-    if [[ -n "${MODEL_CONTEXT_SIZES[$model]}" ]]; then
+    if [[ -n "${MODEL_CONTEXT_SIZES[$model]:-}" ]]; then
         echo "${MODEL_CONTEXT_SIZES[$model]}"
     else
         echo "${MODEL_CONTEXT_SIZES[default]}"
