@@ -132,6 +132,7 @@ _fix_user_prompt() {
     local iteration="$1"
     local output_dir="$2"
 
+    # Always include the initial prompt to ensure full context after summarization
     cat << 'EOF'
 PR COMMENT FIX PROTOCOL:
 
@@ -175,9 +176,7 @@ EOF
         if [ -f "$output_dir/summaries/fix-$prev_iter-summary.txt" ]; then
             cat << CONTEXT_EOF
 
-CONTEXT FROM PREVIOUS ITERATION:
-
-This is iteration $iteration of the fix session. Previous work has been done.
+CONTINUATION CONTEXT (Iteration $iteration):
 
 To understand what has already been fixed:
 - Read @../summaries/fix-$prev_iter-summary.txt for context on previous fixes

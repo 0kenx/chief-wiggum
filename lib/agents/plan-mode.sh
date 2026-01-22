@@ -158,9 +158,8 @@ _plan_user_prompt() {
     # shellcheck disable=SC2034  # output_dir is part of callback signature
     local output_dir="$2"
 
-    if [ "$iteration" -eq 0 ]; then
-        # First iteration - full planning prompt
-        cat << 'PROMPT_EOF'
+    # Always include the initial prompt to ensure full context after summarization
+    cat << 'PROMPT_EOF'
 IMPLEMENTATION PLANNING TASK:
 
 Create a comprehensive implementation plan by exploring the codebase and analyzing the requirements.
@@ -219,12 +218,12 @@ IMPORTANT:
 
 Write your complete plan to: plan-output.md
 PROMPT_EOF
-    else
-        # Subsequent iterations - continue from previous
-        cat << CONTINUE_EOF
-CONTINUATION OF PLANNING:
 
-This is iteration $iteration of your planning session.
+    if [ "$iteration" -gt 0 ]; then
+        # Add continuation context for subsequent iterations
+        cat << CONTINUE_EOF
+
+CONTINUATION CONTEXT (Iteration $iteration):
 
 If the plan-output.md file exists, review it and ensure it is complete:
 1. Check that all sections are filled in with meaningful content

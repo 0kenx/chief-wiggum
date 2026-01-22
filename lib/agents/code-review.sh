@@ -95,16 +95,17 @@ _review_user_prompt() {
     local iteration="$1"
     local output_dir="$2"
 
-    if [ "$iteration" -eq 0 ]; then
-        # First iteration - full review prompt
-        _get_user_prompt "$_REVIEW_SCOPE"
-    else
-        # Subsequent iterations - continue from previous summary
+    # Always include the initial prompt to ensure full context after summarization
+    _get_user_prompt "$_REVIEW_SCOPE"
+
+    if [ "$iteration" -gt 0 ]; then
+        # Add continuation context for subsequent iterations
         local prev_iter=$((iteration - 1))
         cat << CONTINUE_EOF
-CONTINUATION OF CODE REVIEW:
 
-This is iteration $iteration of your code review. Your previous review work is summarized in @../summaries/review-$prev_iter-summary.txt.
+CONTINUATION CONTEXT (Iteration $iteration):
+
+Your previous review work is summarized in @../summaries/review-$prev_iter-summary.txt.
 
 Please continue your review:
 1. If you haven't completed all review categories, continue from where you left off

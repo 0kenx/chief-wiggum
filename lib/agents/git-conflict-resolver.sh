@@ -112,16 +112,17 @@ _conflict_user_prompt() {
     local iteration="$1"
     local output_dir="$2"
 
-    if [ "$iteration" -eq 0 ]; then
-        # First iteration - full conflict resolution prompt
-        _get_user_prompt
-    else
-        # Subsequent iterations - continue from previous summary
+    # Always include the initial prompt to ensure full context after summarization
+    _get_user_prompt
+
+    if [ "$iteration" -gt 0 ]; then
+        # Add continuation context for subsequent iterations
         local prev_iter=$((iteration - 1))
         cat << CONTINUE_EOF
-CONTINUATION OF CONFLICT RESOLUTION:
 
-This is iteration $iteration of the conflict resolution process. Your previous work is summarized in @../summaries/resolve-$prev_iter-summary.txt.
+CONTINUATION CONTEXT (Iteration $iteration):
+
+Your previous work is summarized in @../summaries/resolve-$prev_iter-summary.txt.
 
 Please continue resolving conflicts:
 1. Check which files still have unresolved conflicts using 'git diff --name-only --diff-filter=U'
