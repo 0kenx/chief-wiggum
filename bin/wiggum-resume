@@ -17,6 +17,7 @@ source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/metrics/audit-logger.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+source "$WIGGUM_HOME/lib/core/agent-base.sh"
 source "$WIGGUM_HOME/lib/agents/validation-review.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
@@ -128,10 +129,10 @@ resume_from_validation() {
     # Note: using 0 for monitor_interval since validation is quick and read-only
     run_agent "validation-review" "$worker_dir" "$PROJECT_DIR" 0 10
 
-    # Check validation result
+    # Check validation result using reader function
     if ! check_validation_result "$worker_dir"; then
         local result
-        result=$(cat "$worker_dir/validation-result.txt" 2>/dev/null || echo "UNKNOWN")
+        result=$(agent_read_subagent_result "$worker_dir" "VALIDATION_result" "validation-result.txt")
         echo "Validation $result - cannot proceed with commit/PR"
         # Mark task as failed in kanban
         update_kanban_failed "$PROJECT_DIR/.ralph/kanban.md" "$task_id"

@@ -314,29 +314,9 @@ EOF
 _extract_audit_result() {
     local worker_dir="$1"
 
-    SECURITY_RESULT="UNKNOWN"
-
-    # Find the latest audit log (excluding summary logs)
-    local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "audit-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-
-    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        # Extract report content between <report> tags
-        local report_path="$worker_dir/security-report.md"
-        if grep -q '<report>' "$log_file"; then
-            sed -n '/<report>/,/<\/report>/p' "$log_file" | sed '1d;$d' > "$report_path"
-            log "Security report saved to security-report.md"
-        fi
-
-        # Extract result tag (PASS, FIX, or STOP)
-        SECURITY_RESULT=$(grep -oP '(?<=<result>)(PASS|FIX|STOP)(?=</result>)' "$log_file" | head -1)
-        if [ -z "$SECURITY_RESULT" ]; then
-            SECURITY_RESULT="UNKNOWN"
-        fi
-    fi
-
-    # Store result in standard location
-    echo "$SECURITY_RESULT" > "$worker_dir/security-result.txt"
+    # Use unified extraction function
+    agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|STOP" \
+        "security-result.txt" "security-report.md"
 }
 
 # Check security result from a worker directory (utility for callers)

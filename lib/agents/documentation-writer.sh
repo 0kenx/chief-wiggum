@@ -280,29 +280,9 @@ EOF
 _extract_docs_result() {
     local worker_dir="$1"
 
-    DOCS_RESULT="UNKNOWN"
-
-    # Find the latest docs log (excluding summary logs)
-    local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "docs-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-
-    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        # Extract report content between <report> tags
-        local report_path="$worker_dir/docs-report.md"
-        if grep -q '<report>' "$log_file"; then
-            sed -n '/<report>/,/<\/report>/p' "$log_file" | sed '1d;$d' > "$report_path"
-            log "Documentation report saved to docs-report.md"
-        fi
-
-        # Extract result tag (PASS or SKIP only - this agent never fails)
-        DOCS_RESULT=$(grep -oP '(?<=<result>)(PASS|SKIP)(?=</result>)' "$log_file" | head -1)
-        if [ -z "$DOCS_RESULT" ]; then
-            DOCS_RESULT="UNKNOWN"
-        fi
-    fi
-
-    # Store result in standard location
-    echo "$DOCS_RESULT" > "$worker_dir/docs-result.txt"
+    # Use unified extraction function
+    agent_extract_and_write_result "$worker_dir" "DOCS" "docs" "report" "PASS|SKIP" \
+        "docs-result.txt" "docs-report.md"
 }
 
 # Check docs result from a worker directory (utility for callers)

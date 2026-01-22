@@ -323,29 +323,9 @@ EOF
 _extract_test_result() {
     local worker_dir="$1"
 
-    TEST_RESULT="UNKNOWN"
-
-    # Find the latest test log (excluding summary logs)
-    local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "test-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-
-    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        # Extract report content between <report> tags
-        local report_path="$worker_dir/test-report.md"
-        if grep -q '<report>' "$log_file"; then
-            sed -n '/<report>/,/<\/report>/p' "$log_file" | sed '1d;$d' > "$report_path"
-            log "Test report saved to test-report.md"
-        fi
-
-        # Extract result tag (PASS, FAIL, or SKIP)
-        TEST_RESULT=$(grep -oP '(?<=<result>)(PASS|FAIL|SKIP)(?=</result>)' "$log_file" | head -1)
-        if [ -z "$TEST_RESULT" ]; then
-            TEST_RESULT="UNKNOWN"
-        fi
-    fi
-
-    # Store result in standard location
-    echo "$TEST_RESULT" > "$worker_dir/test-result.txt"
+    # Use unified extraction function
+    agent_extract_and_write_result "$worker_dir" "TEST" "test" "report" "PASS|FAIL|SKIP" \
+        "test-result.txt" "test-report.md"
 }
 
 # Check test result from a worker directory (utility for callers)

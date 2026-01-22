@@ -600,3 +600,182 @@ agent_write_validation() {
 
     echo "$result" > "$validation_file"
 }
+
+# =============================================================================
+# STREAM-JSON EXTRACTION UTILITIES
+# =============================================================================
+# These functions properly parse Claude CLI stream-JSON output format.
+# Stream-JSON contains one JSON object per line, with assistant messages having
+# the format: {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+
+# Extract all text content from assistant messages in a stream-JSON log file
+#
+# Args:
+#   log_file - Path to the stream-JSON log file
+#
+# Returns: All text content from assistant messages, one per line
+_extract_text_from_stream_json() {
+    local log_file="$1"
+
+    if [ ! -f "$log_file" ]; then
+        return 1
+    fi
+
+    grep '"type":"assistant"' "$log_file" 2>/dev/null | \
+        jq -r 'select(.message.content[]? | .type == "text") | .message.content[] | select(.type == "text") | .text' 2>/dev/null
+}
+
+# Extract the LAST occurrence of a result value from stream-JSON
+# This fixes the bug where the first occurrence (from examples in prompts) was returned
+#
+# Args:
+#   log_file     - Path to the stream-JSON log file
+#   valid_values - Pipe-separated list of valid values (e.g., "PASS|FAIL")
+#
+# Returns: The LAST result value found, or empty string if none
+_extract_result_value_from_stream_json() {
+    local log_file="$1"
+    local valid_values="$2"
+
+    if [ ! -f "$log_file" ]; then
+        return 1
+    fi
+
+    # Extract text, find all <result>VALUE</result> matches, take LAST one
+    _extract_text_from_stream_json "$log_file" | \
+        grep -oP "(?<=<result>)(${valid_values})(?=</result>)" 2>/dev/null | \
+        tail -1
+}
+
+# Extract content between the LAST occurrence of XML-style tags from stream-JSON
+# This fixes the bug where sed was trying to match tags in raw JSON instead of extracted text
+#
+# Args:
+#   log_file - Path to the stream-JSON log file
+#   tag      - Tag name without brackets (e.g., "review", "report")
+#
+# Returns: Content between the last occurrence of <tag> and </tag>
+_extract_tag_content_from_stream_json() {
+    local log_file="$1"
+    local tag="$2"
+
+    if [ ! -f "$log_file" ]; then
+        return 1
+    fi
+
+    # Extract text content first, then find the last occurrence of the tag
+    # Use tac to reverse lines, find first match (which is last in original), reverse back
+    local extracted_text
+    extracted_text=$(_extract_text_from_stream_json "$log_file")
+
+    if [ -z "$extracted_text" ]; then
+        return 1
+    fi
+
+    # Use awk to extract the last occurrence of tag content
+    echo "$extracted_text" | awk -v tag="$tag" '
+        BEGIN { content = ""; in_tag = 0 }
+        $0 ~ "<" tag ">" { in_tag = 1; content = ""; next }
+        $0 ~ "</" tag ">" { in_tag = 0 }
+        in_tag { content = content (content ? "\n" : "") $0 }
+        END { print content }
+    '
+}
+
+# =============================================================================
+# UNIFIED RESULT EXTRACTION AND WRITING
+# =============================================================================
+
+# Extract results from log files and write to standard output files
+# This is the unified function that replaces per-agent extraction logic
+#
+# Args:
+#   worker_dir    - Worker directory path
+#   agent_name    - Agent name for logging (e.g., "VALIDATION", "SECURITY")
+#   log_prefix    - Log file prefix (e.g., "validation", "audit", "test")
+#   report_tag    - XML tag name for report content (e.g., "review", "report")
+#   valid_values  - Pipe-separated valid result values (e.g., "PASS|FAIL")
+#   result_file   - Output filename for result (e.g., "validation-result.txt")
+#   report_file   - Output filename for report (e.g., "validation-review.md")
+#
+# Returns: Sets global variable ${agent_name}_RESULT (e.g., VALIDATION_RESULT)
+agent_extract_and_write_result() {
+    local worker_dir="$1"
+    local agent_name="$2"
+    local log_prefix="$3"
+    local report_tag="$4"
+    local valid_values="$5"
+    local result_file="$6"
+    local report_file="$7"
+
+    local result="UNKNOWN"
+
+    # Find the latest log file (excluding summary logs)
+    # Pattern matches both old format (prefix-N.log) and new format (prefix-N-timestamp.log)
+    local log_file
+    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "${log_prefix}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+
+    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+        # Extract report content and save to .md file
+        local report_path="$worker_dir/$report_file"
+        local report_content
+        report_content=$(_extract_tag_content_from_stream_json "$log_file" "$report_tag")
+
+        if [ -n "$report_content" ]; then
+            echo "$report_content" > "$report_path"
+            log "${agent_name} report saved to $report_file"
+        fi
+
+        # Extract result value (LAST occurrence to avoid matching examples in prompts)
+        result=$(_extract_result_value_from_stream_json "$log_file" "$valid_values")
+        if [ -z "$result" ]; then
+            result="UNKNOWN"
+        fi
+    fi
+
+    # Write legacy result file for backward compatibility
+    echo "$result" > "$worker_dir/$result_file"
+
+    # Update agent-result.json outputs if it exists
+    if [ -f "$worker_dir/$AGENT_RESULT_FILE" ]; then
+        agent_set_output "$worker_dir" "${agent_name}_result" "$result"
+    fi
+
+    # Set global variable for the calling agent
+    eval "${agent_name}_RESULT=\"$result\""
+
+    log "${agent_name} result: $result"
+}
+
+# Read a sub-agent result, preferring agent-result.json outputs, falling back to legacy files
+#
+# Args:
+#   worker_dir     - Worker directory path
+#   output_key     - Key in agent-result.json outputs (e.g., "SECURITY_result")
+#   legacy_file    - Legacy result filename (e.g., "security-result.txt")
+#
+# Returns: Result value or "UNKNOWN"
+agent_read_subagent_result() {
+    local worker_dir="$1"
+    local output_key="$2"
+    local legacy_file="$3"
+
+    local result=""
+
+    # Try agent-result.json first
+    if [ -f "$worker_dir/$AGENT_RESULT_FILE" ]; then
+        result=$(agent_get_output "$worker_dir" "$output_key")
+    fi
+
+    # Fall back to legacy file
+    if [ -z "$result" ] && [ -f "$worker_dir/$legacy_file" ]; then
+        result=$(cat "$worker_dir/$legacy_file" 2>/dev/null)
+    fi
+
+    # Default to UNKNOWN
+    if [ -z "$result" ]; then
+        result="UNKNOWN"
+    fi
+
+    echo "$result"
+}

@@ -308,29 +308,11 @@ EOF
 _extract_validation_result() {
     local worker_dir="$1"
 
-    VALIDATION_RESULT="UNKNOWN"
+    # Use unified extraction function
+    agent_extract_and_write_result "$worker_dir" "VALIDATION" "validation" "review" "PASS|FAIL" \
+        "validation-result.txt" "validation-review.md"
 
-    # Find the latest validation log (excluding summary logs)
-    local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "validation-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-
-    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        # Extract review content between <review> tags
-        local review_path
-        review_path=$(agent_comm_path "$worker_dir" "validation-review")
-        if grep -q '<review>' "$log_file"; then
-            sed -n '/<review>/,/<\/review>/p' "$log_file" | sed '1d;$d' > "$review_path"
-            log "Validation review saved to validation-review.md"
-        fi
-
-        # Extract result tag (PASS or FAIL)
-        VALIDATION_RESULT=$(grep -oP '(?<=<result>)(PASS|FAIL)(?=</result>)' "$log_file" | head -1)
-        if [ -z "$VALIDATION_RESULT" ]; then
-            VALIDATION_RESULT="UNKNOWN"
-        fi
-    fi
-
-    # Store result using communication protocol
+    # Also write using communication protocol for backward compatibility
     agent_write_validation "$worker_dir" "$VALIDATION_RESULT"
 }
 

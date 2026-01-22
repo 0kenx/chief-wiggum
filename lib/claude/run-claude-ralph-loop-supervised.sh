@@ -235,7 +235,12 @@ run_ralph_loop_supervised() {
         # Log iteration start to worker.log
         echo "[$(date -Iseconds)] ITERATION_START iteration=$iteration session_id=$session_id max_turns=$max_turns restart_count=$restart_count" >> "$output_dir/worker.log" 2>/dev/null || true
 
-        log "Work phase starting (see logs/${session_prefix}-$iteration.log for details)"
+        # Generate timestamp for log filename uniqueness
+        local log_timestamp
+        log_timestamp=$(date +%s)
+        local log_file="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}.log"
+
+        log "Work phase starting (see logs/${session_prefix}-${iteration}-${log_timestamp}.log for details)"
 
         # Log initial prompt to iteration log as JSON
         {
@@ -255,7 +260,7 @@ run_ralph_loop_supervised() {
                     user_prompt: $user_prompt,
                     timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")
                   }'
-        } > "$output_dir/logs/${session_prefix}-$iteration.log"
+        } > "$log_file"
 
         # PHASE 1: Work session with turn limit
         "$CLAUDE" --verbose \
@@ -265,7 +270,7 @@ run_ralph_loop_supervised() {
             --session-id "$session_id" \
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
-            -p "$user_prompt" >> "$output_dir/logs/${session_prefix}-$iteration.log" 2>&1
+            -p "$user_prompt" >> "$log_file" 2>&1
 
         local exit_code=$?
         log "Work phase completed (exit code: $exit_code, session: $session_id)"
@@ -316,8 +321,8 @@ Please provide your summary based on the conversation so far, following this str
         log "Requesting summary for session $session_id"
 
         # Capture full JSON output to logs directory
-        local summary_log="$output_dir/logs/${session_prefix}-$iteration-summary.log"
-        local summary_txt="$output_dir/summaries/${session_prefix}-$iteration-summary.txt"
+        local summary_log="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}-summary.log"
+        local summary_txt="$output_dir/summaries/${session_prefix}-${iteration}-summary.txt"
 
         "$CLAUDE" --verbose --resume "$session_id" --max-turns 2 \
             --output-format stream-json \
@@ -353,7 +358,7 @@ Please provide your summary based on the conversation so far, following this str
                     summary_exit_code: ($summary_exit_code | tonumber),
                     timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")
                   }'
-        } >> "$output_dir/logs/${session_prefix}-$iteration.log"
+        } >> "$log_file"
 
         # Check if shutdown was requested during summary phase
         if [ "$shutdown_requested" = true ]; then

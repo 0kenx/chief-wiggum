@@ -212,9 +212,9 @@ agent_run() {
         log "Running security audit on completed work"
         run_sub_agent "security-audit" "$worker_dir" "$project_dir"
 
-        # Check security audit result
+        # Check security audit result using reader function
         local security_result
-        security_result=$(cat "$worker_dir/security-result.txt" 2>/dev/null || echo "UNKNOWN")
+        security_result=$(agent_read_subagent_result "$worker_dir" "SECURITY_result" "security-result.txt")
         log "Security audit result: $security_result"
 
         case "$security_result" in
@@ -253,9 +253,9 @@ agent_run() {
         log "Running test generation and execution on completed work"
         run_sub_agent "test-coverage" "$worker_dir" "$project_dir"
 
-        # Check test result
+        # Check test result using reader function
         local test_result
-        test_result=$(cat "$worker_dir/test-result.txt" 2>/dev/null || echo "UNKNOWN")
+        test_result=$(agent_read_subagent_result "$worker_dir" "TEST_result" "test-result.txt")
         log "Test coverage result: $test_result"
 
         case "$test_result" in
@@ -286,9 +286,9 @@ agent_run() {
         log "Running documentation update on completed work"
         run_sub_agent "documentation-writer" "$worker_dir" "$project_dir"
 
-        # Check docs result (informational only - never blocks)
+        # Check docs result using reader function (informational only - never blocks)
         local docs_result
-        docs_result=$(cat "$worker_dir/docs-result.txt" 2>/dev/null || echo "SKIP")
+        docs_result=$(agent_read_subagent_result "$worker_dir" "DOCS_result" "docs-result.txt")
         log "Documentation writer result: $docs_result"
 
         case "$docs_result" in
