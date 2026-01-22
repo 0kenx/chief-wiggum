@@ -204,6 +204,65 @@ find_worker_by_task_id() {
     fi
 }
 
+# Check if a PR has new comments since last sync
+# Args: <pr_number> <sync_state_file>
+# Returns: 0 if new comments exist, 1 otherwise
+# Side effect: Updates sync state file with current comment IDs
+_check_for_new_comments() {
+    local pr_number="$1"
+    local sync_state_file="$2"
+
+    # Get repository info
+    local repo
+    repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+    if [ -z "$repo" ]; then
+        return 1
+    fi
+
+    # Fetch current comment IDs (all types)
+    local current_ids
+    current_ids=$(
+        {
+            gh api "repos/$repo/issues/$pr_number/comments" --jq '.[].id' 2>/dev/null
+            gh api "repos/$repo/pulls/$pr_number/comments" --jq '.[].id' 2>/dev/null
+            gh api "repos/$repo/pulls/$pr_number/reviews" --jq '.[].id' 2>/dev/null
+        } | sort -n | tr '\n' ',' | sed 's/,$//'
+    )
+
+    # Get stored comment IDs for this PR
+    local stored_ids
+    stored_ids=$(jq -r --arg pr "$pr_number" '.[$pr] // ""' "$sync_state_file" 2>/dev/null)
+
+    # Compare
+    if [ "$current_ids" != "$stored_ids" ]; then
+        # New comments detected - update state
+        _update_sync_state "$pr_number" "$current_ids" "$sync_state_file"
+        return 0
+    fi
+
+    return 1
+}
+
+# Update sync state file with current comment IDs
+# Args: <pr_number> <comment_ids_csv> <sync_state_file>
+_update_sync_state() {
+    local pr_number="$1"
+    local comment_ids="$2"
+    local sync_state_file="$3"
+
+    local temp_file
+    temp_file=$(mktemp)
+
+    jq --arg pr "$pr_number" --arg ids "$comment_ids" \
+        '.[$pr] = $ids' "$sync_state_file" > "$temp_file" 2>/dev/null
+
+    if [ -s "$temp_file" ]; then
+        mv "$temp_file" "$sync_state_file"
+    else
+        rm -f "$temp_file"
+    fi
+}
+
 # Main sync function
 # Args: <task_patterns> <output_dir>
 # Creates: <output_dir>/task-comments.md

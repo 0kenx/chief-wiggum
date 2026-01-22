@@ -2,9 +2,14 @@
 # Review and manage worker PRs using gh CLI
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/file-lock.sh"
+source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/git/pr-comments.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
@@ -17,6 +22,7 @@ Usage: wiggum review [command] [options]
 
 Commands:
   list                      List all open worker PRs
+  sync                      Global sync: update merged PRs to [x], detect new comments
   pr [PR#] view             View a specific PR with diff
   pr [PR#] merge            Merge a specific PR
   merge-all                 Merge all worker PRs (with confirmation)
@@ -47,6 +53,7 @@ Environment Variables:
 
 Examples:
   wiggum review list                    # List all worker PRs
+  wiggum review sync                    # Sync all PRs: update merged, detect new comments
   wiggum review pr 42 view              # Review PR #42
   wiggum review pr 42 merge             # Merge PR #42
   wiggum review pr 42 merge --squash    # Squash-merge PR #42
@@ -243,6 +250,105 @@ show_status() {
         git status -sb
     else
         echo "Not on main branch. Switch to main and pull to integrate changes."
+    fi
+}
+
+# Global sync: update merged PRs to [x], detect new comments for open PRs
+cmd_global_sync() {
+    log "Running global PR sync..."
+
+    if [ ! -d "$RALPH_DIR" ]; then
+        error ".ralph/ directory not found"
+        return 1
+    fi
+
+    local kanban="$RALPH_DIR/kanban.md"
+    if [ ! -f "$kanban" ]; then
+        error ".ralph/kanban.md not found"
+        return 1
+    fi
+
+    local sync_state_file="$RALPH_DIR/.sync-state.json"
+    local tasks_needing_fix="$RALPH_DIR/.tasks-needing-fix.txt"
+
+    # Initialize sync state file if it doesn't exist
+    if [ ! -f "$sync_state_file" ]; then
+        echo "{}" > "$sync_state_file"
+    fi
+
+    # Clear tasks needing fix list
+    : > "$tasks_needing_fix"
+
+    # Get all task/* PRs (both open and merged)
+    log "Fetching all task/* PRs..."
+    local all_prs
+    all_prs=$(gh pr list --search "head:task/" --state all --json number,headRefName,state,mergedAt 2>/dev/null || echo "[]")
+
+    local pr_count
+    pr_count=$(echo "$all_prs" | jq 'length')
+    log "Found $pr_count task PR(s)"
+
+    local merged_count=0
+    local comments_count=0
+
+    # Process each PR
+    echo "$all_prs" | jq -c '.[]' | while read -r pr; do
+        local pr_number branch state merged_at
+        pr_number=$(echo "$pr" | jq -r '.number')
+        branch=$(echo "$pr" | jq -r '.headRefName')
+        state=$(echo "$pr" | jq -r '.state')
+        merged_at=$(echo "$pr" | jq -r '.mergedAt')
+
+        # Extract task ID from branch name (task/TASK-001-description -> TASK-001)
+        local task_id
+        task_id=$(echo "$branch" | sed -E 's|^task/([A-Z]+-[0-9]+).*|\1|')
+
+        if [ -z "$task_id" ] || [ "$task_id" = "$branch" ]; then
+            continue
+        fi
+
+        # Handle merged PRs: update [P] -> [x]
+        if [ "$state" = "MERGED" ]; then
+            local current_status
+            current_status=$(get_task_status "$kanban" "$task_id")
+
+            if [ "$current_status" = "P" ]; then
+                log "  PR #$pr_number ($task_id): Merged - updating [P] -> [x]"
+                update_kanban_status "$kanban" "$task_id" "x"
+                ((merged_count++))
+            fi
+        fi
+
+        # Handle open PRs: check for new comments
+        if [ "$state" = "OPEN" ]; then
+            if _check_for_new_comments "$pr_number" "$sync_state_file"; then
+                log "  PR #$pr_number ($task_id): New comments detected"
+
+                # Find worker directory and sync comments
+                local worker_dir
+                worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$task_id" 2>/dev/null)
+
+                if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+                    sync_pr_comments "$task_id" "$worker_dir"
+                    echo "$task_id" >> "$tasks_needing_fix"
+
+                    # Create .needs-fix marker
+                    touch "$worker_dir/.needs-fix"
+                    ((comments_count++))
+                fi
+            fi
+        fi
+    done
+
+    echo ""
+    log "Sync complete:"
+    log "  - Merged PRs updated: $merged_count"
+    log "  - Tasks with new comments: $comments_count"
+
+    if [ -s "$tasks_needing_fix" ]; then
+        echo ""
+        log "Tasks needing fix:"
+        cat "$tasks_needing_fix" | sed 's/^/  - /'
     fi
 }
 
@@ -518,6 +624,9 @@ done
 case "$COMMAND" in
     list)
         list_worker_prs
+        ;;
+    sync)
+        cmd_global_sync
         ;;
     pr)
         PR_NUMBER="${ARGS[0]}"

@@ -84,10 +84,16 @@ Tasks can include additional optional fields for more detailed specifications:
 
 Tasks use markdown checkboxes to indicate their status:
 
-- `- [ ]` - Pending (not started)
-- `- [=]` - In-progress (worker actively processing)
-- `- [x]` - Complete (successfully finished)
-- `- [*]` - Failed (worker encountered errors)
+| Marker | Status | Description |
+|--------|--------|-------------|
+| `- [ ]` | Pending | Not started |
+| `- [=]` | In-progress | Worker actively processing |
+| `- [P]` | Pending Approval | PR created, awaiting review/merge |
+| `- [x]` | Complete | PR merged, task finished |
+| `- [N]` | Not Planned | Task won't be done |
+| `- [*]` | Failed | Worker encountered errors |
+
+**Dependency Resolution**: Tasks are only considered satisfied (for dependency purposes) when they reach the `[x]` (Complete/Merged) status. Tasks in `[P]` (Pending Approval) do NOT satisfy dependencies - the PR must be merged first.
 
 **Important**: Workers automatically update these status markers via file locking to prevent race conditions.
 
@@ -165,7 +171,7 @@ Tasks use markdown checkboxes to indicate their status:
 
 The system uses `lib/task-parser.sh` with the following logic:
 
-1. **Task Detection**: Finds lines matching `^- \[ \] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*` in the TASKS section
+1. **Task Detection**: Finds lines matching `^- \[[ =PxN*T]\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*` in the TASKS section
 2. **Field Parsing**: Extracts fields using indentation:
    - Top-level fields: 2-space indent (`  - Field:`)
    - Sub-items: 4-space indent (`    - Item`)
@@ -179,12 +185,23 @@ The system uses `lib/task-parser.sh` with the following logic:
 Status updates use file locking (`lib/file-lock.sh`) to safely modify the checkbox:
 
 ```bash
-# Changes - [ ] to - [x] for completed tasks
-sed -i 's/- \[[^\]]*\] \*\*\[TASK-ID\]\*\*/- [x] **[TASK-ID]**/'
+# Mark task as in-progress
+update_kanban_status "$kanban" "$task_id" "="
 
-# Changes to - [*] for failed tasks
-sed -i 's/- \[[^\]]*\] \*\*\[TASK-ID\]\*\*/- [*] **[TASK-ID]**/'
+# Mark task as pending approval (PR created)
+update_kanban_pending_approval "$kanban" "$task_id"
+
+# Mark task as complete (PR merged)
+update_kanban "$kanban" "$task_id"
+
+# Mark task as failed
+update_kanban_failed "$kanban" "$task_id"
+
+# Mark task as not planned
+update_kanban_not_planned "$kanban" "$task_id"
 ```
+
+The `wiggum review sync` command automatically updates tasks from `[P]` to `[x]` when their PRs are merged.
 
 ### PRD Generation from Scope
 
@@ -405,7 +422,11 @@ Workers should never manually edit the kanban file while Chief Wiggum is running
 
 - **v1.0** (Initial): Basic task structure with Description, Priority, Dependencies
 - **v1.1**: Added Scope, Out of Scope, and Acceptance Criteria fields
-- **v1.2** (Current): Added optional Complexity field (HIGH/MEDIUM/LOW)
+- **v1.2**: Added optional Complexity field (HIGH/MEDIUM/LOW)
+- **v1.3** (Current): Added new status flags for PR workflow:
+  - `[P]` - Pending Approval (PR created, awaiting review/merge)
+  - `[N]` - Not Planned (task won't be done)
+  - Dependencies now require `[x]` (merged) status, not just `[P]` (pending approval)
 
 ## See Also
 

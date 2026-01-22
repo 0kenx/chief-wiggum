@@ -65,8 +65,16 @@ class TaskDetailModal(ModalScreen[None]):
         color: #f59e0b;
     }
 
+    TaskDetailModal .status-pending_approval {
+        color: #8b5cf6;
+    }
+
     TaskDetailModal .status-complete {
         color: #22c55e;
+    }
+
+    TaskDetailModal .status-not_planned {
+        color: #64748b;
     }
 
     TaskDetailModal .status-failed {
@@ -266,8 +274,16 @@ class KanbanColumn(Widget):
         color: #f59e0b;
     }
 
+    KanbanColumn .column-header-pending_approval {
+        color: #8b5cf6;
+    }
+
     KanbanColumn .column-header-complete {
         color: #22c55e;
+    }
+
+    KanbanColumn .column-header-not_planned {
+        color: #64748b;
     }
 
     KanbanColumn .column-header-failed {
@@ -349,6 +365,7 @@ class KanbanPanel(Widget):
             f"[bold]Kanban[/] │ "
             f"[#94a3b8]Pending: {len(grouped[TaskStatus.PENDING])}[/] │ "
             f"[#f59e0b]In Progress: {len(grouped[TaskStatus.IN_PROGRESS])}[/] │ "
+            f"[#8b5cf6]Pending Approval: {len(grouped[TaskStatus.PENDING_APPROVAL])}[/] │ "
             f"[#22c55e]Complete: {len(grouped[TaskStatus.COMPLETE])}[/] │ "
             f"[#dc2626]Failed: {len(grouped[TaskStatus.FAILED])}[/]",
             classes="kanban-header",
@@ -364,6 +381,7 @@ class KanbanPanel(Widget):
         yield Horizontal(
             KanbanColumn(TaskStatus.PENDING, grouped[TaskStatus.PENDING]),
             KanbanColumn(TaskStatus.IN_PROGRESS, grouped[TaskStatus.IN_PROGRESS]),
+            KanbanColumn(TaskStatus.PENDING_APPROVAL, grouped[TaskStatus.PENDING_APPROVAL]),
             KanbanColumn(TaskStatus.COMPLETE, grouped[TaskStatus.COMPLETE]),
             KanbanColumn(TaskStatus.FAILED, grouped[TaskStatus.FAILED]),
             classes="kanban-board",
@@ -385,6 +403,7 @@ class KanbanPanel(Widget):
                 f"[bold]Kanban[/] │ "
                 f"[#94a3b8]Pending: {len(grouped[TaskStatus.PENDING])}[/] │ "
                 f"[#f59e0b]In Progress: {len(grouped[TaskStatus.IN_PROGRESS])}[/] │ "
+                f"[#8b5cf6]Pending Approval: {len(grouped[TaskStatus.PENDING_APPROVAL])}[/] │ "
                 f"[#22c55e]Complete: {len(grouped[TaskStatus.COMPLETE])}[/] │ "
                 f"[#dc2626]Failed: {len(grouped[TaskStatus.FAILED])}[/]"
             )
@@ -403,6 +422,7 @@ class KanbanPanel(Widget):
                 Horizontal(
                     KanbanColumn(TaskStatus.PENDING, grouped[TaskStatus.PENDING]),
                     KanbanColumn(TaskStatus.IN_PROGRESS, grouped[TaskStatus.IN_PROGRESS]),
+                    KanbanColumn(TaskStatus.PENDING_APPROVAL, grouped[TaskStatus.PENDING_APPROVAL]),
                     KanbanColumn(TaskStatus.COMPLETE, grouped[TaskStatus.COMPLETE]),
                     KanbanColumn(TaskStatus.FAILED, grouped[TaskStatus.FAILED]),
                     classes="kanban-board",

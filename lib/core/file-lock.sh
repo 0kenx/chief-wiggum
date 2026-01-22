@@ -42,7 +42,8 @@ with_file_lock() {
 
 # Update kanban.md status with locking
 # Usage: update_kanban_status <kanban_file> <task_id> <new_status>
-# new_status can be: [ ] (pending), [=] (in-progress), [x] (complete)
+# new_status can be: [ ] (pending), [=] (in-progress), [P] (pending approval),
+#                    [x] (merged/complete), [N] (not planned), [*] (failed)
 update_kanban_status() {
     local kanban_file="$1"
     local task_id="$2"
@@ -63,6 +64,18 @@ update_kanban() {
 # Usage: update_kanban_failed <kanban_file> <task_id>
 update_kanban_failed() {
     update_kanban_status "$1" "$2" "*"
+}
+
+# Update kanban.md to mark pending approval with locking (convenience function)
+# Usage: update_kanban_pending_approval <kanban_file> <task_id>
+update_kanban_pending_approval() {
+    update_kanban_status "$1" "$2" "P"
+}
+
+# Update kanban.md to mark not planned with locking (convenience function)
+# Usage: update_kanban_not_planned <kanban_file> <task_id>
+update_kanban_not_planned() {
+    update_kanban_status "$1" "$2" "N"
 }
 
 # Append to changelog.md with locking

@@ -43,6 +43,24 @@ get_failed_tasks() {
         }' "$kanban"
 }
 
+get_pending_approval_tasks() {
+    local kanban="$1"
+    # Extract task IDs - ONLY pending approval tasks (- [P]) matching the task format
+    awk '/^- \[P\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
+            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
+            print substr($0, RSTART+1, RLENGTH-2)
+        }' "$kanban"
+}
+
+get_completed_tasks() {
+    local kanban="$1"
+    # Extract task IDs - ONLY completed/merged tasks (- [x]) matching the task format
+    awk '/^- \[x\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
+            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
+            print substr($0, RSTART+1, RLENGTH-2)
+        }' "$kanban"
+}
+
 # Get all tasks (any status) with their metadata
 # Output format: task_id|status|priority|dependencies
 get_all_tasks_with_metadata() {
@@ -121,8 +139,9 @@ get_task_status() {
     '
 }
 
-# Check if a task's dependencies are satisfied (all deps completed)
+# Check if a task's dependencies are satisfied (all deps merged/complete)
 # Returns 0 if satisfied, 1 if not
+# Note: Dependencies must be complete [x] (merged), not just pending approval [P]
 are_dependencies_satisfied() {
     local kanban="$1"
     local task_id="$2"
@@ -159,7 +178,7 @@ are_dependencies_satisfied() {
         # Get status of dependency
         dep_status=$(echo "$all_metadata" | awk -F'|' -v d="$dep" '$1 == d { print $2 }')
 
-        # If dependency is not complete (x), then not satisfied
+        # If dependency is not complete/merged (x), then not satisfied
         if [ "$dep_status" != "x" ]; then
             return 1
         fi

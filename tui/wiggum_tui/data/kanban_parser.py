@@ -8,13 +8,17 @@ from .models import Task, TaskStatus
 STATUS_MAP = {
     "[ ]": TaskStatus.PENDING,
     "[=]": TaskStatus.IN_PROGRESS,
+    "[P]": TaskStatus.PENDING_APPROVAL,
     "[x]": TaskStatus.COMPLETE,
+    "[N]": TaskStatus.NOT_PLANNED,
     "[*]": TaskStatus.FAILED,
     "[T]": TaskStatus.FAILED,  # Timeout treated as failed
 }
 
 # Pattern: - [ ] **[TASK-ID]** Title
-TASK_PATTERN = re.compile(r"^- \[([ =x*T])\] \*\*\[([A-Za-z]{2,8}-\d+)\]\*\*\s*(.*)")
+# Status chars: space (pending), = (in progress), P (pending approval),
+#               x (complete), N (not planned), * (failed), T (timeout/failed)
+TASK_PATTERN = re.compile(r"^- \[([ =PxN*T])\] \*\*\[([A-Za-z]{2,8}-\d+)\]\*\*\s*(.*)")
 
 
 def parse_kanban(file_path: Path) -> list[Task]:
@@ -116,7 +120,9 @@ def group_tasks_by_status(tasks: list[Task]) -> dict[TaskStatus, list[Task]]:
     return {
         TaskStatus.PENDING: [t for t in tasks if t.status == TaskStatus.PENDING],
         TaskStatus.IN_PROGRESS: [t for t in tasks if t.status == TaskStatus.IN_PROGRESS],
+        TaskStatus.PENDING_APPROVAL: [t for t in tasks if t.status == TaskStatus.PENDING_APPROVAL],
         TaskStatus.COMPLETE: [t for t in tasks if t.status == TaskStatus.COMPLETE],
+        TaskStatus.NOT_PLANNED: [t for t in tasks if t.status == TaskStatus.NOT_PLANNED],
         TaskStatus.FAILED: [t for t in tasks if t.status == TaskStatus.FAILED],
     }
 
@@ -134,7 +140,9 @@ def get_task_counts(tasks: list[Task]) -> dict[str, int]:
     return {
         "pending": len(grouped[TaskStatus.PENDING]),
         "in_progress": len(grouped[TaskStatus.IN_PROGRESS]),
+        "pending_approval": len(grouped[TaskStatus.PENDING_APPROVAL]),
         "complete": len(grouped[TaskStatus.COMPLETE]),
+        "not_planned": len(grouped[TaskStatus.NOT_PLANNED]),
         "failed": len(grouped[TaskStatus.FAILED]),
         "total": len(tasks),
     }

@@ -10,7 +10,9 @@ class TaskStatus(Enum):
 
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
+    PENDING_APPROVAL = "pending_approval"
     COMPLETE = "complete"
+    NOT_PLANNED = "not_planned"
     FAILED = "failed"
 
 

@@ -17,6 +17,7 @@ source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 MAX_WORKERS=4
 MAX_ITERATIONS=20       # Max outer loop iterations per worker
 MAX_TURNS=50           # Max turns per Claude session
+SYNC_INTERVAL=6        # Run sync every N iterations (30 seconds at 5s sleep)
 
 show_help() {
     cat << EOF
@@ -111,6 +112,102 @@ spawn_worker() {
     fi
 
     SPAWNED_WORKER_PID=$(cat "$worker_dir/agent.pid")
+}
+
+# Run periodic sync to update PR statuses and detect new comments
+run_periodic_sync() {
+    log "Running periodic PR sync..."
+
+    # Call wiggum review sync
+    if "$WIGGUM_HOME/bin/wiggum-review" sync 2>&1 | sed 's/^/  [sync] /'; then
+        # Check for tasks needing fixes
+        local tasks_needing_fix="$RALPH_DIR/.tasks-needing-fix.txt"
+        if [ -s "$tasks_needing_fix" ]; then
+            log "Tasks need comment fixes - will spawn fix workers"
+        fi
+    else
+        log_error "Periodic sync failed"
+    fi
+}
+
+# Pre-worker checks before spawning a new worker
+# Returns 0 if safe to proceed, 1 if conflicts detected
+pre_worker_checks() {
+    # Pull latest changes from main
+    log "Pulling latest changes from origin/main..."
+
+    local pull_output
+    if ! pull_output=$(git pull --ff-only origin main 2>&1); then
+        # Check if it's a conflict or just nothing to pull
+        if echo "$pull_output" | grep -q "fatal\|CONFLICT\|error"; then
+            log_error "Git pull failed: $pull_output"
+            log_error "Cannot spawn new workers with unresolved conflicts"
+            return 1
+        fi
+    fi
+
+    # Check for conflicts with active worktrees
+    local workers_dir="$RALPH_DIR/workers"
+    if [ -d "$workers_dir" ]; then
+        for worker_dir in "$workers_dir"/worker-*; do
+            [ -d "$worker_dir/workspace" ] || continue
+
+            local workspace="$worker_dir/workspace"
+            if [ -d "$workspace/.git" ] || [ -f "$workspace/.git" ]; then
+                # Check if worktree has conflicts with main
+                if git -C "$workspace" diff --name-only origin/main 2>/dev/null | \
+                   xargs -I {} git -C "$workspace" diff --check origin/main -- {} 2>&1 | \
+                   grep -q "conflict"; then
+                    log_error "Conflict detected in $(basename "$worker_dir")"
+                    return 1
+                fi
+            fi
+        done
+    fi
+
+    return 0
+}
+
+# Check for workers needing fixes and spawn fix workers
+check_and_spawn_fixes() {
+    local tasks_needing_fix="$RALPH_DIR/.tasks-needing-fix.txt"
+
+    if [ ! -s "$tasks_needing_fix" ]; then
+        return 0
+    fi
+
+    log "Checking for tasks needing PR comment fixes..."
+
+    while read -r task_id; do
+        [ -z "$task_id" ] && continue
+
+        local worker_dir
+        worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$task_id" 2>/dev/null)
+
+        if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+            continue
+        fi
+
+        # Check for .needs-fix marker
+        if [ -f "$worker_dir/.needs-fix" ]; then
+            log "Spawning fix worker for $task_id..."
+
+            # Run fix in background
+            (
+                cd "$PROJECT_DIR" || exit 1
+                "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" fix 2>&1 | \
+                    sed "s/^/  [fix-$task_id] /"
+
+                # Remove marker on completion
+                rm -f "$worker_dir/.needs-fix"
+            ) &
+
+            log "Fix worker spawned for $task_id (PID: $!)"
+        fi
+    done < "$tasks_needing_fix"
+
+    # Clear the tasks needing fix file after processing
+    : > "$tasks_needing_fix"
 }
 
 main() {
@@ -342,10 +439,22 @@ main() {
     fi
 
     local iteration=0
+    local sync_counter=0
 
     # Main orchestration loop
     while true; do
         ((iteration++))
+        ((sync_counter++))
+
+        # Run periodic sync every SYNC_INTERVAL iterations
+        if [ $sync_counter -ge $SYNC_INTERVAL ]; then
+            run_periodic_sync
+            sync_counter=0
+
+            # Check for and spawn fix workers after sync
+            check_and_spawn_fixes
+        fi
+
         # Get tasks ready to run (pending with satisfied dependencies, sorted by priority)
         local ready_tasks
         ready_tasks=$(get_ready_tasks "$RALPH_DIR/kanban.md")
@@ -372,6 +481,12 @@ main() {
         for task_id in $ready_tasks; do
             # Check if we're at max capacity
             if [ ${#active_workers[@]} -ge $MAX_WORKERS ]; then
+                break
+            fi
+
+            # Run pre-worker checks (git pull, conflict detection)
+            if ! pre_worker_checks; then
+                log_error "Pre-worker checks failed - skipping worker spawn this iteration"
                 break
             fi
 
