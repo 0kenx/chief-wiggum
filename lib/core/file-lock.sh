@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # File locking utilities for concurrent worker access
+set -euo pipefail
 
 # Retry a command with file locking
 # Usage: with_file_lock <file> <max_retries> <command>

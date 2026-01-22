@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Calculate time spent and API cost from worker logs
+set -euo pipefail
 
 # Model context window sizes (in tokens)
 # All current Claude models have 200k context windows

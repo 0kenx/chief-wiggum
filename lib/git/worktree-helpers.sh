@@ -3,6 +3,7 @@
 #
 # Provides functions to setup and cleanup git worktrees for agent isolation.
 # Extracted from worker.sh to be reusable across different agent types.
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"

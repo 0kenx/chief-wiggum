@@ -3,6 +3,7 @@
 #
 # Provides functions for syncing and filtering PR comments for review.
 # Used by `wiggum review task <patterns> sync` command.
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
@@ -10,9 +11,102 @@ source "$WIGGUM_HOME/lib/core/defaults.sh"
 # Load review config on source
 load_review_config
 
+# GitHub API timeout (can be overridden by environment)
+WIGGUM_GH_TIMEOUT="${WIGGUM_GH_TIMEOUT:-30}"
+
+# Execute gh API command with timeout and error handling
+#
+# Args:
+#   endpoint    - The API endpoint (e.g., "repos/owner/repo/pulls/123/comments")
+#   jq_filter   - Optional jq filter to apply (defaults to ".")
+#   timeout_sec - Optional timeout in seconds (defaults to WIGGUM_GH_TIMEOUT)
+#
+# Returns:
+#   0 on success, 1 on failure
+#   Outputs JSON result on success, "[]" on failure
+#   Logs errors to stderr
+_gh_api_with_error_handling() {
+    local endpoint="$1"
+    local jq_filter="${2:-.}"
+    local timeout_sec="${3:-$WIGGUM_GH_TIMEOUT}"
+
+    local result exit_code
+
+    # Run gh api with timeout
+    if result=$(timeout "$timeout_sec" gh api "$endpoint" --jq "$jq_filter" 2>&1); then
+        exit_code=$?
+        if [ $exit_code -eq 0 ]; then
+            echo "$result"
+            return 0
+        fi
+    else
+        exit_code=$?
+    fi
+
+    # Handle timeout specifically
+    if [ $exit_code -eq 124 ]; then
+        log_error "GitHub API timeout after ${timeout_sec}s: $endpoint"
+        echo "[]"
+        return 1
+    fi
+
+    # Handle other errors
+    log_error "GitHub API failed (exit: $exit_code): $endpoint"
+    if [ -n "$result" ]; then
+        log_debug "API error response: $result"
+    fi
+    echo "[]"
+    return 1
+}
+
+# Execute gh pr list with timeout and error handling
+#
+# Args:
+#   search_query - The search query for gh pr list
+#   json_fields  - Fields to return (e.g., "number,headRefName,url")
+#   timeout_sec  - Optional timeout in seconds (defaults to WIGGUM_GH_TIMEOUT)
+#
+# Returns:
+#   0 on success, 1 on failure
+#   Outputs JSON array on success, "[]" on failure
+_gh_pr_list_with_error_handling() {
+    local search_query="$1"
+    local json_fields="$2"
+    local timeout_sec="${3:-$WIGGUM_GH_TIMEOUT}"
+    local extra_args="${4:-}"
+
+    local result exit_code
+
+    # Run gh pr list with timeout
+    if result=$(timeout "$timeout_sec" gh pr list --search "$search_query" --json "$json_fields" $extra_args 2>&1); then
+        exit_code=$?
+        if [ $exit_code -eq 0 ]; then
+            echo "$result"
+            return 0
+        fi
+    else
+        exit_code=$?
+    fi
+
+    # Handle timeout
+    if [ $exit_code -eq 124 ]; then
+        log_error "GitHub PR list timeout after ${timeout_sec}s: $search_query"
+        echo "[]"
+        return 1
+    fi
+
+    # Handle other errors
+    log_error "GitHub PR list failed (exit: $exit_code): $search_query"
+    if [ -n "$result" ]; then
+        log_debug "PR list error: $result"
+    fi
+    echo "[]"
+    return 1
+}
+
 # Get current GitHub user
 get_current_github_user() {
-    gh api user --jq '.login' 2>/dev/null
+    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api user --jq '.login' 2>/dev/null
 }
 
 # Find PRs matching task regex patterns
@@ -35,23 +129,23 @@ find_prs_by_task_patterns() {
         local prs="[]"
 
         # Try exact match first: head:task/$pattern
-        prs=$(gh pr list --search "head:task/$pattern" --state open --json number,headRefName,url 2>/dev/null || echo "[]")
+        prs=$(_gh_pr_list_with_error_handling "head:task/$pattern" "number,headRefName,url" "$WIGGUM_GH_TIMEOUT" "--state open")
 
         # If not found, try partial match by listing all task/* branches and filtering
         if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
             # Get all PRs with task/ branches and filter locally for pattern match
             local all_task_prs
-            all_task_prs=$(gh pr list --search "head:task/" --state open --json number,headRefName,url 2>/dev/null || echo "[]")
+            all_task_prs=$(_gh_pr_list_with_error_handling "head:task/" "number,headRefName,url" "$WIGGUM_GH_TIMEOUT" "--state open")
             prs=$(echo "$all_task_prs" | jq --arg pat "$pattern" '[.[] | select(.headRefName | contains($pat))]')
         fi
 
         # If still not found, try without state filter (might be merged/closed)
         if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
-            prs=$(gh pr list --search "head:task/$pattern" --json number,headRefName,url 2>/dev/null || echo "[]")
+            prs=$(_gh_pr_list_with_error_handling "head:task/$pattern" "number,headRefName,url")
 
             if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
                 local all_task_prs
-                all_task_prs=$(gh pr list --search "head:task/" --json number,headRefName,url 2>/dev/null || echo "[]")
+                all_task_prs=$(_gh_pr_list_with_error_handling "head:task/" "number,headRefName,url")
                 prs=$(echo "$all_task_prs" | jq --arg pat "$pattern" '[.[] | select(.headRefName | contains($pat))]')
             fi
         fi
@@ -71,27 +165,27 @@ fetch_pr_comments() {
 
     # Get repository info
     local repo
-    repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+    repo=$(timeout "$WIGGUM_GH_TIMEOUT" gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
     if [ -z "$repo" ]; then
-        log_error "Could not determine repository"
+        log_error "Could not determine repository (gh repo view failed or timed out)"
         echo "[]"
         return 1
     fi
 
     # Fetch regular PR comments (issue comments)
     local issue_comments
-    issue_comments=$(gh api "repos/$repo/issues/$pr_number/comments" --jq '[.[] | {
+    issue_comments=$(_gh_api_with_error_handling "repos/$repo/issues/$pr_number/comments" '[.[] | {
         type: "issue_comment",
         id: .id,
         author: .user.login,
         body: .body,
         created_at: .created_at,
         url: .html_url
-    }]' 2>/dev/null || echo "[]")
+    }]')
 
     # Fetch review comments (inline code comments)
     local review_comments
-    review_comments=$(gh api "repos/$repo/pulls/$pr_number/comments" --jq '[.[] | {
+    review_comments=$(_gh_api_with_error_handling "repos/$repo/pulls/$pr_number/comments" '[.[] | {
         type: "review_comment",
         id: .id,
         author: .user.login,
@@ -103,11 +197,11 @@ fetch_pr_comments() {
         created_at: .created_at,
         url: .html_url,
         diff_hunk: .diff_hunk
-    }]' 2>/dev/null || echo "[]")
+    }]')
 
     # Fetch PR reviews (approve/request changes with body)
     local reviews
-    reviews=$(gh api "repos/$repo/pulls/$pr_number/reviews" --jq '[.[] | select(.body != null and .body != "") | {
+    reviews=$(_gh_api_with_error_handling "repos/$repo/pulls/$pr_number/reviews" '[.[] | select(.body != null and .body != "") | {
         type: "review",
         id: .id,
         author: .user.login,
@@ -115,7 +209,7 @@ fetch_pr_comments() {
         state: .state,
         created_at: .submitted_at,
         url: .html_url
-    }]' 2>/dev/null || echo "[]")
+    }]')
 
     # Merge all comments and sort by created_at
     echo "$issue_comments" "$review_comments" "$reviews" | jq -s 'add | sort_by(.created_at)'
@@ -214,19 +308,24 @@ _check_for_new_comments() {
 
     # Get repository info
     local repo
-    repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+    repo=$(timeout "$WIGGUM_GH_TIMEOUT" gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
     if [ -z "$repo" ]; then
+        log_error "Could not determine repository for comment check"
         return 1
     fi
 
-    # Fetch current comment IDs (all types)
-    local current_ids
+    # Fetch current comment IDs (all types) with error handling
+    local current_ids issue_ids review_comment_ids review_ids
+    issue_ids=$(_gh_api_with_error_handling "repos/$repo/issues/$pr_number/comments" '.[].id')
+    review_comment_ids=$(_gh_api_with_error_handling "repos/$repo/pulls/$pr_number/comments" '.[].id')
+    review_ids=$(_gh_api_with_error_handling "repos/$repo/pulls/$pr_number/reviews" '.[].id')
+
     current_ids=$(
         {
-            gh api "repos/$repo/issues/$pr_number/comments" --jq '.[].id' 2>/dev/null
-            gh api "repos/$repo/pulls/$pr_number/comments" --jq '.[].id' 2>/dev/null
-            gh api "repos/$repo/pulls/$pr_number/reviews" --jq '.[].id' 2>/dev/null
-        } | sort -n | tr '\n' ',' | sed 's/,$//'
+            echo "$issue_ids"
+            echo "$review_comment_ids"
+            echo "$review_ids"
+        } | grep -v '^\[\]$' | sort -n | tr '\n' ',' | sed 's/,$//'
     )
 
     # Get stored comment IDs for this PR

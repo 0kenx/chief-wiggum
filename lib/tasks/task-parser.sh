@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Task parser for markdown kanban and PRD files
+set -euo pipefail
 
 has_incomplete_tasks() {
     local file="$1"

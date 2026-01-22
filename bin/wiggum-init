@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Initialize .ralph/ directory in a project
+set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"

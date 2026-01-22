@@ -6,6 +6,7 @@
 # - Bash commands that operate on git main repo
 #
 # On violation: immediately terminates agent and creates violation flag.
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 

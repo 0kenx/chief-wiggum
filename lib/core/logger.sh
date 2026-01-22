@@ -11,6 +11,7 @@
 #   LOG_FILE  - Optional file to append all logs to (in addition to stdout/stderr)
 #   LOG_LEVEL - Minimum level to output: DEBUG, INFO, WARN, ERROR (default: INFO)
 #   DEBUG     - If set to 1, equivalent to LOG_LEVEL=DEBUG (legacy compatibility)
+set -euo pipefail
 
 # Log level numeric values for comparison
 _log_level_value() {

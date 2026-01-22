@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/chief-wiggum/config.schema.json",
+  "title": "Chief Wiggum Configuration",
+  "description": "Main configuration file for Chief Wiggum task runner",
+  "type": "object",
+  "properties": {
+    "workers": {
+      "type": "object",
+      "description": "Worker orchestration settings",
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50,
+          "description": "Maximum iterations per worker before stopping"
+        },
+        "sleep_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60,
+          "default": 2,
+          "description": "Seconds to sleep between orchestrator checks"
+        }
+      },
+      "additionalProperties": false
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Hook configuration settings",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether hooks are enabled globally"
+        },
+        "worker_hooks": {
+          "type": "string",
+          "description": "Path to worker hooks JSON file (supports ${CHIEF_HOME} variable)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "paths": {
+      "type": "object",
+      "description": "Directory and file path configuration",
+      "properties": {
+        "ralph_dir": {
+          "type": "string",
+          "default": ".ralph",
+          "description": "Name of the ralph directory in projects"
+        },
+        "kanban_file": {
+          "type": "string",
+          "default": "kanban.md",
+          "description": "Name of the kanban file"
+        },
+        "results_dir": {
+          "type": "string",
+          "default": "results",
+          "description": "Directory for worker results"
+        },
+        "workers_dir": {
+          "type": "string",
+          "default": "workers",
+          "description": "Directory for worker workspaces"
+        },
+        "logs_dir": {
+          "type": "string",
+          "default": "logs",
+          "description": "Directory for log files"
+        }
+      },
+      "additionalProperties": false
+    },
+    "review": {
+      "type": "object",
+      "description": "PR review settings",
+      "properties": {
+        "approved_authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["copilot", "dependabot", "github-actions[bot]", "dependabot[bot]", "renovate[bot]", "codecov[bot]"],
+          "description": "List of comment authors to automatically include in reviews"
+        },
+        "fix_max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10,
+          "description": "Maximum iterations for PR comment fix loops"
+        },
+        "fix_max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 30,
+          "description": "Maximum turns per fix iteration"
+        },
+        "auto_commit_after_fix": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to automatically commit and push after fixing comments"
+        }
+      },
+      "additionalProperties": false
+    },
+    "github": {
+      "type": "object",
+      "description": "GitHub API and CLI settings",
+      "properties": {
+        "timeout": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 300,
+          "default": 30,
+          "description": "Timeout in seconds for GitHub CLI commands"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -12,6 +12,7 @@
 #   agent_runner_init "$agent_dir" "$project_dir"
 #   # ... run your agent logic ...
 #   agent_runner_cleanup
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/defaults.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"

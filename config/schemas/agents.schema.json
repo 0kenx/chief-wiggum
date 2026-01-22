@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/chief-wiggum/agents.schema.json",
+  "title": "Chief Wiggum Agent Configuration",
+  "description": "Configuration for agent types and their parameters",
+  "type": "object",
+  "properties": {
+    "agents": {
+      "type": "object",
+      "description": "Agent type definitions",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "$ref": "#/definitions/agentConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "$ref": "#/definitions/agentConfig",
+      "description": "Default values applied to all agents"
+    }
+  },
+  "required": ["agents", "defaults"],
+  "additionalProperties": false,
+  "definitions": {
+    "agentConfig": {
+      "type": "object",
+      "description": "Configuration for a single agent type",
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum ralph loop iterations"
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum Claude turns per iteration"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400,
+          "description": "Agent timeout in seconds"
+        },
+        "auto_commit": {
+          "type": "boolean",
+          "description": "Whether to auto-commit changes"
+        },
+        "supervisor_interval": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Iterations between supervisor checks"
+        },
+        "max_restarts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Maximum restart attempts"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

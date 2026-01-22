@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run Claude agent once with configurable parameters
 # Generic one-shot agent execution
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"

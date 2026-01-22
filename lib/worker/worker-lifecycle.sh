@@ -6,8 +6,21 @@
 #
 # Note: All agents use agent.pid for their PID file. Process validation uses
 # the "bash" pattern since agents run via run_agent() in subshells.
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/file-lock.sh"
+
+# Global lock file for PID operations (prevents race conditions)
+_PID_OPS_LOCK_FILE=""
+
+# Get the PID operations lock file path for a ralph directory
+# Args: <ralph_dir>
+# Returns: lock file path
+_get_pid_ops_lock() {
+    local ralph_dir="$1"
+    echo "$ralph_dir/.pid-ops.lock"
+}
 
 # Find the newest worker directory for a task
 # Args: <ralph_dir> <task_id>
@@ -191,31 +204,98 @@ get_task_id_from_worker() {
 # Scan for active workers and return their info
 # Args: <ralph_dir>
 # Outputs lines of: <pid> <task_id> <worker_id>
+# Uses file locking to prevent race conditions during PID cleanup
 scan_active_workers() {
     local ralph_dir="$1"
+    local lock_file
 
     [ -d "$ralph_dir/workers" ] || return 0
 
-    for worker_dir in "$ralph_dir/workers"/worker-*; do
-        [ -d "$worker_dir" ] || continue
+    lock_file=$(_get_pid_ops_lock "$ralph_dir")
 
-        local pid_file="$worker_dir/agent.pid"
-        [ -f "$pid_file" ] || continue
+    # Collect results in a variable to output after releasing lock
+    local results=""
 
-        local worker_id
-        worker_id=$(basename "$worker_dir")
-        local task_id
-        task_id=$(get_task_id_from_worker "$worker_id")
+    # Use flock for atomic PID operations
+    (
+        flock -w 5 200 || {
+            log_warn "scan_active_workers: Failed to acquire lock, proceeding without lock"
+            exit 0
+        }
 
-        local pid
-        pid=$(get_valid_worker_pid "$pid_file" "bash")
-        if [ -n "$pid" ]; then
-            echo "$pid $task_id $worker_id"
-        else
-            # Clean up stale PID file
+        for worker_dir in "$ralph_dir/workers"/worker-*; do
+            [ -d "$worker_dir" ] || continue
+
+            local pid_file="$worker_dir/agent.pid"
+            [ -f "$pid_file" ] || continue
+
+            local worker_id
+            worker_id=$(basename "$worker_dir")
+            local task_id
+            task_id=$(get_task_id_from_worker "$worker_id")
+
+            local pid
+            pid=$(get_valid_worker_pid "$pid_file" "bash")
+            if [ -n "$pid" ]; then
+                echo "$pid $task_id $worker_id"
+            else
+                # Clean up stale PID file (atomic within lock)
+                rm -f "$pid_file"
+            fi
+        done
+
+    ) 200>"$lock_file"
+}
+
+# Atomically write a PID file
+# Args: <pid_file> <pid>
+# Uses file locking to prevent race conditions
+write_pid_file() {
+    local pid_file="$1"
+    local pid="$2"
+    local ralph_dir
+
+    # Extract ralph_dir from pid_file path (workers are in .ralph/workers/)
+    ralph_dir=$(dirname "$(dirname "$pid_file")")
+
+    local lock_file
+    lock_file=$(_get_pid_ops_lock "$ralph_dir")
+
+    (
+        flock -w 5 200 || {
+            log_warn "write_pid_file: Failed to acquire lock"
+            echo "$pid" > "$pid_file"
+            exit 0
+        }
+
+        echo "$pid" > "$pid_file"
+
+    ) 200>"$lock_file"
+}
+
+# Atomically remove a PID file
+# Args: <pid_file>
+# Uses file locking to prevent race conditions
+remove_pid_file() {
+    local pid_file="$1"
+    local ralph_dir
+
+    # Extract ralph_dir from pid_file path
+    ralph_dir=$(dirname "$(dirname "$pid_file")")
+
+    local lock_file
+    lock_file=$(_get_pid_ops_lock "$ralph_dir")
+
+    (
+        flock -w 5 200 || {
+            log_warn "remove_pid_file: Failed to acquire lock"
             rm -f "$pid_file"
-        fi
-    done
+            exit 0
+        }
+
+        rm -f "$pid_file"
+
+    ) 200>"$lock_file"
 }
 
 # Wait for worker PID file to be created

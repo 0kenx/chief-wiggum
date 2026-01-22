@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Monitor active Chief Wiggum workers
+set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"

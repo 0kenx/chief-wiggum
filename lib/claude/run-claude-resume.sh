@@ -3,6 +3,7 @@
 #
 # Used for generating summaries or continuing a conversation after
 # the main work loop completes. This is a primitive that agents can use.
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"

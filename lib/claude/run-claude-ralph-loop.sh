@@ -8,9 +8,11 @@
 #
 # Core concept: ralph-loop runs claude in a loop, run-agent-once runs it just once.
 # This script extracts the loop to be reusable across different contexts.
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
+source "$WIGGUM_HOME/lib/core/checkpoint.sh"
 
 # Extract clean text from Claude CLI stream-JSON output
 # Filters out JSON and returns only assistant text responses
@@ -46,6 +48,19 @@ run_ralph_loop() {
     local max_turns="${6:-50}"
     local output_dir="${7:-}"
     local session_prefix="${8:-iteration}"
+
+    # Validate callback functions exist before starting loop
+    if ! declare -F "$user_prompt_fn" > /dev/null 2>&1; then
+        log_error "Callback function '$user_prompt_fn' does not exist"
+        log_error "The user_prompt_fn must be a defined shell function that generates the user prompt"
+        return 1
+    fi
+
+    if ! declare -F "$completion_check_fn" > /dev/null 2>&1; then
+        log_error "Callback function '$completion_check_fn' does not exist"
+        log_error "The completion_check_fn must be a defined shell function that checks if work is complete"
+        return 1
+    fi
 
     # Default output_dir to workspace parent if not specified
     if [ -z "$output_dir" ]; then
@@ -216,6 +231,14 @@ Please provide your summary based on the conversation so far, following this str
         echo "$summary" > "$summary_txt"
 
         log "Summary generated for iteration $iteration"
+
+        # Create structured checkpoint for this iteration
+        local checkpoint_status="in_progress"
+        if [ $exit_code -ne 0 ]; then
+            checkpoint_status="failed"
+        fi
+        checkpoint_from_summary "$output_dir" "$iteration" "$session_id" "$checkpoint_status" \
+            "$log_file" "$summary_txt"
 
         # Log iteration completion to iteration log file as JSON
         {

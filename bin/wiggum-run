@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Chief Wiggum - Worker orchestration runner
+set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 PROJECT_DIR="$(pwd)"

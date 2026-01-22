@@ -10,6 +10,7 @@
 # - CONTINUE: Work is progressing, inject feedback for next round
 # - STOP: Halt the loop (supervisor explains why)
 # - RESTART: Reset to iteration 0, archive current run, inject redirect guidance
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"

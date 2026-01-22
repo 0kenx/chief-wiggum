@@ -14,6 +14,7 @@
 #   agent_source_core
 #   agent_source_ralph
 # =============================================================================
+set -euo pipefail
 
 # Prevent double-sourcing
 [ -n "${_AGENT_BASE_LOADED:-}" ] && return 0

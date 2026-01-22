@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Audit logging utilities for Chief Wiggum
 # Tracks who ran what task and when for security audit trail
+set -euo pipefail
 
 AUDIT_LOG="${AUDIT_LOG:-$PROJECT_DIR/.ralph/logs/audit.log}"
 

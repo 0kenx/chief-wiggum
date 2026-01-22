@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Chief Wiggum - Kanban validation command
+set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"

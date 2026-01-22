@@ -14,6 +14,7 @@
 #   56-63   - Agent errors (agent lifecycle)
 #   64-127  - (reserved - some systems use these)
 #   128+N   - Terminated by signal N (standard convention)
+set -euo pipefail
 
 # === OS Generic ===
 export EXIT_OK=0

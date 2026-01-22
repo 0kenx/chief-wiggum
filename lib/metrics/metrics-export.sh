@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Export metrics to metrics.json file
 # This script aggregates metrics from all workers and writes to .ralph/metrics.json
+set -euo pipefail
 
 source "$WIGGUM_HOME/lib/metrics/calculate-cost.sh"
 

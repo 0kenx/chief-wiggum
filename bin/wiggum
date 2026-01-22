@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Chief Wiggum - Worker launcher and manager
+set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 
@@ -17,6 +18,7 @@ Commands:
   run                 Orchestrate workers for incomplete tasks
   status              Show status of workers and tasks
   monitor             Monitor worker logs in real-time
+  doctor              Check environment setup and dependencies
 
 Worker Management:
   stop [<id>]         Stop worker(s) gracefully (SIGTERM)
@@ -117,6 +119,9 @@ main() {
             ;;
         review)
             exec "$WIGGUM_HOME/bin/wiggum-review" "$@"
+            ;;
+        doctor)
+            exec "$WIGGUM_HOME/bin/wiggum-doctor" "$@"
             ;;
         -h|--help|help)
             show_help

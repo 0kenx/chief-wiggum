@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Review and manage worker PRs using gh CLI
+set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 PROJECT_DIR="$(pwd)"

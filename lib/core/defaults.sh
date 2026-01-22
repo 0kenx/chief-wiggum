@@ -3,6 +3,7 @@
 #
 # Source this file early in any wiggum script to get consistent defaults.
 # All values can be overridden by environment variables.
+set -euo pipefail
 
 # Core paths
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
@@ -27,6 +28,10 @@ MAX_WORKERS="${WIGGUM_MAX_WORKERS:-4}"
 export MAX_WORKERS
 MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
 MAX_TURNS="${WIGGUM_MAX_TURNS:-50}"
+
+# GitHub CLI timeout (seconds)
+WIGGUM_GH_TIMEOUT="${WIGGUM_GH_TIMEOUT:-30}"
+export WIGGUM_GH_TIMEOUT
 
 # Export for child processes
 export WIGGUM_HOME
