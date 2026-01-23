@@ -29,8 +29,28 @@ def parse_iteration_logs(worker_dir: Path) -> Conversation:
     if not logs_dir.is_dir():
         return conversation
 
-    # Find all log files, sorted by modification time
-    log_files = sorted(logs_dir.glob("*.log"), key=lambda f: f.stat().st_mtime)
+    # Sort base logs by mtime, then insert -summary logs directly after their base.
+    # A -summary file is only paired if a matching base log exists; otherwise it's
+    # treated as a regular log and sorted by its own mtime.
+    all_logs = list(logs_dir.glob("*.log"))
+    base_stems = {f.stem for f in all_logs if not f.stem.endswith("-summary")}
+    summary_by_base: dict[str, Path] = {}
+    non_summary: list[Path] = []
+    for f in all_logs:
+        if f.stem.endswith("-summary"):
+            base_name = f.stem.removesuffix("-summary")
+            if base_name in base_stems:
+                summary_by_base[base_name] = f
+            else:
+                non_summary.append(f)
+        else:
+            non_summary.append(f)
+    non_summary.sort(key=lambda f: f.stat().st_mtime)
+    log_files: list[Path] = []
+    for base in non_summary:
+        log_files.append(base)
+        if base.stem in summary_by_base:
+            log_files.append(summary_by_base[base.stem])
 
     all_entries: list[dict[str, Any]] = []
     results: list[IterationResult] = []

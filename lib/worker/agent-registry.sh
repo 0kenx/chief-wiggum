@@ -179,6 +179,9 @@ run_agent() {
     _AGENT_REGISTRY_PROJECT_DIR="$project_dir"
     _AGENT_REGISTRY_WORKER_DIR="$worker_dir"
 
+    # Export log directory so all Claude primitives know where to write logs
+    export WIGGUM_LOG_DIR="$worker_dir/logs"
+
     # Export agent type for violation monitor
     # Task-worker is exempt from destructive git command restrictions
     export WIGGUM_CURRENT_AGENT_TYPE="$agent_type"
@@ -327,6 +330,9 @@ run_sub_agent() {
         export WIGGUM_CURRENT_AGENT_TYPE="$parent_agent_type"
         return 1
     fi
+
+    # Ensure log directory is set for Claude primitives
+    export WIGGUM_LOG_DIR="$worker_dir/logs"
 
     # Load agent
     if ! load_agent "$agent_type"; then

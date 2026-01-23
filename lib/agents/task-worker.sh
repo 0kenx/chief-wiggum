@@ -195,11 +195,11 @@ agent_run() {
 
         run_agent_resume "$RALPH_LOOP_LAST_SESSION_ID" \
             "$(_get_final_summary_prompt)" \
-            "$worker_dir/logs/final-summary.log" 3
+            "$worker_dir/logs/iteration-summary.log" 3
 
         # Extract to summaries/summary.txt (parse stream-JSON to get text, then extract summary tags)
-        if [ -f "$worker_dir/logs/final-summary.log" ]; then
-            grep '"type":"assistant"' "$worker_dir/logs/final-summary.log" | \
+        if [ -f "$worker_dir/logs/iteration-summary.log" ]; then
+            grep '"type":"assistant"' "$worker_dir/logs/iteration-summary.log" | \
                 jq -r 'select(.message.content[]? | .type == "text") | .message.content[] | select(.type == "text") | .text' 2>/dev/null | \
                 sed -n '/<summary>/,/<\/summary>/p' | \
                 sed '1d;$d' > "$worker_dir/summaries/summary.txt"

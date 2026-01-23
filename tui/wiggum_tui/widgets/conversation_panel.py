@@ -187,13 +187,13 @@ class ConversationPanel(Widget):
             if logs_dir.is_dir():
                 log_files = list(logs_dir.glob("*.log"))
                 if log_files:
-                    # Get the most recent log modification time
-                    max_mtime = max(f.stat().st_mtime for f in log_files)
+                    # Get the earliest log creation time
+                    min_mtime = min(f.stat().st_mtime for f in log_files)
                     label = f"{worker.task_id} - {worker.status.value}"
-                    workers_with_mtime.append((worker.id, label, max_mtime))
+                    workers_with_mtime.append((worker.id, label, min_mtime))
 
-        # Sort by modification time descending (most recent first)
-        workers_with_mtime.sort(key=lambda x: x[2], reverse=True)
+        # Sort by creation time ascending (oldest first)
+        workers_with_mtime.sort(key=lambda x: x[2])
         self._workers_list = [(w[0], w[1]) for w in workers_with_mtime]
 
     def _load_conversation(self, worker_id: str) -> None:

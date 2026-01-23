@@ -30,6 +30,13 @@ run_agent_resume() {
 
     log_debug "Resuming session $session_id (max_turns: $max_turns)"
 
+    # Auto-generate log file path if not specified
+    if [ -z "$output_file" ] && [ -n "${WIGGUM_LOG_DIR:-}" ]; then
+        mkdir -p "$WIGGUM_LOG_DIR"
+        output_file="$WIGGUM_LOG_DIR/resume-${session_id:0:8}-$(date +%s).log"
+        log_debug "Auto-generated log file: $output_file"
+    fi
+
     if [ -n "$output_file" ]; then
         "$CLAUDE" --verbose \
             --resume "$session_id" \
@@ -41,6 +48,7 @@ run_agent_resume() {
         log_debug "Resume completed (exit_code: $exit_code, output: $output_file)"
         return $exit_code
     else
+        # No WIGGUM_LOG_DIR set - output goes to stdout only (not recommended)
         "$CLAUDE" --resume "$session_id" \
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
