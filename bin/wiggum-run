@@ -475,7 +475,10 @@ main() {
 
         if [ -n "$git_host" ]; then
             echo "  → Testing SSH connection to $git_host..."
-            if ! ssh -T "git@$git_host" 2>&1 | head -5; then
+            local ssh_output
+            ssh_output=$(ssh -T "git@$git_host" 2>&1) || true
+            echo "$ssh_output" | head -5
+            if ! echo "$ssh_output" | grep -qi "successfully authenticated"; then
                 log_error "SSH test failed. Please ensure your SSH keys are set up and the agent is running."
                 echo ""
                 echo "Try running: ssh -T git@$git_host"
