@@ -282,6 +282,140 @@ check_timeout() {
     return 0
 }
 
+# Check curl is installed
+check_curl() {
+    local name="curl"
+
+    if ! check_command_exists curl; then
+        _print_check "fail" "$name" "Not installed. Install with your package manager."
+        return 1
+    fi
+
+    _print_check "pass" "$name" "Available"
+    return 0
+}
+
+# Check uuidgen is installed (used for session IDs)
+check_uuidgen() {
+    local name="uuidgen"
+
+    if ! check_command_exists uuidgen; then
+        _print_check "fail" "$name" "Not installed. Install: apt install uuid-runtime / pacman -S util-linux"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "Available"
+    return 0
+}
+
+# Check uv (Python package manager, needed for TUI)
+check_uv() {
+    local name="uv (Python package manager)"
+
+    if ! check_command_exists uv; then
+        _print_check "warn" "$name" "Not installed. Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        return 0  # Warning only - TUI is optional
+    fi
+
+    local version
+    version=$(uv --version 2>/dev/null | head -1 || echo "unknown")
+
+    _print_check "pass" "$name" "$version"
+    return 0
+}
+
+# Check POSIX utilities required by the scripts
+check_posix_utilities() {
+    local name="POSIX utilities"
+    local posix_bins=(grep cat date sed rm head find awk basename sort mkdir kill cut ls tail sleep mv xargs tr wc tee ps dirname tac stat)
+    local missing=()
+
+    for bin in "${posix_bins[@]}"; do
+        if ! check_command_exists "$bin"; then
+            missing+=("$bin")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        _print_check "fail" "$name" "Missing: ${missing[*]}"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "All ${#posix_bins[@]} utilities found"
+    return 0
+}
+
+# Check WIGGUM_HOME/bin is in PATH
+check_path() {
+    local name="PATH"
+
+    if [ -z "${WIGGUM_HOME:-}" ]; then
+        _print_check "fail" "$name" "WIGGUM_HOME not set, cannot verify PATH"
+        return 1
+    fi
+
+    if [[ ":$PATH:" == *":$WIGGUM_HOME/bin:"* ]]; then
+        _print_check "pass" "$name" "$WIGGUM_HOME/bin is in PATH"
+        return 0
+    fi
+
+    _print_check "fail" "$name" "$WIGGUM_HOME/bin not in PATH. Add to your shell rc file."
+    return 1
+}
+
+# Check hooks directory and executability
+check_hooks() {
+    local name="Hooks"
+    local hooks_dir="$WIGGUM_HOME/hooks/callbacks"
+
+    if [ ! -d "$hooks_dir" ]; then
+        _print_check "warn" "$name" "hooks/callbacks directory not found"
+        return 0
+    fi
+
+    local non_exec=()
+    for hook in "$hooks_dir"/*.sh; do
+        [ -f "$hook" ] || continue
+        if [ ! -x "$hook" ]; then
+            non_exec+=("$(basename "$hook")")
+        fi
+    done
+
+    if [ ${#non_exec[@]} -gt 0 ]; then
+        _print_check "warn" "$name" "Not executable: ${non_exec[*]}"
+        return 0
+    fi
+
+    local count
+    count=$(find "$hooks_dir" -maxdepth 1 -name "*.sh" -executable | wc -l)
+    _print_check "pass" "$name" "$count hook scripts executable"
+    return 0
+}
+
+# Check TUI Python environment
+check_tui() {
+    local name="TUI environment"
+    local tui_dir="$WIGGUM_HOME/tui"
+
+    if [ ! -d "$tui_dir" ]; then
+        _print_check "info" "$name" "TUI directory not found (optional)"
+        return 0
+    fi
+
+    if [ ! -f "$tui_dir/pyproject.toml" ]; then
+        _print_check "warn" "$name" "pyproject.toml missing"
+        return 0
+    fi
+
+    if [ ! -d "$tui_dir/.venv" ]; then
+        _print_check "warn" "$name" "Virtual environment not set up (run: cd $tui_dir && uv sync)"
+        return 0
+    fi
+
+    _print_check "pass" "$name" "Virtual environment present"
+    return 0
+}
+
 # Run all pre-flight checks
 # Returns: 0 if all pass, 1 if any fail
 run_preflight_checks() {
@@ -292,14 +426,24 @@ run_preflight_checks() {
     check_wiggum_home
     check_git
     check_jq
+    check_curl
+    check_uuidgen
     check_timeout
     check_gh_cli
     check_claude_cli
     echo ""
 
+    echo "=== POSIX Utilities ==="
+    check_posix_utilities
+    echo ""
+
     echo "=== Environment ==="
+    check_path
     check_disk_space "."
     check_config_files
+    check_uv
+    check_tui
+    check_hooks
     echo ""
 
     echo "=== Project ==="

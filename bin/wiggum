@@ -34,6 +34,9 @@ Cleanup & Review:
   clean <target>      Clean up worktrees and worker directories
   review              Review and manage worker Pull Requests
 
+Utilities:
+  util convert-log    Convert JSONL iteration logs to markdown
+
 Run Options:
   --max-workers N     Maximum concurrent workers (default: 4)
 
@@ -56,6 +59,8 @@ Examples:
   wiggum clean TASK-030         # Clean up specific worker
   wiggum clean all              # Clean up all workers
   wiggum review list            # List open PRs
+
+  wiggum util convert-log TASK-030   # Convert iteration logs to markdown
 
 Behavior:
   - Wiggum assigns pending tasks [ ] to workers
@@ -122,6 +127,9 @@ main() {
             ;;
         doctor)
             exec "$WIGGUM_HOME/bin/wiggum-doctor" "$@"
+            ;;
+        util)
+            exec "$WIGGUM_HOME/bin/wiggum-util" "$@"
             ;;
         -h|--help|help)
             show_help

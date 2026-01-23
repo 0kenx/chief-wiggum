@@ -38,21 +38,22 @@ run_agent_resume() {
     fi
 
     if [ -n "$output_file" ]; then
+        local exit_code=0
         "$CLAUDE" --verbose \
             --resume "$session_id" \
             --output-format stream-json \
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
-            -p "$prompt" > "$output_file" 2>&1
-        local exit_code=$?
+            -p "$prompt" > "$output_file" 2>&1 || exit_code=$?
         log_debug "Resume completed (exit_code: $exit_code, output: $output_file)"
         return $exit_code
     else
         # No WIGGUM_LOG_DIR set - output goes to stdout only (not recommended)
+        local exit_code=0
         "$CLAUDE" --resume "$session_id" \
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
-            -p "$prompt" 2>&1
-        return $?
+            -p "$prompt" 2>&1 || exit_code=$?
+        return $exit_code
     fi
 }

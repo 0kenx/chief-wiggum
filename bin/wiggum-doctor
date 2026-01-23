@@ -2,8 +2,9 @@
 # wiggum doctor - Pre-flight validation command
 #
 # Checks that the environment is properly configured for Chief Wiggum:
-# - Required tools: gh CLI, Claude CLI, jq, git (2.5+)
-# - Environment: disk space, configuration files
+# - Required tools: gh CLI, Claude CLI, jq, git (2.5+), curl, uuidgen, timeout
+# - POSIX utilities: grep, cat, date, sed, find, awk, etc.
+# - Environment: PATH, disk space, config files, uv, TUI venv, hooks
 # - Project: .ralph directory setup
 set -euo pipefail
 
@@ -19,13 +20,25 @@ wiggum doctor - Pre-flight validation command
 Usage: wiggum doctor [options]
 
 Checks:
+  Required tools:
   - gh CLI installed + authenticated
   - Claude CLI available + responsive
-  - jq installed
+  - jq, curl, uuidgen, timeout
   - git version (2.5+ for worktrees)
+
+  POSIX utilities:
+  - grep, cat, date, sed, find, awk, sort, etc.
+
+  Environment:
+  - WIGGUM_HOME/bin in PATH
   - Disk space (500MB minimum)
-  - Project setup (.ralph directory)
-  - Configuration files valid
+  - Configuration files valid (JSON syntax)
+  - uv (Python package manager)
+  - TUI virtual environment
+  - Hook scripts executable
+
+  Project:
+  - .ralph directory setup
 
 Options:
   -q, --quiet     Only show failures (no success messages)

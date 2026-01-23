@@ -58,13 +58,14 @@ run_agent_once() {
 
     # Run claude and capture output
     if [ -n "$output_file" ]; then
-        "$CLAUDE" "${cmd_args[@]}" > "$output_file" 2>&1
-        local exit_code=$?
+        local exit_code=0
+        "$CLAUDE" "${cmd_args[@]}" > "$output_file" 2>&1 || exit_code=$?
         log_debug "Agent completed (exit_code: $exit_code, output: $output_file)"
         return $exit_code
     else
         # No WIGGUM_LOG_DIR set - output goes to stdout only (not recommended)
-        "$CLAUDE" "${cmd_args[@]}" 2>&1
-        return $?
+        local exit_code=0
+        "$CLAUDE" "${cmd_args[@]}" 2>&1 || exit_code=$?
+        return $exit_code
     fi
 }

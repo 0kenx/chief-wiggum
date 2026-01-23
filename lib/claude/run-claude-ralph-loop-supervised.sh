@@ -264,6 +264,7 @@ run_ralph_loop_supervised() {
         } > "$log_file"
 
         # PHASE 1: Work session with turn limit
+        local exit_code=0
         "$CLAUDE" --verbose \
             --output-format stream-json \
             ${WIGGUM_HOME:+--plugin-dir "$WIGGUM_HOME/skills"} \
@@ -271,9 +272,7 @@ run_ralph_loop_supervised() {
             --session-id "$session_id" \
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
-            -p "$user_prompt" >> "$log_file" 2>&1
-
-        local exit_code=$?
+            -p "$user_prompt" >> "$log_file" 2>&1 || exit_code=$?
         log "Work phase completed (exit code: $exit_code, session: $session_id)"
 
         # Log work phase completion
@@ -337,12 +336,11 @@ Please provide your summary based on the conversation so far, following this str
         local summary_log="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}-summary.log"
         local summary_txt="$output_dir/summaries/${session_prefix}-${iteration}-summary.txt"
 
+        local summary_exit_code=0
         "$CLAUDE" --verbose --resume "$session_id" --max-turns 2 \
             --output-format stream-json \
             --dangerously-skip-permissions -p "$summary_prompt" \
-            > "$summary_log" 2>&1
-
-        local summary_exit_code=$?
+            > "$summary_log" 2>&1 || summary_exit_code=$?
         log "Summary generation completed (exit code: $summary_exit_code)"
 
         # Extract clean text from JSON stream and save
@@ -425,6 +423,7 @@ Please provide your summary based on the conversation so far, following this str
             } > "$supervisor_log"
 
             # Run supervisor
+            local supervisor_exit_code=0
             "$CLAUDE" --verbose \
                 --output-format stream-json \
                 ${WIGGUM_HOME:+--plugin-dir "$WIGGUM_HOME/skills"} \
@@ -432,9 +431,7 @@ Please provide your summary based on the conversation so far, following this str
                 --session-id "$supervisor_session_id" \
                 --max-turns 5 \
                 --dangerously-skip-permissions \
-                -p "$supervisor_prompt" >> "$supervisor_log" 2>&1
-
-            local supervisor_exit_code=$?
+                -p "$supervisor_prompt" >> "$supervisor_log" 2>&1 || supervisor_exit_code=$?
             log "Supervisor session completed (exit code: $supervisor_exit_code)"
 
             # Extract decision and guidance

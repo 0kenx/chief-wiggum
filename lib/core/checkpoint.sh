@@ -80,7 +80,7 @@ checkpoint_write() {
 
     local worker_id task_id
     worker_id=$(basename "$worker_dir")
-    task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/' 2>/dev/null || echo "unknown")
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/' 2>/dev/null || echo "unknown")
 
     # Build checkpoint JSON
     cat > "$checkpoint_file" << CHECKPOINT_JSON
@@ -330,11 +330,17 @@ checkpoint_extract_files_modified() {
     fi
 
     # Look for Edit, Write tool calls and extract file paths
-    grep -oP '"tool":"(Edit|Write)".*?"file_path":"[^"]+' "$log_file" 2>/dev/null | \
+    local files
+    files=$(grep -oP '"name":"(Edit|Write)".*?"file_path":"[^"]+' "$log_file" 2>/dev/null | \
         grep -oP '"file_path":"[^"]+' | \
         sed 's/"file_path":"//g' | \
-        sort -u | \
-        jq -Rs 'split("\n") | map(select(length > 0))' 2>/dev/null || echo "[]"
+        sort -u) || true
+
+    if [ -z "$files" ]; then
+        echo "[]"
+    else
+        echo "$files" | jq -Rs 'split("\n") | map(select(length > 0))'
+    fi
 }
 
 # Create checkpoint from iteration summary
