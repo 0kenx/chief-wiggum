@@ -3,12 +3,19 @@
     "task-worker": {
       "max_iterations": 20,
       "max_turns": 50,
-      "timeout_seconds": 3600
+      "timeout_seconds": 3600,
+      "plan_mode": false
     },
-    "task-worker-plan-mode": {
+    "task-executor": {
       "max_iterations": 20,
       "max_turns": 50,
-      "timeout_seconds": 4200
+      "supervisor_interval": 2,
+      "timeout_seconds": 3600
+    },
+    "task-summarizer": {
+      "max_iterations": 1,
+      "max_turns": 3,
+      "timeout_seconds": 120
     },
     "plan-mode": {
       "max_iterations": 5,

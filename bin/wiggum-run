@@ -35,8 +35,8 @@ Usage: wiggum run [mode] [options]
 
 Modes:
   (default)            Use task-worker agent (standard execution)
-  plan                 Use task-worker-plan-mode agent (creates implementation
-                       plan before execution)
+  plan                 Use task-worker agent with plan mode enabled (creates
+                       implementation plan before execution)
 
 Options:
   --max-workers N      Maximum concurrent workers (default: 4)
@@ -293,7 +293,7 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             plan)
-                AGENT_TYPE="task-worker-plan-mode"
+                export WIGGUM_PLAN_MODE=true
                 shift
                 ;;
             --max-workers)
@@ -505,7 +505,7 @@ main() {
     fi
 
     local mode_desc="standard"
-    if [ "$AGENT_TYPE" = "task-worker-plan-mode" ]; then
+    if [ "${WIGGUM_PLAN_MODE:-false}" = "true" ]; then
         mode_desc="plan mode"
     fi
     log "Starting Chief Wiggum in $PROJECT_DIR ($mode_desc, max $MAX_WORKERS concurrent workers)"

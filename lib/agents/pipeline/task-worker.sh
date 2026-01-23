@@ -5,10 +5,11 @@ set -euo pipefail
 # =============================================================================
 # AGENT_TYPE: task-worker
 # AGENT_DESCRIPTION: Main task execution agent that manages the complete task
-#   lifecycle from PRD. Handles git worktree setup, PRD task execution via
-#   ralph loop pattern, validation review (via nested sub-agent), commit and
-#   PR creation, kanban status updates, and worktree cleanup. The primary
-#   workhorse agent for automated task completion.
+#   lifecycle from PRD. Handles git worktree setup, plan-mode (optional),
+#   task execution via task-executor sub-agent, summary generation via
+#   task-summarizer sub-agent, quality gates (security, tests, docs),
+#   validation review, commit/PR creation, kanban status updates, and
+#   worktree cleanup. The primary workhorse agent for automated task completion.
 # REQUIRED_PATHS:
 #   - prd.md : Product Requirements Document containing tasks to execute
 # NOTE: workspace is created by this agent, not required in advance
@@ -36,8 +37,6 @@ agent_output_files() {
 
 # Source dependencies using base library helpers
 agent_source_core
-agent_source_ralph_supervised
-agent_source_resume
 agent_source_violations
 agent_source_tasks
 agent_source_git
@@ -101,8 +100,37 @@ _build_phase_timings_json() {
     echo "$json"
 }
 
-# Track plan file path for user prompt callback
-_TASK_PLAN_FILE=""
+# Write executor configuration file for the task-executor sub-agent
+#
+# Args:
+#   worker_dir           - Worker directory
+#   max_iterations       - Max iterations for the ralph loop
+#   max_turns            - Max turns per Claude session
+#   supervisor_interval  - Run supervisor every N iterations
+#   plan_file            - Path to plan file (empty if none)
+#   resume_instructions  - Path to resume instructions file (empty if none)
+_write_executor_config() {
+    local worker_dir="$1"
+    local max_iterations="$2"
+    local max_turns="$3"
+    local supervisor_interval="$4"
+    local plan_file="${5:-}"
+    local resume_instructions="${6:-}"
+
+    jq -n \
+        --argjson max_iterations "$max_iterations" \
+        --argjson max_turns "$max_turns" \
+        --argjson supervisor_interval "$supervisor_interval" \
+        --arg plan_file "$plan_file" \
+        --arg resume_instructions "$resume_instructions" \
+        '{
+            max_iterations: $max_iterations,
+            max_turns: $max_turns,
+            supervisor_interval: $supervisor_interval,
+            plan_file: $plan_file,
+            resume_instructions: $resume_instructions
+        }' > "$worker_dir/executor-config.json"
+}
 
 # Commit sub-agent changes to isolate work between phases
 # This prevents one sub-agent from accidentally destroying another's work
@@ -209,6 +237,9 @@ agent_run() {
     local start_from_step="${5:-execution}"
     local resume_instructions="${6:-}"
 
+    # Determine plan mode from config or environment
+    local plan_mode="${WIGGUM_PLAN_MODE:-${AGENT_CONFIG_PLAN_MODE:-false}}"
+
     # Extract worker and task IDs
     local worker_id task_id
     worker_id=$(basename "$worker_dir")
@@ -225,7 +256,7 @@ agent_run() {
     start_time=$(date +%s)
     agent_log_start "$worker_dir" "$task_id"
 
-    log "Task worker agent starting for $task_id (max $max_turns turns per session)"
+    log "Task worker agent starting for $task_id (max $max_turns turns per session, plan_mode=$plan_mode)"
     if [ "$start_from_step" != "execution" ]; then
         log "Resuming from step: $start_from_step (skipping earlier phases)"
     fi
@@ -257,21 +288,44 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # === CHECK FOR EXISTING PLAN ===
-    _TASK_PLAN_FILE="$project_dir/.ralph/plans/${task_id}.md"
-    if [ -f "$_TASK_PLAN_FILE" ] && [ -s "$_TASK_PLAN_FILE" ]; then
-        log "Plan found at $_TASK_PLAN_FILE - will include in execution context"
+    # === PLANNING PHASE (optional) ===
+    local plan_file="$project_dir/.ralph/plans/${task_id}.md"
+
+    if _should_run_step "execution" "$start_from_step"; then
+        if [ "$plan_mode" = "true" ]; then
+            if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
+                log "Plan already exists at $plan_file - skipping planning phase"
+            else
+                log "Running implementation planning phase"
+                run_sub_agent "plan-mode" "$worker_dir" "$project_dir"
+                local plan_result=$?
+
+                if [ $plan_result -eq 0 ] && [ -f "$plan_file" ]; then
+                    log "Plan created at $plan_file"
+                else
+                    log_warn "Planning did not complete (exit: ${plan_result:-0}) - continuing without plan"
+                    plan_file=""
+                fi
+            fi
+        else
+            # Non-plan mode: check for existing plan
+            if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
+                log "Plan found at $plan_file - will include in execution context"
+            else
+                log_debug "No existing plan at $plan_file"
+                plan_file=""
+            fi
+        fi
     else
-        log_debug "No existing plan at $_TASK_PLAN_FILE"
-        _TASK_PLAN_FILE=""
+        # Resuming past execution - check for existing plan
+        if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
+            log "Plan found at $plan_file (resuming past planning phase)"
+        else
+            plan_file=""
+        fi
     fi
 
     # === EXECUTION PHASE ===
-    # Set up callback context using base library
-    agent_setup_context "$worker_dir" "$workspace" "$project_dir" "$task_id"
-    _TASK_PRD_FILE="$prd_file"
-    _TASK_RESUME_INSTRUCTIONS="$resume_instructions"
-
     local loop_result=0
 
     if _should_run_step "execution" "$start_from_step"; then
@@ -280,36 +334,22 @@ agent_run() {
         # Supervisor interval (run supervisor every N iterations)
         local supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-2}"
 
-        # Run main work loop with supervision
-        run_ralph_loop_supervised "$workspace" \
-            "$(_get_system_prompt "$workspace")" \
-            "_task_user_prompt" \
-            "_task_completion_check" \
-            "$max_iterations" "$max_turns" "$worker_dir" "iteration" \
-            "$supervisor_interval"
+        # Write executor config
+        _write_executor_config "$worker_dir" "$max_iterations" "$max_turns" \
+            "$supervisor_interval" "${plan_file:-}" "$resume_instructions"
 
+        # Run execution via sub-agent
+        run_sub_agent "task-executor" "$worker_dir" "$project_dir"
         loop_result=$?
+
         _phase_end "execution"
     else
         log "Skipping execution phase (resuming from $start_from_step)"
     fi
 
-    # Generate final summary (hardcoded prompt - not configurable)
-    if [ -n "$RALPH_LOOP_LAST_SESSION_ID" ] && [ $loop_result -eq 0 ]; then
-        log "Generating final summary for changelog"
-
-        run_agent_resume "$RALPH_LOOP_LAST_SESSION_ID" \
-            "$(_get_final_summary_prompt)" \
-            "$worker_dir/logs/iteration-summary.log" 3
-
-        # Extract to summaries/summary.txt (parse stream-JSON to get text, then extract summary tags)
-        if [ -f "$worker_dir/logs/iteration-summary.log" ]; then
-            grep '"type":"assistant"' "$worker_dir/logs/iteration-summary.log" | \
-                jq -r 'select(.message.content[]? | .type == "text") | .message.content[] | select(.type == "text") | .text' 2>/dev/null | \
-                sed -n '/<summary>/,/<\/summary>/p' | \
-                sed '1d;$d' > "$worker_dir/summaries/summary.txt"
-            log "Final summary saved to summaries/summary.txt"
-        fi
+    # === SUMMARY PHASE ===
+    if [ $loop_result -eq 0 ]; then
+        run_sub_agent "task-summarizer" "$worker_dir" "$project_dir"
     fi
 
     # === SECURITY AUDIT PHASE ===
@@ -467,6 +507,7 @@ agent_run() {
         --arg validation_result "$validation_result" \
         --arg violation_type "$violation_type" \
         --arg violation_details "$violation_details" \
+        --arg plan_file "${plan_file:-}" \
         --argjson phases "$phase_timings_json" \
         '{
             pr_url: $pr_url,
@@ -475,6 +516,7 @@ agent_run() {
             validation_result: $validation_result,
             violation_type: $violation_type,
             violation_details: $violation_details,
+            plan_file: $plan_file,
             phases: $phases
         }')
 
@@ -614,352 +656,4 @@ _update_kanban_status() {
     # Update metrics.json with latest worker data
     log_debug "Exporting metrics to metrics.json"
     export_metrics "$project_dir/.ralph" 2>/dev/null || true
-}
-
-# System prompt - workspace boundary enforcement
-_get_system_prompt() {
-    local workspace="$1"
-    local prd_relative="../prd.md"
-
-    cat << EOF
-SENIOR SOFTWARE ENGINEER ROLE:
-
-You are a senior software engineer implementing a specific task from a PRD.
-Your goal is to deliver production-quality code that fits naturally into the existing codebase.
-
-WORKSPACE: $workspace
-PRD: $prd_relative
-
-## Core Principles
-
-1. **Understand Before You Build**
-   - Study the existing architecture before writing code
-   - Find similar patterns in the codebase and follow them
-   - Understand how your changes integrate with existing systems
-
-2. **Write Production-Quality Code**
-   - Code should be correct, secure, and maintainable
-   - Handle errors appropriately - don't swallow exceptions
-   - Include tests that verify the implementation works
-   - Follow the project's existing conventions exactly
-
-3. **Stay Focused**
-   - Complete the PRD task fully, but don't over-engineer
-   - Don't refactor unrelated code or add unrequested features
-   - If blocked, document clearly and mark as incomplete
-
-## Workspace Security
-
-CRITICAL: You MUST NOT access files outside your workspace.
-- Allowed: $workspace and $prd_relative
-- Do NOT use paths like ../../ to escape
-- Do NOT follow symlinks outside the workspace
-
-For subagent prompts, prepend:
-<workspace>Your allowed workspace is: $workspace. Do not read or modify files outside of this directory</workspace>
-EOF
-}
-
-# --- User prompt composable segments ---
-
-_emit_supervisor_section() {
-    local feedback="$1"
-    [ -z "$feedback" ] && return
-    cat << EOF
-SUPERVISOR GUIDANCE:
-
-$feedback
-
----
-
-EOF
-}
-
-_emit_protocol_section() {
-    cat << 'PROMPT_EOF'
-TASK EXECUTION PROTOCOL:
-
-Your mission: Complete the next incomplete task from the PRD with production-quality code.
-
-## Phase 1: Understand the Task
-
-1. **Read the PRD** (@../prd.md)
-   - Find the first incomplete task marked with `- [ ]`
-   - Skip completed `- [x]` and failed `- [*]` tasks
-   - Focus on ONE task only
-
-2. **Understand the Requirements**
-   - What exactly needs to be implemented?
-   - What are the acceptance criteria?
-   - What edge cases should be handled?
-
-## Phase 2: Study the Architecture
-
-Before writing ANY code, understand the existing codebase:
-
-3. **Explore the Project Structure**
-   - How is the codebase organized?
-   - Where do similar features live?
-   - What are the key abstractions and patterns?
-
-4. **Find Existing Patterns**
-   - Search for similar functionality already implemented
-   - Note the patterns used: naming, structure, error handling
-   - Identify the testing approach used in the project
-
-5. **Understand Integration Points**
-   - What existing code will you interact with?
-   - What APIs or interfaces must you follow?
-   - Are there shared utilities you should use?
-
-## Phase 3: Implement with Quality
-
-6. **Write the Implementation**
-   - Follow the patterns you discovered in Phase 2
-   - Match the existing code style exactly
-   - Handle errors appropriately (don't swallow them)
-   - Keep functions focused and readable
-
-7. **Write Tests**
-   - Add tests that verify your implementation works
-   - Follow the project's existing test patterns
-   - Test the happy path and key edge cases
-   - If the project has no tests, at least manually verify
-
-8. **Security Considerations**
-   - Validate inputs from untrusted sources
-   - Avoid injection vulnerabilities
-   - Don't hardcode secrets or credentials
-   - Handle sensitive data appropriately
-
-## Phase 4: Verify and Complete
-
-9. **Run Tests and Verification**
-   - Run the test suite if one exists
-   - Manually verify your implementation works
-   - Check for obvious regressions
-
-10. **Update the PRD**
-    - `- [ ]` → `- [x]` if successfully completed
-    - `- [ ]` → `- [*]` if blocked (explain why)
-
-## Quality Checklist
-
-Before marking complete, verify:
-- [ ] Implementation meets all requirements
-- [ ] Code follows existing patterns in the codebase
-- [ ] Error cases are handled appropriately
-- [ ] Tests are added (matching project conventions)
-- [ ] No security vulnerabilities introduced
-- [ ] Changes integrate cleanly with existing code
-
-## Rules
-
-- Complete ONE task fully before moving to the next
-- If blocked, document clearly and mark as `- [*]`
-- Don't over-engineer or add unrequested features
-- Stay within the workspace directory
-PROMPT_EOF
-}
-
-_emit_plan_section() {
-    local plan_file="$1"
-    [ -z "$plan_file" ] || [ ! -f "$plan_file" ] && return
-    cat << PLAN_EOF
-
-IMPLEMENTATION PLAN AVAILABLE:
-
-An implementation plan has been created for this task. Before starting:
-1. Read the plan at: @$plan_file
-2. Follow the implementation approach described in the plan
-3. Pay attention to the Critical Files section
-4. Consider the potential challenges identified
-
-The plan provides guidance on:
-- Existing patterns in the codebase to follow
-- Recommended implementation approach
-- Dependencies and sequencing
-- Potential challenges to watch for
-PLAN_EOF
-}
-
-_emit_resume_section() {
-    local iteration="$1"
-    local resume_file="$2"
-    [ "$iteration" -ne 0 ] && return
-    [ -z "$resume_file" ] || [ ! -f "$resume_file" ] || [ ! -s "$resume_file" ] && return
-    local resume_content
-    resume_content=$(cat "$resume_file")
-    cat << RESUME_EOF
-
-CONTEXT FROM PREVIOUS SESSION (RESUMED):
-
-This worker is resuming from a previous interrupted run. The following context
-describes what was accomplished and what needs to happen now:
-
-$resume_content
-
-Continue from where the previous session left off:
-- Do NOT repeat work that was already completed
-- Pick up where the previous session stopped
-- If a task was partially completed, continue from where it left off
-- Use the context above to maintain consistency in approach and patterns
-
-CRITICAL: Do NOT read files in the logs/ directory - they contain full conversation JSON streams that are too large and will deplete your context window.
-RESUME_EOF
-}
-
-_emit_context_section() {
-    local iteration="$1"
-    local output_dir="$2"
-    [ "$iteration" -le 0 ] && return
-    local prev_iter=$((iteration - 1))
-    [ -f "$output_dir/summaries/iteration-$prev_iter-summary.txt" ] || return
-    cat << CONTEXT_EOF
-
-CONTEXT FROM PREVIOUS ITERATION:
-
-This is iteration $iteration of a multi-iteration work session. Previous work has been completed in earlier iterations.
-
-To understand what has already been accomplished and maintain continuity:
-- Read the file @../summaries/iteration-$prev_iter-summary.txt to understand completed work and context
-- This summary describes what was done, decisions made, and files modified
-- Use this information to avoid duplicating work and to build upon previous progress
-- Ensure your approach aligns with patterns and decisions from earlier iterations
-
-CRITICAL: Do NOT read files in the logs/ directory - they contain full conversation JSON streams that are too large and will deplete your context window. Only read the summaries/iteration-X-summary.txt files for context.
-CONTEXT_EOF
-}
-
-# User prompt callback for supervised ralph loop
-# Args: iteration, output_dir, supervisor_dir, supervisor_feedback
-_task_user_prompt() {
-    local iteration="$1"
-    local output_dir="$2"
-    local _supervisor_dir="$3"  # unused but part of callback signature
-    local supervisor_feedback="$4"
-
-    _emit_supervisor_section "$supervisor_feedback"
-    _emit_protocol_section
-    _emit_plan_section "$_TASK_PLAN_FILE"
-    _emit_resume_section "$iteration" "$_TASK_RESUME_INSTRUCTIONS"
-    _emit_context_section "$iteration" "$output_dir"
-}
-
-# Completion check - check PRD for incomplete tasks
-_task_completion_check() {
-    ! has_incomplete_tasks "$_TASK_PRD_FILE"
-}
-
-# Final summary prompt (not configurable per requirements)
-_get_final_summary_prompt() {
-    cat << 'SUMMARY_EOF'
-FINAL COMPREHENSIVE SUMMARY REQUEST:
-
-Congratulations! All tasks in this work session have been completed successfully.
-
-Your task is to create a comprehensive summary of EVERYTHING accomplished across all iterations in this session. This summary will be used in:
-1. The project changelog (for other developers to understand what changed)
-2. Pull request descriptions (for code review)
-3. Documentation of implementation decisions
-
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure completeness. In your analysis:
-
-1. Review all completed tasks from the PRD
-2. Examine all iterations and their summaries (if multiple iterations occurred)
-3. Identify all files that were created or modified
-4. Recall all technical decisions and their rationale
-5. Document all testing and verification performed
-6. Note any important patterns, conventions, or architectural choices
-7. Consider what information would be most valuable for:
-   - Future maintainers of this code
-   - Code reviewers evaluating this work
-   - Other developers working on related features
-
-Your summary MUST include these sections in this exact order:
-
-<example>
-<analysis>
-[Your thorough analysis ensuring all work is captured comprehensively]
-</analysis>
-
-<summary>
-
-## TL;DR
-
-[3-5 concise bullet points summarizing the entire session's work - write for busy developers who need the essence quickly]
-
-## What Was Implemented
-
-[Detailed description of all changes, new features, or fixes. Organize by:
-- New features added
-- Existing features modified
-- Bugs fixed
-- Refactoring performed
-Be specific about functionality and behavior changes]
-
-## Files Modified
-
-[Comprehensive list of files, organized by type of change:
-- **Created**: New files added to the codebase
-- **Modified**: Existing files changed
-- **Deleted**: Files removed (if any)
-
-For each file, include:
-- File path
-- Brief description of changes
-- Key functions/sections modified]
-
-## Technical Details
-
-[Important implementation decisions, patterns, and technical choices:
-- Architecture or design patterns used
-- Why specific approaches were chosen over alternatives
-- Configuration changes and their purpose
-- Dependencies added or updated
-- Security considerations addressed
-- Performance optimizations applied
-- Error handling strategies
-- Edge cases handled]
-
-## Testing and Verification
-
-[How the work was verified to be correct:
-- Manual testing performed (specific test cases)
-- Automated tests written or run
-- Integration testing done
-- Edge cases validated
-- Performance benchmarks (if applicable)
-- Security validation (if applicable)]
-
-## Integration Notes
-
-[Important information for integrating this work:
-- Breaking changes (if any)
-- Migration steps required (if any)
-- Configuration changes needed
-- Dependencies to install
-- Compatibility considerations]
-
-## Future Considerations
-
-[Optional: Notes for future work or considerations:
-- Known limitations
-- Potential optimizations
-- Related features that could be added
-- Technical debt incurred (if any)]
-
-</summary>
-</example>
-
-IMPORTANT GUIDELINES:
-- Be specific with file paths, function names, and code patterns
-- Include actual values for configurations, not placeholders
-- Write for technical readers who may not have context
-- Focus on WHAT was done and WHY, not just HOW
-- Use proper markdown formatting for readability
-- Be thorough but concise - every sentence should add value
-
-Please provide your comprehensive summary following this structure.
-SUMMARY_EOF
 }

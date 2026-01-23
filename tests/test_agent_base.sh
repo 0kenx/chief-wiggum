@@ -538,6 +538,30 @@ test_validation_review_sh_syntax() {
     fi
 }
 
+test_task_executor_sh_syntax() {
+    if bash -n "$WIGGUM_HOME/lib/agents/task-executor.sh" 2>/dev/null; then
+        assert_success "true" "task-executor.sh should have valid bash syntax"
+    else
+        assert_failure "true" "task-executor.sh should have valid bash syntax"
+    fi
+}
+
+test_task_summarizer_sh_syntax() {
+    if bash -n "$WIGGUM_HOME/lib/agents/task-summarizer.sh" 2>/dev/null; then
+        assert_success "true" "task-summarizer.sh should have valid bash syntax"
+    else
+        assert_failure "true" "task-summarizer.sh should have valid bash syntax"
+    fi
+}
+
+test_agents_json_has_new_agents() {
+    local agents
+    agents=$(jq -r '.agents | keys[]' "$WIGGUM_HOME/config/agents.json" 2>/dev/null | sort | tr '\n' ',')
+
+    assert_output_contains "$agents" "task-executor" "agents.json should have task-executor"
+    assert_output_contains "$agents" "task-summarizer" "agents.json should have task-summarizer"
+}
+
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -576,6 +600,9 @@ run_test test_agent_registry_sh_syntax
 run_test test_task_worker_sh_syntax
 run_test test_pr_comment_fix_sh_syntax
 run_test test_validation_review_sh_syntax
+run_test test_task_executor_sh_syntax
+run_test test_task_summarizer_sh_syntax
+run_test test_agents_json_has_new_agents
 
 # Print summary
 print_test_summary

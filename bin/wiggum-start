@@ -178,8 +178,8 @@ main() {
                 shift 2
                 ;;
             plan)
-                AGENT_TYPE="task-worker-plan-mode"
-                echo "Using plan mode agent"
+                export WIGGUM_PLAN_MODE=true
+                echo "Using plan mode"
                 shift
                 ;;
             -*)

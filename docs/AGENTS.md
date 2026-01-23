@@ -7,12 +7,13 @@ This document describes how to create and configure agents in Chief Wiggum.
 Agents are self-contained Bash scripts that implement specific workflows.
 There are two agent patterns, each in its own directory:
 
-- **Orchestrator agents** (`lib/agents/pipeline/`) — `task-worker`, `task-worker-plan-mode` —
-  manage the full task pipeline, spawn sub-agents, use supervised ralph loops, and handle
-  commits/PRs.
+- **Orchestrator agents** (`lib/agents/pipeline/`) — `task-worker` —
+  manage the full task pipeline, spawn sub-agents, and handle commits/PRs.
+  The orchestrator controls workflow only and never calls `claude/*` directly.
+  Plan mode is enabled via `WIGGUM_PLAN_MODE=true` or config `plan_mode: true`.
 - **Leaf agents** (`lib/agents/`) — all others — perform a single focused task (audit,
-  review, test, etc.), invoked as sub-agents by orchestrators, using unsupervised ralph
-  loops or single-run execution.
+  review, test, execution, etc.), invoked as sub-agents by orchestrators, using
+  unsupervised/supervised ralph loops or single-run execution.
 
 ## Agent Lifecycle
 
@@ -118,7 +119,9 @@ agent_run() {
 
 #### Orchestrator Agent Template
 
-For pipeline agents that manage sub-agents (like `task-worker`):
+For pipeline agents that manage sub-agents (like `task-worker`).
+Orchestrators control workflow only — they never call `claude/*` directly.
+Instead, they delegate execution to leaf agents via `run_sub_agent`:
 
 ```bash
 #!/usr/bin/env bash
@@ -146,9 +149,8 @@ agent_output_files() {
     echo "worker.log"
 }
 
-# Source dependencies
+# Source dependencies (no ralph/resume - orchestrators don't call Claude directly)
 agent_source_core
-agent_source_ralph_supervised
 agent_source_tasks
 agent_source_git
 
@@ -168,19 +170,17 @@ agent_run() {
     start_time=$(date +%s)
     agent_log_start "$worker_dir" "$task_id"
 
-    # Set up context (4-arg form with task_id)
-    agent_setup_context "$worker_dir" "$workspace" "$project_dir" "$task_id"
+    # Write config for executor sub-agent
+    _write_executor_config "$worker_dir" "$max_iterations" "$max_turns" ...
 
-    # Supervised ralph loop for main execution
-    local supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-2}"
-    run_ralph_loop_supervised "$workspace" \
-        "$system_prompt" \
-        "my_user_prompt_fn" \
-        "my_completion_check_fn" \
-        "$max_iterations" "$max_turns" "$worker_dir" "iteration" \
-        "$supervisor_interval"
-
+    # Delegate execution to leaf agents
+    run_sub_agent "task-executor" "$worker_dir" "$project_dir"
     local loop_result=$?
+
+    # Generate summary via sub-agent
+    if [ $loop_result -eq 0 ]; then
+        run_sub_agent "task-summarizer" "$worker_dir" "$project_dir"
+    fi
 
     # Spawn sub-agents for quality gates
     run_sub_agent "security-audit" "$worker_dir" "$project_dir"
@@ -500,8 +500,8 @@ Excludes lifecycle management - just executes `agent_run()`.
 
 ### Orchestrator Parameters
 
-Orchestrator agents (`task-worker`, `task-worker-plan-mode`) receive positional
-arguments for configuration and resume support:
+Orchestrator agents (`task-worker`) receive positional arguments for
+configuration and resume support:
 
 ```bash
 agent_run() {
@@ -579,13 +579,14 @@ Agents read configuration from `config/agents.json`:
 
 | Agent | Purpose |
 |-------|---------|
-| `task-worker` | Main task execution from PRD |
-| `task-worker-plan-mode` | Task execution with planning phase |
+| `task-worker` | Main task execution from PRD (supports plan mode via `WIGGUM_PLAN_MODE`) |
 
 ### Leaf Agents
 
 | Agent | Execution | Purpose |
 |-------|-----------|---------|
+| `task-executor` | `run_ralph_loop_supervised` | Main code-writing agent (supervised ralph loop) |
+| `task-summarizer` | `run_agent_resume` | Generate final summary by resuming executor session |
 | `plan-mode` | `run_ralph_loop` | Read-only codebase exploration and planning |
 | `validation-review` | `run_ralph_loop` | Code review against PRD requirements |
 | `security-audit` | `run_ralph_loop` | Security vulnerability scanning |

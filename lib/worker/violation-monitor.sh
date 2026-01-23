@@ -202,8 +202,7 @@ start_violation_monitor() {
 
                         # Check for destructive git commands (for sub-agents only)
                         # Task-worker is exempt as it owns the workspace
-                        if [[ "${WIGGUM_CURRENT_AGENT_TYPE:-}" != "task-worker" ]] && \
-                           [[ "${WIGGUM_CURRENT_AGENT_TYPE:-}" != "task-worker-plan-mode" ]]; then
+                        if [[ "${WIGGUM_CURRENT_AGENT_TYPE:-}" != "task-worker" ]]; then
                             if _is_destructive_git_command "$command"; then
                                 # VIOLATION: Destructive git command from sub-agent
                                 _log_violation "$monitor_log" "Bash/DestructiveGit" "$command" "$workspace"
