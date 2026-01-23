@@ -108,8 +108,8 @@ agent_source_tasks() {
 
 # Source metrics and audit logging
 agent_source_metrics() {
-    source "$WIGGUM_HOME/lib/metrics/audit-logger.sh"
-    source "$WIGGUM_HOME/lib/metrics/metrics-export.sh"
+    source "$WIGGUM_HOME/lib/utils/audit-logger.sh"
+    source "$WIGGUM_HOME/lib/utils/metrics-export.sh"
 }
 
 # Source violation monitoring

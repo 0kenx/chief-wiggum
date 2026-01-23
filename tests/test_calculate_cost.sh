@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Tests for lib/metrics/calculate-cost.sh
+# Tests for lib/utils/calculate-cost.sh
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WIGGUM_HOME="$(dirname "$TESTS_DIR")"
 export WIGGUM_HOME
 
 source "$TESTS_DIR/test-framework.sh"
-source "$WIGGUM_HOME/lib/metrics/calculate-cost.sh"
+source "$WIGGUM_HOME/lib/utils/calculate-cost.sh"
 
 # =============================================================================
 # get_context_size() Tests

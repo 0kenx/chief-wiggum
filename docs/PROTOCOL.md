@@ -181,7 +181,7 @@ Events written to `.ralph/logs/events.jsonl`:
 ### Emitting Events
 
 ```bash
-source "$WIGGUM_HOME/lib/metrics/event-emitter.sh"
+source "$WIGGUM_HOME/lib/utils/event-emitter.sh"
 
 emit_task_started "$task_id" "$worker_id"
 emit_iteration_completed "$worker_id" "$iteration" "$exit_code"

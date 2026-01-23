@@ -3,7 +3,7 @@
 # This script aggregates metrics from all workers and writes to .ralph/metrics.json
 set -euo pipefail
 
-source "$WIGGUM_HOME/lib/metrics/calculate-cost.sh"
+source "$WIGGUM_HOME/lib/utils/calculate-cost.sh"
 
 # Export metrics for all workers to .ralph/metrics.json
 export_metrics() {

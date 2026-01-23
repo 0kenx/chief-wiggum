@@ -144,7 +144,7 @@ cmd_convert_log() {
         exit $EXIT_USAGE
     fi
 
-    local converter="$WIGGUM_HOME/lib/metrics/log-converter.sh"
+    local converter="$WIGGUM_HOME/lib/utils/log-converter.sh"
 
     if [ ! -f "$converter" ]; then
         echo "ERROR: log-converter.sh not found at $converter" >&2

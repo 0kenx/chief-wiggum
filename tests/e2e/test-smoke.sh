@@ -152,7 +152,7 @@ test_start "Checkpoint creation"
 # Test 10: Event emission
 test_start "Event emission"
 (
-    source "$WIGGUM_HOME/lib/metrics/event-emitter.sh"
+    source "$WIGGUM_HOME/lib/utils/event-emitter.sh"
 
     events_init "."
     emit_task_started "TASK-001" "worker-TASK-001-12345"

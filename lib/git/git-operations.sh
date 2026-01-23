@@ -6,7 +6,7 @@
 set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
-source "$WIGGUM_HOME/lib/metrics/calculate-cost.sh"
+source "$WIGGUM_HOME/lib/utils/calculate-cost.sh"
 
 # =============================================================================
 # READ-ONLY AGENT GIT SAFETY

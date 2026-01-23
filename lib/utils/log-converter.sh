@@ -1,38 +1,15 @@
 #!/usr/bin/env bash
-# log-to-conversation.sh - Convert worker logs to readable conversation markdown
+# log-converter.sh - Convert JSONL iteration logs to readable conversation markdown
 #
-# Processes all iteration and sub-agent logs in a worker directory, producing
-# readable markdown files in a conversations/ subdirectory. Used by the
-# resume-decide agent to understand what happened in a previous run.
+# Modes:
+#   Single file: log-converter.sh <iteration-log.jsonl> [output.md]
+#   Directory:   log-converter.sh --dir <worker_dir>
 #
-# Usage: log-to-conversation.sh <worker_dir>
-#
-# Output:
-#   <worker_dir>/conversations/iteration-0.md
-#   <worker_dir>/conversations/iteration-1.md
-#   <worker_dir>/conversations/audit-0.md
-#   <worker_dir>/conversations/test-0.md
-#   etc.
+# In directory mode, processes all iteration and sub-agent logs in a worker
+# directory, producing readable markdown files in a conversations/ subdirectory.
+# Used by the resume-decide agent to understand what happened in a previous run.
 
 set -euo pipefail
-
-WORKER_DIR="${1:-}"
-
-if [ -z "$WORKER_DIR" ] || [ ! -d "$WORKER_DIR" ]; then
-    echo "Usage: log-to-conversation.sh <worker_dir>" >&2
-    echo "Converts all worker logs to readable conversation markdown." >&2
-    exit 1
-fi
-
-LOGS_DIR="$WORKER_DIR/logs"
-CONV_DIR="$WORKER_DIR/conversations"
-
-if [ ! -d "$LOGS_DIR" ]; then
-    echo "No logs directory found at $LOGS_DIR" >&2
-    exit 0
-fi
-
-mkdir -p "$CONV_DIR"
 
 # Maximum size for content truncation
 MAX_CONTENT=3000
@@ -58,10 +35,10 @@ _truncate() {
 #
 # Args:
 #   input_file  - Path to the .log JSONL file
-#   output_file - Path to write the .md output
-convert_log_to_conversation() {
+#   output_file - Path to write the .md output (default: /dev/stdout)
+convert_log() {
     local input_file="$1"
-    local output_file="$2"
+    local output_file="${2:-/dev/stdout}"
     local log_basename
     log_basename=$(basename "$input_file" .log)
 
@@ -261,31 +238,67 @@ convert_log_to_conversation() {
     } > "$output_file"
 }
 
-# Process all log files in order
-converted=0
+# Convert all logs in a worker directory
+convert_dir() {
+    local worker_dir="$1"
+    local logs_dir="$worker_dir/logs"
+    local conv_dir="$worker_dir/conversations"
 
-# 1. Process iteration logs in numerical order
-if ls "$LOGS_DIR"/iteration-*.log >/dev/null 2>&1; then
-    for log_file in $(ls "$LOGS_DIR"/iteration-*.log | sort -t- -k2 -n); do
-        [ -f "$log_file" ] || continue
-        local_name=$(basename "$log_file" .log)
-        output_file="$CONV_DIR/${local_name}.md"
-        convert_log_to_conversation "$log_file" "$output_file"
-        ((converted++)) || true
-    done
-fi
+    if [ ! -d "$logs_dir" ]; then
+        echo "No logs directory found at $logs_dir" >&2
+        exit 0
+    fi
 
-# 2. Process sub-agent logs (audit, test, docs, etc.)
-for prefix in audit test docs security fix validation; do
-    if ls "$LOGS_DIR"/${prefix}-*.log >/dev/null 2>&1; then
-        for log_file in $(ls "$LOGS_DIR"/${prefix}-*.log | sort -t- -k2 -n); do
+    mkdir -p "$conv_dir"
+
+    local converted=0
+
+    # 1. Process iteration logs in numerical order
+    if ls "$logs_dir"/iteration-*.log >/dev/null 2>&1; then
+        for log_file in $(ls "$logs_dir"/iteration-*.log | sort -t- -k2 -n); do
             [ -f "$log_file" ] || continue
             local_name=$(basename "$log_file" .log)
-            output_file="$CONV_DIR/${local_name}.md"
-            convert_log_to_conversation "$log_file" "$output_file"
+            convert_log "$log_file" "$conv_dir/${local_name}.md"
             ((converted++)) || true
         done
     fi
-done
 
-echo "Converted $converted log files to conversations in $CONV_DIR" >&2
+    # 2. Process sub-agent logs (audit, test, docs, etc.)
+    for prefix in audit test docs security fix validation; do
+        if ls "$logs_dir"/${prefix}-*.log >/dev/null 2>&1; then
+            for log_file in $(ls "$logs_dir"/${prefix}-*.log | sort -t- -k2 -n); do
+                [ -f "$log_file" ] || continue
+                local_name=$(basename "$log_file" .log)
+                convert_log "$log_file" "$conv_dir/${local_name}.md"
+                ((converted++)) || true
+            done
+        fi
+    done
+
+    echo "Converted $converted log files to conversations in $conv_dir" >&2
+}
+
+# --- Main ---
+
+if [ "${1:-}" = "--dir" ]; then
+    # Directory mode
+    WORKER_DIR="${2:-}"
+    if [ -z "$WORKER_DIR" ] || [ ! -d "$WORKER_DIR" ]; then
+        echo "Usage: log-converter.sh --dir <worker_dir>" >&2
+        echo "Converts all worker logs to readable conversation markdown." >&2
+        exit 1
+    fi
+    convert_dir "$WORKER_DIR"
+else
+    # Single file mode
+    INPUT_FILE="${1:-}"
+    OUTPUT_FILE="${2:-/dev/stdout}"
+    if [ -z "$INPUT_FILE" ] || [ ! -f "$INPUT_FILE" ]; then
+        echo "Usage: log-converter.sh <iteration-log.jsonl> [output.md]" >&2
+        echo "       log-converter.sh --dir <worker_dir>" >&2
+        echo "Converts Claude CLI stream-JSON logs to readable markdown." >&2
+        exit 1
+    fi
+    convert_log "$INPUT_FILE" "$OUTPUT_FILE"
+    [ "$OUTPUT_FILE" != "/dev/stdout" ] && echo "Converted $(basename "$INPUT_FILE") to markdown" >&2
+fi

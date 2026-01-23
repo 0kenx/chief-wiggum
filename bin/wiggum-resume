@@ -14,7 +14,7 @@ RALPH_DIR="$PROJECT_DIR/.ralph"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
-source "$WIGGUM_HOME/lib/metrics/audit-logger.sh"
+source "$WIGGUM_HOME/lib/utils/audit-logger.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
@@ -178,7 +178,7 @@ do_resume() {
     # === STEP 1: Convert logs to conversations ===
     echo "Converting logs to readable conversations..."
     if [ -d "$worker_dir/logs" ]; then
-        "$WIGGUM_HOME/lib/workers/log-to-conversation.sh" "$worker_dir"
+        "$WIGGUM_HOME/lib/utils/log-converter.sh" --dir "$worker_dir"
     else
         echo "  No logs directory found — starting fresh"
         mkdir -p "$worker_dir/conversations"
