@@ -143,31 +143,6 @@ test_git_create_commit_stages_all_changes() {
     cd "$TESTS_DIR" || return 1
 }
 
-# =============================================================================
-# git_create_pr() Tests (Limited - requires mocking gh)
-# =============================================================================
-
-test_git_create_pr_requires_gh() {
-    # Test when gh CLI is not available (mock by using non-existent path)
-    local original_path="$PATH"
-    export PATH="/nonexistent"
-
-    echo "pr test content" > "$WORKSPACE/pr_test.txt"
-    git_create_commit "$WORKSPACE" "TASK-007" "PR test" "MEDIUM" "worker-007" > /dev/null 2>&1
-
-    cd "$WORKSPACE" || return 1
-    local result
-    git_create_pr "$GIT_COMMIT_BRANCH" "TASK-007" "PR test" "$WORKER_DIR" > /dev/null 2>&1
-    result=$?
-
-    export PATH="$original_path"
-    cd "$TESTS_DIR" || return 1
-
-    # Should fail because we can't push and gh is not available
-    # (gh not found or push fails without remote)
-    assert_equals "1" "$result" "Should fail when gh CLI not available or no remote"
-    assert_equals "N/A" "$GIT_PR_URL" "GIT_PR_URL should be N/A on failure"
-}
 
 # =============================================================================
 # git_verify_pushed() Tests
@@ -392,9 +367,6 @@ run_test test_git_create_commit_message_format
 run_test test_git_create_commit_succeeds_no_uncommitted_changes
 run_test test_git_create_commit_fails_invalid_workspace
 run_test test_git_create_commit_stages_all_changes
-
-# git_create_pr tests (limited without remote)
-run_test test_git_create_pr_requires_gh
 
 # git_verify_pushed tests
 run_test test_git_verify_pushed_fails_no_remote

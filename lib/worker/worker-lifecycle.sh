@@ -300,7 +300,7 @@ remove_pid_file() {
 # Returns: 0 if PID file created, 1 if timeout
 wait_for_worker_pid() {
     local worker_dir="$1"
-    local timeout="${2:-30}"  # Default 3 seconds (30 * 0.1s)
+    local timeout="${2:-300}"  # Default 30 seconds (300 * 0.1s)
 
     local wait_count=0
     while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt "$timeout" ]; do

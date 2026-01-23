@@ -188,10 +188,97 @@ are_dependencies_satisfied() {
     return 0
 }
 
+# Count transitively dependent tasks (tasks blocked by this one, directly or indirectly)
+# BFS through reverse dependency graph
+# Args: kanban_file task_id
+# Returns: count of all transitive dependents
+get_dependency_depth() {
+    local kanban="$1"
+    local target_task="$2"
+
+    local all_metadata
+    all_metadata=$(get_all_tasks_with_metadata "$kanban")
+
+    # Build reverse dependency map: for each task, find who depends on it
+    # Format: task_id -> list of tasks that have task_id as a dependency
+    declare -A reverse_deps
+    while IFS='|' read -r tid _status _priority deps; do
+        [ -z "$tid" ] && continue
+        [ -z "$deps" ] && continue
+        # Parse comma-separated deps
+        local remaining="$deps"
+        while [ -n "$remaining" ]; do
+            local dep="${remaining%%,*}"
+            if [ "$dep" = "$remaining" ]; then
+                remaining=""
+            else
+                remaining="${remaining#*,}"
+            fi
+            dep=$(echo "$dep" | xargs)
+            [ -z "$dep" ] && continue
+            reverse_deps[$dep]="${reverse_deps[$dep]:-} $tid"
+        done
+    done <<< "$all_metadata"
+
+    # BFS from target_task through reverse_deps
+    local -A visited
+    local queue=("$target_task")
+    visited[$target_task]=1
+    local count=0
+
+    while [ ${#queue[@]} -gt 0 ]; do
+        local current="${queue[0]}"
+        queue=("${queue[@]:1}")
+
+        for neighbor in ${reverse_deps[$current]:-}; do
+            if [ -z "${visited[$neighbor]+x}" ]; then
+                visited[$neighbor]=1
+                ((++count))
+                queue+=("$neighbor")
+            fi
+        done
+    done
+
+    echo "$count"
+}
+
+# Compute effective priority with aging
+# Args: base_priority (HIGH|MEDIUM|LOW), iterations_waiting, aging_factor
+# Returns: numeric priority (lower = higher priority), floored at 0
+get_effective_priority() {
+    local base_priority="$1"
+    local iterations_waiting="${2:-0}"
+    local aging_factor="${3:-10}"
+
+    local numeric
+    case "$base_priority" in
+        HIGH)   numeric=1 ;;
+        MEDIUM) numeric=2 ;;
+        LOW)    numeric=3 ;;
+        *)      numeric=2 ;;
+    esac
+
+    # Subtract aging bonus (integer division)
+    if [ "$aging_factor" -gt 0 ] && [ "$iterations_waiting" -gt 0 ]; then
+        local aging_bonus=$(( iterations_waiting / aging_factor ))
+        numeric=$(( numeric - aging_bonus ))
+    fi
+
+    # Floor at 0
+    if [ "$numeric" -lt 0 ]; then
+        numeric=0
+    fi
+
+    echo "$numeric"
+}
+
 # Get tasks that are ready to run (pending, with satisfied dependencies)
 # Sorted by priority: HIGH > MEDIUM > LOW
+# Optional args: ready_since_file aging_factor
 get_ready_tasks() {
     local kanban="$1"
+    local ready_since_file="${2:-}"
+    local aging_factor="${3:-10}"
 
     local all_metadata
     all_metadata=$(get_all_tasks_with_metadata "$kanban")
@@ -205,15 +292,33 @@ get_ready_tasks() {
         if are_dependencies_satisfied "$kanban" "$task_id"; then
             local priority
             priority=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
-            # Output format: priority_num|task_id (for sorting)
-            case "$priority" in
-                HIGH)   echo "1|$task_id" ;;
-                MEDIUM) echo "2|$task_id" ;;
-                LOW)    echo "3|$task_id" ;;
-                *)      echo "2|$task_id" ;;  # default to medium
-            esac
+
+            local effective_pri
+            if [ -n "$ready_since_file" ] && [ -f "$ready_since_file" ]; then
+                # Look up iterations waiting from ready-since file
+                local iters_waiting
+                iters_waiting=$(awk -F'|' -v t="$task_id" '$1 == t { print $2 }' "$ready_since_file")
+                iters_waiting=${iters_waiting:-0}
+                effective_pri=$(get_effective_priority "$priority" "$iters_waiting" "$aging_factor")
+            else
+                # No aging - use static priority
+                case "$priority" in
+                    HIGH)   effective_pri=1 ;;
+                    MEDIUM) effective_pri=2 ;;
+                    LOW)    effective_pri=3 ;;
+                    *)      effective_pri=2 ;;
+                esac
+            fi
+
+            # Compute dependency depth for tiebreaking (higher depth = higher priority)
+            local dep_depth
+            dep_depth=$(get_dependency_depth "$kanban" "$task_id")
+            # Invert depth for ascending sort (subtract from large number)
+            local inverted_depth=$(( 9999 - dep_depth ))
+
+            echo "$effective_pri|$inverted_depth|$task_id"
         fi
-    done | sort -t'|' -k1,1n | cut -d'|' -f2
+    done | sort -t'|' -k1,1n -k2,2n | cut -d'|' -f3
 }
 
 # Get blocked tasks (pending but dependencies not satisfied)

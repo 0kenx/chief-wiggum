@@ -20,6 +20,12 @@ MAX_ITERATIONS=20       # Max outer loop iterations per worker
 MAX_TURNS=50           # Max turns per Claude session
 SYNC_INTERVAL=6        # Run sync every N iterations (30 seconds at 5s sleep)
 AGENT_TYPE="task-worker"  # Default agent type (can be overridden with 'plan' mode)
+PID_WAIT_TIMEOUT=300   # Deciseconds to wait for agent.pid (30 seconds)
+FORCE_LOCK=false       # --force flag state for lock override
+MAX_SKIP_RETRIES=3     # Kanban update failures before permanent skip
+FIX_WORKER_TIMEOUT=1800  # Fix worker max runtime (seconds)
+FIX_WORKER_LIMIT=2     # Max concurrent fix workers
+AGING_FACTOR=10        # Iterations per priority level promotion
 
 show_help() {
     cat << EOF
@@ -36,6 +42,7 @@ Options:
   --max-workers N      Maximum concurrent workers (default: 4)
   --max-iters N        Maximum iterations per worker (default: 20)
   --max-turns N        Maximum turns per Claude session (default: 50)
+  --force              Override stale orchestrator lock
   -h, --help          Show this help message
 
 Examples:
@@ -116,7 +123,7 @@ spawn_worker() {
     SPAWNED_WORKER_ID=$(basename "$worker_dir")
 
     # Wait for agent.pid to appear (using shared library)
-    if ! wait_for_worker_pid "$worker_dir" 30; then
+    if ! wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
         log_error "Agent PID file not created for $task_id"
         return 1
     fi
@@ -143,18 +150,38 @@ run_periodic_sync() {
 # Pre-worker checks before spawning a new worker
 # Returns 0 if safe to proceed, 1 if conflicts detected
 pre_worker_checks() {
-    # Pull latest changes from main
+    # Pull latest changes from main with retry
     log "Pulling latest changes from origin/main..."
 
     local pull_output
-    if ! pull_output=$(git pull --ff-only origin main 2>&1); then
-        # Check if it's a conflict or just nothing to pull
-        if echo "$pull_output" | grep -q "fatal\|CONFLICT\|error"; then
-            log_error "Git pull failed: $pull_output"
+    local pull_success=false
+    local max_attempts=3
+    local delays=(2 4)
+
+    for ((attempt=1; attempt<=max_attempts; attempt++)); do
+        if pull_output=$(git pull --ff-only origin main 2>&1); then
+            pull_success=true
+            break
+        fi
+
+        # Immediately fail on conflicts (non-transient)
+        if echo "$pull_output" | grep -qi "CONFLICT"; then
+            log_error "Git pull conflict detected: $pull_output"
             log_error "Cannot spawn new workers with unresolved conflicts"
             return 1
         fi
-    fi
+
+        # On last attempt, give up
+        if [ $attempt -eq $max_attempts ]; then
+            log_error "Git pull failed after $max_attempts attempts: $pull_output"
+            return 1
+        fi
+
+        # Transient error - retry with backoff
+        local delay=${delays[$((attempt-1))]}
+        log "Git pull attempt $attempt failed (transient), retrying in ${delay}s..."
+        sleep "$delay"
+    done
 
     # Check for conflicts with active worktrees
     local workers_dir="$RALPH_DIR/workers"
@@ -186,10 +213,21 @@ check_and_spawn_fixes() {
         return 0
     fi
 
+    # Check fix worker capacity
+    if [ ${#active_fix_workers[@]} -ge "$FIX_WORKER_LIMIT" ]; then
+        log "Fix worker limit reached ($FIX_WORKER_LIMIT) - deferring new fixes"
+        return 0
+    fi
+
     log "Checking for tasks needing PR comment fixes..."
 
     while read -r task_id; do
         [ -z "$task_id" ] && continue
+
+        # Re-check capacity inside loop
+        if [ ${#active_fix_workers[@]} -ge "$FIX_WORKER_LIMIT" ]; then
+            break
+        fi
 
         local worker_dir
         worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$task_id" 2>/dev/null)
@@ -212,12 +250,29 @@ check_and_spawn_fixes() {
                 rm -f "$worker_dir/.needs-fix"
             ) &
 
-            log "Fix worker spawned for $task_id (PID: $!)"
+            local fix_pid=$!
+            active_fix_workers[$fix_pid]="$task_id|$(date +%s)"
+            log "Fix worker spawned for $task_id (PID: $fix_pid)"
         fi
     done < "$tasks_needing_fix"
 
     # Clear the tasks needing fix file after processing
     : > "$tasks_needing_fix"
+}
+
+# Detect orphan workers (running PIDs not tracked in active_workers)
+# Re-tracks them with a warning
+detect_orphan_workers() {
+    [ -d "$RALPH_DIR/workers" ] || return 0
+
+    while read -r worker_pid task_id _worker_id; do
+        [ -n "$worker_pid" ] || continue
+        # Check if this PID is already tracked
+        if [ -z "${active_workers[$worker_pid]+x}" ]; then
+            log "WARNING: Detected orphan worker for $task_id (PID: $worker_pid) - re-tracking"
+            active_workers[$worker_pid]="$task_id"
+        fi
+    done < <(scan_active_workers "$RALPH_DIR")
 }
 
 main() {
@@ -251,6 +306,10 @@ main() {
                 fi
                 MAX_TURNS="$2"
                 shift 2
+                ;;
+            --force)
+                FORCE_LOCK=true
+                shift
                 ;;
             -h|--help)
                 show_help
@@ -290,11 +349,17 @@ main() {
             # Check if that process is still running and is wiggum-run
             if kill -0 "$existing_pid" 2>/dev/null; then
                 if ps -p "$existing_pid" -o args= 2>/dev/null | grep -q "wiggum-run"; then
-                    log_error "Another wiggum-run orchestrator is already running (PID: $existing_pid)"
-                    echo ""
-                    echo "Only one orchestrator can run at a time to prevent conflicts."
-                    echo "If you're sure no orchestrator is running, remove: $orchestrator_lock"
-                    exit $EXIT_RUN_ORCHESTRATOR_RUNNING
+                    if [ "$FORCE_LOCK" = true ]; then
+                        log "WARNING: Overriding lock held by running orchestrator (PID: $existing_pid) due to --force"
+                        rm -f "$orchestrator_lock"
+                    else
+                        log_error "Another wiggum-run orchestrator is already running (PID: $existing_pid)"
+                        echo ""
+                        echo "Only one orchestrator can run at a time to prevent conflicts."
+                        echo "If you're sure no orchestrator is running, remove: $orchestrator_lock"
+                        echo "Or use --force to override the lock."
+                        exit $EXIT_RUN_ORCHESTRATOR_RUNNING
+                    fi
                 else
                     # PID exists but it's not wiggum-run (PID reused)
                     log "Cleaning stale orchestrator lock (PID reused)"
@@ -441,7 +506,9 @@ main() {
     echo ""
 
     # Track active workers
-    declare -A active_workers  # PID -> task_id mapping
+    declare -A active_workers      # PID -> task_id mapping
+    declare -A active_fix_workers  # PID -> "task_id|start_time"
+    declare -A skip_tasks          # task_id -> consecutive failure count
     local all_pids=()
 
     # Restore active workers from existing worker directories (using shared library)
@@ -457,6 +524,9 @@ main() {
 
     local iteration=0
     local sync_counter=0
+    local ready_since_file="$RALPH_DIR/.task-ready-since"
+    # Initialize ready-since file if it doesn't exist
+    touch "$ready_since_file"
 
     # Main orchestration loop
     while true; do
@@ -468,13 +538,32 @@ main() {
             run_periodic_sync
             sync_counter=0
 
+            # Decay skip counts - give tasks another chance
+            for skip_id in "${!skip_tasks[@]}"; do
+                skip_tasks[$skip_id]=$(( ${skip_tasks[$skip_id]} - 1 ))
+                if [ "${skip_tasks[$skip_id]}" -le 0 ]; then
+                    unset "skip_tasks[$skip_id]"
+                fi
+            done
+
             # Check for and spawn fix workers after sync
             check_and_spawn_fixes
         fi
 
         # Get tasks ready to run (pending with satisfied dependencies, sorted by priority)
         local ready_tasks
-        ready_tasks=$(get_ready_tasks "$RALPH_DIR/kanban.md")
+        ready_tasks=$(get_ready_tasks "$RALPH_DIR/kanban.md" "$ready_since_file" "$AGING_FACTOR")
+
+        # Update ready-since tracking: increment for tasks still ready, add new entries
+        local new_ready_since
+        new_ready_since=$(mktemp)
+        for task_id in $ready_tasks; do
+            local prev_count
+            prev_count=$(awk -F'|' -v t="$task_id" '$1 == t { print $2 }' "$ready_since_file" 2>/dev/null)
+            prev_count=${prev_count:-0}
+            echo "$task_id|$(( prev_count + 1 ))" >> "$new_ready_since"
+        done
+        mv "$new_ready_since" "$ready_since_file"
         local blocked_tasks
         blocked_tasks=$(get_blocked_tasks "$RALPH_DIR/kanban.md")
         local all_pending
@@ -485,6 +574,27 @@ main() {
             if ! kill -0 "$pid" 2>/dev/null; then
                 log "Worker for ${active_workers[$pid]} finished (PID: $pid)"
                 unset "active_workers[$pid]"
+            fi
+        done
+
+        # Detect orphan workers not in our tracking
+        detect_orphan_workers
+
+        # Clean up finished/timed-out fix workers
+        local now
+        now=$(date +%s)
+        for fix_pid in "${!active_fix_workers[@]}"; do
+            local fix_info="${active_fix_workers[$fix_pid]}"
+            local fix_task_id="${fix_info%%|*}"
+            local fix_start="${fix_info##*|}"
+
+            if ! kill -0 "$fix_pid" 2>/dev/null; then
+                log "Fix worker for $fix_task_id finished (PID: $fix_pid)"
+                unset "active_fix_workers[$fix_pid]"
+            elif [ $(( now - fix_start )) -ge "$FIX_WORKER_TIMEOUT" ]; then
+                log "WARNING: Fix worker for $fix_task_id timed out after ${FIX_WORKER_TIMEOUT}s - killing (PID: $fix_pid)"
+                kill "$fix_pid" 2>/dev/null || true
+                unset "active_fix_workers[$fix_pid]"
             fi
         done
 
@@ -501,10 +611,18 @@ main() {
                 break
             fi
 
+            # Skip tasks that have recently failed kanban updates
+            if [ -n "${skip_tasks[$task_id]+x}" ] && [ "${skip_tasks[$task_id]}" -gt 0 ]; then
+                if [ "${skip_tasks[$task_id]}" -ge "$MAX_SKIP_RETRIES" ]; then
+                    log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive kanban failures"
+                fi
+                continue
+            fi
+
             # Run pre-worker checks (git pull, conflict detection)
             if ! pre_worker_checks; then
-                log_error "Pre-worker checks failed - skipping worker spawn this iteration"
-                break
+                log_error "Pre-worker checks failed for $task_id - skipping this task"
+                continue
             fi
 
             # Get task priority for logging
@@ -515,6 +633,8 @@ main() {
             log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
             if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
                 log_error "Failed to mark $task_id as in-progress"
+                skip_tasks[$task_id]=$(( ${skip_tasks[$task_id]:-0} + 1 ))
+                log "Task $task_id skip count: ${skip_tasks[$task_id]}/$MAX_SKIP_RETRIES"
                 continue
             fi
 
@@ -527,6 +647,11 @@ main() {
 
             active_workers[$SPAWNED_WORKER_PID]="$task_id"
             all_pids+=("$SPAWNED_WORKER_PID")
+
+            # Remove from ready-since tracking (task is no longer waiting)
+            if [ -f "$ready_since_file" ]; then
+                sed -i "/^${task_id}|/d" "$ready_since_file"
+            fi
 
             # Log task assignment to audit log
             audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
@@ -544,6 +669,18 @@ main() {
             echo "In Progress:"
             for pid in "${!active_workers[@]}"; do
                 echo "  - ${active_workers[$pid]} (PID: $pid)"
+            done
+        fi
+
+        # Show active fix workers
+        if [ ${#active_fix_workers[@]} -gt 0 ]; then
+            echo "Fix Workers:"
+            for fix_pid in "${!active_fix_workers[@]}"; do
+                local fix_info="${active_fix_workers[$fix_pid]}"
+                local fix_task_id="${fix_info%%|*}"
+                local fix_start="${fix_info##*|}"
+                local fix_elapsed=$(( $(date +%s) - fix_start ))
+                echo "  - $fix_task_id (PID: $fix_pid, ${fix_elapsed}s elapsed)"
             done
         fi
 
