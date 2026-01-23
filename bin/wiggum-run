@@ -154,13 +154,11 @@ pre_worker_checks() {
     log "Pulling latest changes from origin/main..."
 
     local pull_output
-    local pull_success=false
     local max_attempts=3
     local delays=(2 4)
 
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
         if pull_output=$(git pull --ff-only origin main 2>&1); then
-            pull_success=true
             break
         fi
 

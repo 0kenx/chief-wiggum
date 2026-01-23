@@ -74,7 +74,8 @@ EOF
 # Workspace is LEFT UNTOUCHED (it has the actual code changes)
 archive_previous_run() {
     local worker_dir="$1"
-    local archive_dir="$worker_dir/history/resume-$(date +%s)"
+    local archive_dir
+    archive_dir="$worker_dir/history/resume-$(date +%s)"
 
     mkdir -p "$archive_dir"
 

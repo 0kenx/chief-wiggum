@@ -111,7 +111,8 @@ agent_run() {
 archive_from_step() {
     local worker_dir="$1"
     local resume_step="$2"
-    local archive_dir="$worker_dir/history/resume-$(date +%s)"
+    local archive_dir
+    archive_dir="$worker_dir/history/resume-$(date +%s)"
 
     # Map resume step to its conversation log prefix
     local step_prefix
