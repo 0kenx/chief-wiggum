@@ -21,6 +21,40 @@ from ..data.models import Conversation, ConversationTurn, ToolCall
 import json
 
 
+import re
+
+
+def format_markdown_to_rich(text: str) -> list[str]:
+    """Convert markdown text to Rich markup lines for tree display."""
+    lines = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            lines.append("")
+        elif stripped.startswith("### "):
+            lines.append(f"[bold #a6adc8]{stripped[4:]}[/]")
+        elif stripped.startswith("## "):
+            lines.append(f"[bold #89b4fa]{stripped[3:]}[/]")
+        elif stripped.startswith("# "):
+            lines.append(f"[bold #cba6f7]{stripped[2:]}[/]")
+        elif stripped.startswith(("- ", "* ")):
+            content = stripped[2:]
+            content = re.sub(r'\*\*(.+?)\*\*', r'[bold]\1[/]', content)
+            content = re.sub(r'`(.+?)`', r'[#a6e3a1]\1[/]', content)
+            lines.append(f"  [#f9e2af]•[/] {content}")
+        elif stripped.startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
+            num_end = stripped.index(".") + 1
+            content = stripped[num_end:].strip()
+            content = re.sub(r'\*\*(.+?)\*\*', r'[bold]\1[/]', content)
+            content = re.sub(r'`(.+?)`', r'[#a6e3a1]\1[/]', content)
+            lines.append(f"  [#f9e2af]{stripped[:num_end]}[/] {content}")
+        else:
+            formatted = re.sub(r'\*\*(.+?)\*\*', r'[bold]\1[/]', stripped)
+            formatted = re.sub(r'`(.+?)`', r'[#a6e3a1]\1[/]', formatted)
+            lines.append(f"[#a6adc8]{formatted}[/]")
+    return lines
+
+
 def format_content(text: str, width: int = 100) -> list[str]:
     """Format content for display. Detects JSON and formats it, otherwise wraps text."""
     text = text.strip()
@@ -276,9 +310,12 @@ class ConversationPanel(Widget):
             log_node: TreeNode | None = None
             first_log = True
 
+            first_turn_in_log = False
+
             for i, turn in enumerate(self.conversation.turns):
                 if turn.log_name != current_log_name:
                     current_log_name = turn.log_name
+                    first_turn_in_log = True
                     # Find result for this log file
                     result = next(
                         (r for r in self.conversation.results if r.log_name == current_log_name),
@@ -293,9 +330,11 @@ class ConversationPanel(Widget):
                         expand=first_log,
                     )
                     first_log = False
+                else:
+                    first_turn_in_log = False
 
                 if log_node:
-                    self._add_turn_to_tree(log_node, turn, i)
+                    self._add_turn_to_tree(log_node, turn, i, first_turn_in_log)
 
             # Restore expanded state if we had content before, otherwise use defaults
             if had_content and expanded_paths:
@@ -306,7 +345,7 @@ class ConversationPanel(Widget):
         except Exception:
             pass
 
-    def _add_turn_to_tree(self, parent: TreeNode, turn: ConversationTurn, index: int) -> None:
+    def _add_turn_to_tree(self, parent: TreeNode, turn: ConversationTurn, index: int, first_in_log: bool = False) -> None:
         """Add a conversation turn to the tree."""
         # Create assistant node that groups text and tool calls
         tool_count = len(turn.tool_calls)
@@ -331,12 +370,20 @@ class ConversationPanel(Widget):
         # Add full assistant text as expandable child if truncated
         if turn.assistant_text:
             if len(turn.assistant_text) > 60:
-                # Add expandable node for full text with line wrapping
+                # Add expandable node for full text
                 text_node = assistant_node.add("[#89b4fa]Full message[/]", expand=False)
-                for line in format_content(turn.assistant_text, 100):
-                    text_node.add_leaf(f"[#a6adc8]{line}[/]")
+                if first_in_log:
+                    for line in format_markdown_to_rich(turn.assistant_text):
+                        text_node.add_leaf(line)
+                else:
+                    for line in format_content(turn.assistant_text, 100):
+                        text_node.add_leaf(f"[#a6adc8]{line}[/]")
             else:
-                assistant_node.add_leaf(f"[#a6adc8]{turn.assistant_text}[/]")
+                if first_in_log:
+                    for line in format_markdown_to_rich(turn.assistant_text):
+                        assistant_node.add_leaf(line)
+                else:
+                    assistant_node.add_leaf(f"[#a6adc8]{turn.assistant_text}[/]")
 
         # Add tool calls as children of assistant node
         for tool_call in turn.tool_calls:

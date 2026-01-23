@@ -44,7 +44,7 @@ calculate_worker_cost() {
 
     # Sum all result entries from iteration logs using jq
     local totals
-    totals=$(find "$log_dir" -type f -name "iteration-*.log" -exec grep '"type":"result"' {} \; | \
+    totals=$(find "$log_dir" -type f -name "*.log" -exec grep '"type":"result"' {} \; | \
         jq -s '{
             duration_ms: (map(.duration_ms) | add),
             duration_api_ms: (map(.duration_api_ms) | add),
@@ -175,7 +175,7 @@ calculate_latest_context_usage() {
 
     # Find the latest iteration log file with result entries
     local latest_log
-    latest_log=$(find "$log_dir" -type f -name "iteration-*.log" -exec grep -l '"type":"result"' {} \; 2>/dev/null | sort -V | tail -1)
+    latest_log=$(find "$log_dir" -type f -name "*.log" -exec grep -l '"type":"result"' {} \; 2>/dev/null | sort -V | tail -1)
 
     if [ -z "$latest_log" ]; then
         return 1
