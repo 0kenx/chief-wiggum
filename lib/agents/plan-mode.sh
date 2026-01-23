@@ -25,12 +25,6 @@ agent_required_paths() {
     echo "prd.md"
 }
 
-# Output files that must exist (non-empty) after agent completes
-# Note: Plan path is .ralph/plans/${task_id}.md - checked dynamically
-agent_output_files() {
-    echo "results/plan-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
@@ -100,19 +94,20 @@ agent_run() {
 
     # Write structured agent result
     local result_status="failure"
+    local gate_result="FAIL"
     if [ $loop_result -eq 0 ] && [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
         result_status="success"
-        echo "PASS" > "$worker_dir/results/plan-result.txt"
-    else
-        echo "FAIL" > "$worker_dir/results/plan-result.txt"
+        gate_result="PASS"
     fi
 
     # Build outputs JSON
     local outputs_json
     outputs_json=$(jq -n \
+        --arg gate_result "$gate_result" \
         --arg plan_file ".ralph/plans/${task_id}.md" \
         --arg task_id "$task_id" \
         '{
+            gate_result: $gate_result,
             plan_file: $plan_file,
             task_id: $task_id
         }')

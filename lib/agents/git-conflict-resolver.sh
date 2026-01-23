@@ -24,12 +24,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "reports/resolution-summary.md"
-    echo "results/resolve-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
@@ -69,16 +63,13 @@ agent_run() {
 
     if [ -z "$conflicted_files" ]; then
         log "No merge conflicts detected in workspace"
-        # Create summary indicating no conflicts
-        mkdir -p "$worker_dir/reports" "$worker_dir/results"
-        cat > "$worker_dir/reports/resolution-summary.md" << 'EOF'
-# Conflict Resolution Summary
+        agent_setup_context "$worker_dir" "$workspace" "$project_dir"
+        agent_write_report "$worker_dir" "# Conflict Resolution Summary
 
 **Status:** No conflicts detected
 
-No merge conflicts were found in the workspace. The repository is in a clean state.
-EOF
-        echo "SKIP" > "$worker_dir/results/resolve-result.txt"
+No merge conflicts were found in the workspace. The repository is in a clean state."
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"SKIP"}'
         return 0
     fi
 
@@ -107,10 +98,10 @@ EOF
     local remaining
     remaining=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null | wc -l)
     if [ "$remaining" -eq 0 ]; then
-        echo "PASS" > "$worker_dir/results/resolve-result.txt"
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"PASS"}'
         log "Conflict resolution completed successfully"
     else
-        echo "FAIL" > "$worker_dir/results/resolve-result.txt"
+        agent_write_result "$worker_dir" "failure" 1 "$(printf '{"gate_result":"FAIL","unresolved_files":%d}' "$remaining")"
         log_warn "Conflict resolution incomplete ($remaining file(s) unresolved)"
     fi
 
@@ -257,25 +248,25 @@ _extract_resolution_summary() {
     local log_file
     log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "resolve-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
-    local summary_path="$worker_dir/reports/resolution-summary.md"
+    local report_content=""
 
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
         # Extract summary content between <summary> tags
-        if grep -q '<summary>' "$log_file"; then
-            sed -n '/<summary>/,/<\/summary>/p' "$log_file" | sed '1d;$d' > "$summary_path"
-            log "Resolution summary saved to resolution-summary.md"
-            return 0
+        local extracted
+        extracted=$(_extract_tag_content_from_stream_json "$log_file" "summary")
+        if [ -n "$extracted" ]; then
+            report_content="$extracted"
         fi
     fi
 
     # If no summary tag found, create a basic summary
-    local workspace
-    workspace=$(agent_get_workspace)
-    local remaining
-    remaining=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null | wc -l)
+    if [ -z "$report_content" ]; then
+        local workspace
+        workspace=$(agent_get_workspace)
+        local remaining
+        remaining=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null | wc -l)
 
-    cat > "$summary_path" << EOF
-# Conflict Resolution Summary
+        report_content="# Conflict Resolution Summary
 
 **Status:** $([ "$remaining" -eq 0 ] && echo "Completed" || echo "Incomplete")
 
@@ -298,8 +289,11 @@ $(if [ "$remaining" -eq 0 ]; then
 else
     echo "- Manually resolve remaining conflicts"
     echo "- Stage resolved files with 'git add'"
-fi)
-EOF
+fi)"
+    fi
+
+    agent_write_report "$worker_dir" "$report_content"
+    log "Resolution summary saved"
 }
 
 # Check if workspace has unresolved conflicts (utility for callers)

@@ -22,13 +22,18 @@ agent_init_metadata "security-fix" "Security fix agent that addresses vulnerabil
 
 # Required paths before agent can run
 agent_required_paths() {
-    echo "reports/security-report.md"
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "results/fix-result.txt"
+# Pre-run hook: locate upstream security-audit report
+agent_on_ready() {
+    local worker_dir="$1"
+    _SECURITY_REPORT_FILE=$(agent_find_latest_report "$worker_dir" "security-audit")
+    if [ -z "$_SECURITY_REPORT_FILE" ] || [ ! -f "$_SECURITY_REPORT_FILE" ]; then
+        log_error "No security-audit report found. Run security-audit agent first."
+        return 1
+    fi
+    return 0
 }
 
 # Source dependencies using base library helpers
@@ -47,23 +52,23 @@ agent_run() {
     local max_turns="${WIGGUM_SECURITY_FIX_MAX_TURNS:-${AGENT_CONFIG_MAX_TURNS:-50}}"
 
     local workspace="$worker_dir/workspace"
-    local report_file="$worker_dir/reports/security-report.md"
+    local report_file="${_SECURITY_REPORT_FILE:-}"
     local status_file="$worker_dir/reports/fix-status.md"
 
     # Verify workspace exists
     if [ ! -d "$workspace" ]; then
         log_error "Workspace not found: $workspace"
         FIX_RESULT="FAIL"
-        echo "$FIX_RESULT" > "$worker_dir/results/fix-result.txt"
+        agent_write_result "$worker_dir" "failure" 1 '{"gate_result":"FAIL"}'
         return 1
     fi
 
-    # Verify security report exists
-    if [ ! -f "$report_file" ]; then
-        log_error "Security report not found: $report_file"
+    # Verify security report exists (should be set by agent_on_ready)
+    if [ -z "$report_file" ] || [ ! -f "$report_file" ]; then
+        log_error "Security report not found"
         log_error "Run security-audit agent first"
         FIX_RESULT="FAIL"
-        echo "$FIX_RESULT" > "$worker_dir/results/fix-result.txt"
+        agent_write_result "$worker_dir" "failure" 1 '{"gate_result":"FAIL"}'
         return 1
     fi
 
@@ -71,7 +76,7 @@ agent_run() {
     if ! grep -qE '^### (CRITICAL|HIGH|MEDIUM)' "$report_file" 2>/dev/null; then
         log "No CRITICAL/HIGH/MEDIUM findings in security report - nothing to fix"
         FIX_RESULT="PASS"
-        echo "$FIX_RESULT" > "$worker_dir/results/fix-result.txt"
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"PASS"}'
         echo "# Security Fix Status
 
 **Status:** No fixes needed
@@ -403,7 +408,7 @@ _determine_fix_result() {
 
     if [ ! -f "$status_file" ]; then
         FIX_RESULT="FAIL"
-        echo "$FIX_RESULT" > "$worker_dir/results/fix-result.txt"
+        agent_write_result "$worker_dir" "failure" 1 '{"gate_result":"FAIL"}'
         return
     fi
 
@@ -415,16 +420,21 @@ _determine_fix_result() {
     if [ "$pending_count" -eq 0 ] && [ "$unfixable_count" -eq 0 ]; then
         FIX_RESULT="PASS"
     elif [ "$pending_count" -eq 0 ] && [ "$unfixable_count" -gt 0 ]; then
-        # All attempted, but some couldn't be fixed
         FIX_RESULT="FIX"
     elif [ "$fixed_count" -gt 0 ]; then
-        # Some fixed, some still pending
         FIX_RESULT="FIX"
     else
         FIX_RESULT="FAIL"
     fi
 
-    echo "$FIX_RESULT" > "$worker_dir/results/fix-result.txt"
+    local status="failure"
+    [ "$FIX_RESULT" = "PASS" ] && status="success"
+    [ "$FIX_RESULT" = "FIX" ] && status="partial"
+    local gate_json
+    gate_json=$(printf '{"gate_result":"%s","fixed":%d,"unfixable":%d,"pending":%d}' \
+        "$FIX_RESULT" "$fixed_count" "$unfixable_count" "$pending_count")
+    agent_write_result "$worker_dir" "$status" "$([ "$FIX_RESULT" = "PASS" ] && echo 0 || echo 1)" "$gate_json"
+
     log "Fix result: $FIX_RESULT (fixed: $fixed_count, unfixable: $unfixable_count, pending: $pending_count)"
 }
 
@@ -432,23 +442,12 @@ _determine_fix_result() {
 # Returns: 0 if PASS, 1 if FIX, 2 if FAIL/UNKNOWN
 check_fix_result() {
     local worker_dir="$1"
-    local result_file="$worker_dir/results/fix-result.txt"
+    local result
+    result=$(agent_read_subagent_result "$worker_dir" "security-fix")
 
-    if [ -f "$result_file" ]; then
-        local result
-        result=$(cat "$result_file")
-        case "$result" in
-            PASS)
-                return 0
-                ;;
-            FIX)
-                return 1
-                ;;
-            FAIL|UNKNOWN|*)
-                return 2
-                ;;
-        esac
-    fi
-
-    return 2
+    case "$result" in
+        PASS) return 0 ;;
+        FIX) return 1 ;;
+        *) return 2 ;;
+    esac
 }

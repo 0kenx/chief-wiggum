@@ -28,10 +28,9 @@ agent_required_paths() {
 }
 
 # Output files that must exist (non-empty) after agent completes
+# resume-step.txt is a special control file read by the pipeline directly
 agent_output_files() {
     echo "resume-step.txt"
-    echo "reports/resume-instructions.md"
-    echo "results/resume-result.txt"
 }
 
 # Source dependencies
@@ -52,6 +51,9 @@ agent_run() {
 
     # Create standard directories
     agent_create_directories "$worker_dir"
+
+    # Set up context for epoch-named results
+    agent_setup_context "$worker_dir" "$worker_dir" "$project_dir"
 
     # Build a lightweight user prompt with file paths for the agent to explore
     local user_prompt
@@ -82,7 +84,7 @@ agent_run() {
         log_error "resume-decide failed to produce resume-step.txt"
         echo "ABORT" > "$worker_dir/resume-step.txt"
         echo "Resume-decide agent failed to produce a decision." > "$worker_dir/reports/resume-instructions.md"
-        echo "FAIL" > "$worker_dir/results/resume-result.txt"
+        agent_write_result "$worker_dir" "failure" 1 '{"gate_result":"FAIL"}'
         return 1
     fi
 
@@ -93,9 +95,9 @@ agent_run() {
     # Archive artifacts from the resume point onward (not earlier phases)
     if [ "$step" != "ABORT" ]; then
         archive_from_step "$worker_dir" "$step"
-        echo "PASS" > "$worker_dir/results/resume-result.txt"
+        agent_write_result "$worker_dir" "success" 0 "$(printf '{"gate_result":"PASS","resume_step":"%s"}' "$step")"
     else
-        echo "STOP" > "$worker_dir/results/resume-result.txt"
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"STOP","resume_step":"ABORT"}'
     fi
 
     return 0
@@ -135,7 +137,6 @@ archive_from_step() {
     # Always archive run-level artifacts (they span the whole run, will be regenerated)
     mv "$worker_dir/logs" "$archive_dir/" 2>/dev/null || true
     mv "$worker_dir/worker.log" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/agent-result.json" "$archive_dir/" 2>/dev/null || true
 
     # Archive conversation files with mtime >= reference file
     if [ -d "$worker_dir/conversations" ]; then
@@ -199,7 +200,6 @@ _archive_all() {
     mv "$worker_dir/worker.log" "$archive_dir/" 2>/dev/null || true
     mv "$worker_dir/results" "$archive_dir/" 2>/dev/null || true
     mv "$worker_dir/reports" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/agent-result.json" "$archive_dir/" 2>/dev/null || true
     log "Archived all run artifacts to $(basename "$archive_dir")"
 }
 
@@ -254,11 +254,11 @@ $worker_dir/
 | Phase | Log Pattern (in worker.log) | Output File |
 |-------|---------------------------|-------------|
 | execution | "Task completed successfully" or "Ralph loop finished" | summaries/summary.txt |
-| audit | "Security audit result: PASS\|FIX\|STOP" | results/security-result.txt |
-| test | "Test coverage result: PASS\|FAIL\|SKIP" | results/test-result.txt |
-| docs | "Documentation writer result:" | results/docs-result.txt |
-| validation | "Validation review completed with result:" | results/validation-result.txt |
-| finalization | "PR created:" or "Commit created" | pr_url.txt or agent-result.json |
+| audit | "Security audit result: PASS\|FIX\|STOP" | results/*-security-audit-result.json |
+| test | "Test coverage result: PASS\|FAIL\|SKIP" | results/*-test-coverage-result.json |
+| docs | "Documentation writer result:" | results/*-documentation-writer-result.json |
+| validation | "Validation review completed with result:" | results/*-validation-review-result.json |
+| finalization | "PR created:" or "Commit created" | results/*-task-worker-result.json |
 
 ## Git Restrictions (CRITICAL)
 
@@ -285,9 +285,9 @@ _build_user_prompt() {
         conv_files=$(ls "$worker_dir/conversations/"*.md 2>/dev/null | sort || true)
     fi
 
-    # List result files that exist
+    # List result files that exist (epoch-named JSON results)
     local result_files=""
-    result_files=$(ls "$worker_dir/results/"*-result.txt 2>/dev/null | sort || true)
+    result_files=$(ls "$worker_dir/results/"*-result.json 2>/dev/null | sort || true)
 
     cat << EOF
 RESUME ANALYSIS TASK:

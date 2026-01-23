@@ -23,11 +23,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "results/docs-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_once
@@ -48,17 +43,12 @@ agent_run() {
     if [ ! -d "$workspace" ]; then
         log_error "Workspace not found: $workspace"
         DOCS_RESULT="SKIP"
-        mkdir -p "$worker_dir/results"
-        echo "SKIP" > "$worker_dir/results/docs-result.txt"
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"SKIP"}'
         return 0
     fi
 
     # Create standard directories
     agent_create_directories "$worker_dir"
-
-    # Clean up old docs files before re-running
-    rm -f "$worker_dir/results/docs-result.txt" "$worker_dir/reports/docs-report.md"
-    rm -f "$worker_dir/logs/docs-"*.log
 
     log "Running documentation update..."
 
@@ -83,7 +73,7 @@ agent_run() {
     # Documentation agent never fails - ensure we return PASS or SKIP
     if [ "$DOCS_RESULT" != "PASS" ] && [ "$DOCS_RESULT" != "SKIP" ]; then
         DOCS_RESULT="PASS"
-        echo "PASS" > "$worker_dir/results/docs-result.txt"
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"PASS"}'
     fi
 
     log "Documentation update completed with result: $DOCS_RESULT"
@@ -279,32 +269,20 @@ EOF
 _extract_docs_result() {
     local worker_dir="$1"
 
-    # Use unified extraction function
-    agent_extract_and_write_result "$worker_dir" "DOCS" "docs" "report" "PASS|SKIP" \
-        "docs-result.txt" "docs-report.md"
+    # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
+    agent_extract_and_write_result "$worker_dir" "DOCS" "docs" "report" "PASS|SKIP"
 }
 
 # Check docs result from a worker directory (utility for callers)
 # Returns: 0 if PASS, 1 if FAIL, 2 if SKIP/UNKNOWN
 check_docs_result() {
     local worker_dir="$1"
-    local result_file="$worker_dir/results/docs-result.txt"
+    local result
+    result=$(agent_read_subagent_result "$worker_dir" "documentation-writer")
 
-    if [ -f "$result_file" ]; then
-        local result
-        result=$(cat "$result_file")
-        case "$result" in
-            PASS)
-                return 0
-                ;;
-            FAIL)
-                return 1
-                ;;
-            SKIP|UNKNOWN|*)
-                return 2
-                ;;
-        esac
-    fi
-
-    return 2
+    case "$result" in
+        PASS) return 0 ;;
+        FAIL) return 1 ;;
+        *) return 2 ;;
+    esac
 }

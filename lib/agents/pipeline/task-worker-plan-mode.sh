@@ -29,7 +29,7 @@ agent_output_files() {
     echo "worker.log"
     # Note: logs/*.log files are created per iteration
     # Note: summaries/summary.txt is optional (only on success)
-    # Note: results/validation-result.txt is created by validation-review sub-agent
+    # Note: epoch-named results are created by sub-agents in results/
 }
 
 # Source dependencies using base library helpers
@@ -154,26 +154,22 @@ Co-Authored-By: Ralph Wiggum <ralph@wiggum.local>"
 #
 # Args:
 #   agent_name   - Sub-agent to run (e.g., "security-audit")
-#   result_key   - Key for agent_read_subagent_result (e.g., "SECURITY_result")
-#   result_file  - Fallback result file name (e.g., "security-result.txt")
 #   blocking     - "true" if FAIL/STOP should fail the task (default: true)
 #   workspace    - Workspace directory for committing changes
 #
 # Sets:
-#   GATE_RESULT  - The result string (PASS/FAIL/STOP/SKIP/UNKNOWN)
+#   GATE_RESULT  - The result string (PASS/FAIL/STOP/SKIP/FIX)
 #
 # Returns: 0 if gate passed/skipped, 1 if gate blocked (only when blocking=true)
 _run_quality_gate() {
     local agent_name="$1"
-    local result_key="$2"
-    local result_file="$3"
-    local blocking="${4:-true}"
-    local workspace="$5"
+    local blocking="${2:-true}"
+    local workspace="$3"
 
     log "Running $agent_name on completed work"
     run_sub_agent "$agent_name" "$worker_dir" "$project_dir"
 
-    GATE_RESULT=$(agent_read_subagent_result "$worker_dir" "$result_key" "$result_file")
+    GATE_RESULT=$(agent_read_subagent_result "$worker_dir" "$agent_name")
     log "$agent_name result: $GATE_RESULT"
 
     case "$GATE_RESULT" in
@@ -338,13 +334,13 @@ agent_run() {
     # === SECURITY AUDIT PHASE ===
     if [ -d "$workspace" ] && [ $loop_result -eq 0 ] && _should_run_step "audit" "$start_from_step"; then
         _phase_start "audit"
-        if ! _run_quality_gate "security-audit" "SECURITY_result" "security-result.txt" "true" "$workspace"; then
+        if ! _run_quality_gate "security-audit" "true" "$workspace"; then
             if [ "$GATE_RESULT" = "FIX" ]; then
                 log "Security audit found fixable issues - running security-fix agent"
                 run_sub_agent "security-fix" "$worker_dir" "$project_dir"
 
                 local fix_result
-                fix_result=$(cat "$worker_dir/results/fix-result.txt" 2>/dev/null || echo "UNKNOWN")
+                fix_result=$(agent_read_subagent_result "$worker_dir" "security-fix")
                 log "Security fix result: $fix_result"
                 _commit_subagent_changes "$workspace" "security-fix"
 
@@ -361,7 +357,7 @@ agent_run() {
     # === TEST COVERAGE PHASE ===
     if [ -d "$workspace" ] && [ $loop_result -eq 0 ] && _should_run_step "test" "$start_from_step"; then
         _phase_start "test"
-        if ! _run_quality_gate "test-coverage" "TEST_result" "test-result.txt" "true" "$workspace"; then
+        if ! _run_quality_gate "test-coverage" "true" "$workspace"; then
             loop_result=1
         fi
         _phase_end "test"
@@ -370,7 +366,7 @@ agent_run() {
     # === DOCUMENTATION WRITER PHASE ===
     if [ -d "$workspace" ] && [ $loop_result -eq 0 ] && _should_run_step "docs" "$start_from_step"; then
         _phase_start "docs"
-        _run_quality_gate "documentation-writer" "DOCS_result" "docs-result.txt" "false" "$workspace"
+        _run_quality_gate "documentation-writer" "false" "$workspace"
         _phase_end "docs"
     fi
 
@@ -402,9 +398,9 @@ agent_run() {
     local has_violations="$FINALITY_HAS_VIOLATIONS"
     local final_status="$FINALITY_STATUS"
 
-    # Check validation result using communication protocol
+    # Check validation result from sub-agent
     local validation_result
-    validation_result=$(agent_read_validation "$worker_dir")
+    validation_result=$(agent_read_subagent_result "$worker_dir" "validation-review")
     if [ "$validation_result" = "FAIL" ]; then
         log_error "Validation review FAILED - marking task as failed"
         final_status="FAILED"

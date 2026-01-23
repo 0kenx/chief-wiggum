@@ -24,11 +24,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "results/review-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
@@ -54,11 +49,6 @@ agent_run() {
 
     # Create standard directories
     agent_create_directories "$worker_dir"
-
-    # Clean up old review files before re-running
-    rm -f "$worker_dir/results/review-result.txt" "$worker_dir/reports/review-report.md"
-    rm -f "$worker_dir/logs/review-"*.log
-    rm -f "$worker_dir/summaries/review-"*.txt
 
     log "Running code review..."
 
@@ -300,44 +290,16 @@ EOF
 _extract_review_result() {
     local worker_dir="$1"
 
-    REVIEW_RESULT="UNKNOWN"
-
-    # Find the latest review log (excluding summary logs)
-    local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "review-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-
-    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        # Extract review content between <review> tags
-        local review_path="$worker_dir/reports/review-report.md"
-        if grep -q '<review>' "$log_file"; then
-            sed -n '/<review>/,/<\/review>/p' "$log_file" | sed '1d;$d' > "$review_path"
-            log "Code review report saved to review-report.md"
-        fi
-
-        # Extract result tag (PASS, FAIL, or FIX)
-        REVIEW_RESULT=$(grep -oP '(?<=<result>)(PASS|FAIL|FIX)(?=</result>)' "$log_file" | head -1)
-        if [ -z "$REVIEW_RESULT" ]; then
-            REVIEW_RESULT="UNKNOWN"
-        fi
-    fi
-
-    # Store result in standard location
-    echo "$REVIEW_RESULT" > "$worker_dir/results/review-result.txt"
+    # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
+    agent_extract_and_write_result "$worker_dir" "REVIEW" "review" "review" "PASS|FAIL|FIX"
+    REVIEW_RESULT="$REVIEW_RESULT"
 }
 
 # Check review result from a worker directory (utility for callers)
 # Returns: 0 if PASS, 1 if FAIL/FIX/UNKNOWN
 check_review_result() {
     local worker_dir="$1"
-    local result_file="$worker_dir/results/review-result.txt"
-
-    if [ -f "$result_file" ]; then
-        local result
-        result=$(cat "$result_file")
-        if [ "$result" = "PASS" ]; then
-            return 0
-        fi
-    fi
-
-    return 1
+    local result
+    result=$(agent_read_subagent_result "$worker_dir" "code-review")
+    [ "$result" = "PASS" ]
 }

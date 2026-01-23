@@ -25,11 +25,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "results/validation-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
@@ -52,11 +47,6 @@ agent_run() {
 
     # Create standard directories
     agent_create_directories "$worker_dir"
-
-    # Clean up old validation files before re-running
-    rm -f "$worker_dir/results/validation-result.txt" "$worker_dir/reports/validation-review.md"
-    rm -f "$worker_dir/logs/validation-"*.log
-    rm -f "$worker_dir/summaries/validation-"*.txt
 
     log "Running validation review..."
 
@@ -309,12 +299,8 @@ EOF
 _extract_validation_result() {
     local worker_dir="$1"
 
-    # Use unified extraction function
-    agent_extract_and_write_result "$worker_dir" "VALIDATION" "validation" "review" "PASS|FAIL" \
-        "validation-result.txt" "validation-review.md"
-
-    # Also write using communication protocol for backward compatibility
-    agent_write_validation "$worker_dir" "$VALIDATION_RESULT"
+    # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
+    agent_extract_and_write_result "$worker_dir" "VALIDATION" "validation" "review" "PASS|FAIL"
 }
 
 # Check validation result from a worker directory (utility for callers)
@@ -322,11 +308,6 @@ _extract_validation_result() {
 check_validation_result() {
     local worker_dir="$1"
     local result
-    result=$(agent_read_validation "$worker_dir")
-
-    if [ "$result" = "PASS" ]; then
-        return 0
-    else
-        return 1
-    fi
+    result=$(agent_read_subagent_result "$worker_dir" "validation-review")
+    [ "$result" = "PASS" ]
 }

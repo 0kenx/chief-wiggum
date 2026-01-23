@@ -24,11 +24,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "results/security-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
@@ -54,11 +49,6 @@ agent_run() {
 
     # Create standard directories
     agent_create_directories "$worker_dir"
-
-    # Clean up old audit files before re-running
-    rm -f "$worker_dir/results/security-result.txt" "$worker_dir/reports/security-report.md"
-    rm -f "$worker_dir/logs/audit-"*.log
-    rm -f "$worker_dir/summaries/audit-"*.txt
 
     log "Running security audit..."
 
@@ -315,32 +305,20 @@ EOF
 _extract_audit_result() {
     local worker_dir="$1"
 
-    # Use unified extraction function
-    agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|STOP" \
-        "security-result.txt" "security-report.md"
+    # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
+    agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|STOP"
 }
 
 # Check security result from a worker directory (utility for callers)
 # Returns: 0 if PASS, 1 if FIX, 2 if STOP/UNKNOWN
 check_security_result() {
     local worker_dir="$1"
-    local result_file="$worker_dir/results/security-result.txt"
+    local result
+    result=$(agent_read_subagent_result "$worker_dir" "security-audit")
 
-    if [ -f "$result_file" ]; then
-        local result
-        result=$(cat "$result_file")
-        case "$result" in
-            PASS)
-                return 0
-                ;;
-            FIX)
-                return 1
-                ;;
-            STOP|UNKNOWN|*)
-                return 2
-                ;;
-        esac
-    fi
-
-    return 2
+    case "$result" in
+        PASS) return 0 ;;
+        FIX) return 1 ;;
+        *) return 2 ;;
+    esac
 }

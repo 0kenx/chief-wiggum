@@ -114,39 +114,56 @@ validate_agent_prerequisites() {
 
 # Validate agent output files after running
 #
+# For agents with agent_output_files() defined (legacy), checks those specific files.
+# Otherwise, verifies that agent_find_latest_result returns a valid parseable JSON file.
+#
 # Args:
 #   worker_dir - The worker directory containing output files
 #
-# Returns: 0 if all output files exist and are non-empty, 1 otherwise
+# Returns: 0 if validation passes, 1 otherwise
 validate_agent_outputs() {
     local worker_dir="$1"
 
-    # If agent doesn't define output files, skip validation
-    if ! type agent_output_files &>/dev/null; then
-        log_debug "No agent_output_files defined - skipping output validation"
+    # If agent defines legacy output files, validate those
+    if type agent_output_files &>/dev/null; then
+        local files
+        files=$(agent_output_files)
+
+        local missing=0
+        for file in $files; do
+            local full_path="$worker_dir/$file"
+            if [ ! -f "$full_path" ]; then
+                log_error "Agent output file missing: $full_path"
+                missing=1
+            elif [ ! -s "$full_path" ]; then
+                log_error "Agent output file is empty: $full_path"
+                missing=1
+            fi
+        done
+
+        if [ $missing -eq 0 ]; then
+            log_debug "All agent output files validated successfully"
+        fi
+        return $missing
+    fi
+
+    # Default: check for valid epoch-named result JSON
+    local agent_type="${AGENT_TYPE:-unknown}"
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$agent_type")
+
+    if [ -z "$result_file" ] || [ ! -f "$result_file" ]; then
+        log_debug "No epoch-named result file found for $agent_type - skipping output validation"
         return 0
     fi
 
-    local files
-    files=$(agent_output_files)
-
-    local missing=0
-    for file in $files; do
-        local full_path="$worker_dir/$file"
-        if [ ! -f "$full_path" ]; then
-            log_error "Agent output file missing: $full_path"
-            missing=1
-        elif [ ! -s "$full_path" ]; then
-            log_error "Agent output file is empty: $full_path"
-            missing=1
-        fi
-    done
-
-    if [ $missing -eq 0 ]; then
-        log_debug "All agent output files validated successfully"
+    if ! jq '.' "$result_file" > /dev/null 2>&1; then
+        log_error "Agent result file is not valid JSON: $result_file"
+        return 1
     fi
 
-    return $missing
+    log_debug "Agent result file validated: $(basename "$result_file")"
+    return 0
 }
 
 # Run a top-level agent with full lifecycle management

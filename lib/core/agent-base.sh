@@ -49,6 +49,7 @@ _AGENT_WORKER_DIR=""
 _AGENT_WORKSPACE=""
 _AGENT_PROJECT_DIR=""
 _AGENT_TASK_ID=""
+_AGENT_START_EPOCH=""
 
 # Setup standard callback context for ralph loop
 #
@@ -62,6 +63,7 @@ agent_setup_context() {
     _AGENT_WORKSPACE="${2:-}"
     _AGENT_PROJECT_DIR="${3:-}"
     _AGENT_TASK_ID="${4:-}"
+    _AGENT_START_EPOCH=$(date +%s)
 }
 
 # Get context values (for use in callbacks)
@@ -320,11 +322,14 @@ agent_log_complete() {
 }
 
 # =============================================================================
-# STRUCTURED AGENT RESULTS
+# STRUCTURED AGENT RESULTS (Epoch-Named)
 # =============================================================================
-# Standard schema for agent results (agent-result.json):
+# Results are written to: results/<epoch>-<agent-type>-result.json
+# Reports are written to: reports/<epoch>-<agent-type>-report.md
+#
+# Schema:
 # {
-#   "agent_type": "task-worker",
+#   "agent_type": "security-audit",
 #   "status": "success|failure|partial|unknown",
 #   "exit_code": 0,
 #   "started_at": "2024-01-15T10:30:00Z",
@@ -334,19 +339,73 @@ agent_log_complete() {
 #   "worker_id": "worker-TASK-001-abc123",
 #   "iterations_completed": 3,
 #   "outputs": {
-#     "pr_url": "https://github.com/...",
-#     "branch": "task/TASK-001",
-#     "commit_sha": "abc123...",
-#     "validation_result": "PASS"
+#     "gate_result": "PASS"
 #   },
 #   "errors": [],
 #   "metadata": {}
 # }
 
-# Standard result file name
-AGENT_RESULT_FILE="agent-result.json"
+# Get the epoch-named result file path for the current agent
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: Path like results/<epoch>-<agent-type>-result.json
+agent_get_result_path() {
+    local worker_dir="$1"
+    local epoch="${_AGENT_START_EPOCH:-$(date +%s)}"
+    local agent_type="${AGENT_TYPE:-unknown}"
+    echo "$worker_dir/results/${epoch}-${agent_type}-result.json"
+}
 
-# Write agent result to JSON file
+# Find the latest result file for a given agent type
+#
+# Args:
+#   worker_dir - Worker directory path
+#   agent_name - Agent type name (e.g., "security-audit")
+#
+# Returns: Path to the latest result JSON file, or empty string
+agent_find_latest_result() {
+    local worker_dir="$1"
+    local agent_name="$2"
+
+    ls -t "$worker_dir/results/"*"-${agent_name}-result.json" 2>/dev/null | head -1
+}
+
+# Find the latest report file for a given agent type
+#
+# Args:
+#   worker_dir - Worker directory path
+#   agent_name - Agent type name (e.g., "security-audit")
+#
+# Returns: Path to the latest report MD file, or empty string
+agent_find_latest_report() {
+    local worker_dir="$1"
+    local agent_name="$2"
+
+    ls -t "$worker_dir/reports/"*"-${agent_name}-report.md" 2>/dev/null | head -1
+}
+
+# Write a report file with epoch naming
+#
+# Args:
+#   worker_dir - Worker directory path
+#   content    - Report content to write
+#
+# Returns: Path to the written report file (via stdout)
+agent_write_report() {
+    local worker_dir="$1"
+    local content="$2"
+    local epoch="${_AGENT_START_EPOCH:-$(date +%s)}"
+    local agent_type="${AGENT_TYPE:-unknown}"
+    local report_path="$worker_dir/reports/${epoch}-${agent_type}-report.md"
+
+    mkdir -p "$worker_dir/reports"
+    echo "$content" > "$report_path"
+    echo "$report_path"
+}
+
+# Write agent result to epoch-named JSON file
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -368,19 +427,24 @@ agent_write_result() {
     [ -z "$errors" ] && errors='[]'
     [ -z "$metadata" ] && metadata='{}'
 
-    local result_file="$worker_dir/$AGENT_RESULT_FILE"
+    mkdir -p "$worker_dir/results"
+    local result_file
+    result_file=$(agent_get_result_path "$worker_dir")
+
     local worker_id task_id
     worker_id=$(basename "$worker_dir")
     task_id="${_AGENT_TASK_ID:-unknown}"
 
-    # Get timing info from context or estimate
+    # Get timing info from epoch tracking
     local started_at completed_at duration_seconds
     completed_at=$(date -Iseconds)
     duration_seconds=0
     started_at="$completed_at"
 
-    # Try to get start time from worker.log
-    if [ -f "$worker_dir/worker.log" ]; then
+    if [ -n "${_AGENT_START_EPOCH:-}" ] && [[ "${_AGENT_START_EPOCH}" =~ ^[0-9]+$ ]]; then
+        started_at=$(date -Iseconds -d "@$_AGENT_START_EPOCH" 2>/dev/null || date -Iseconds)
+        duration_seconds=$(($(date +%s) - _AGENT_START_EPOCH))
+    elif [ -f "$worker_dir/worker.log" ]; then
         local start_epoch
         start_epoch=$(grep "AGENT_STARTED" "$worker_dir/worker.log" 2>/dev/null | tail -1 | grep -oP 'start_time=\K\d+' || true)
         if [ -n "$start_epoch" ] && [[ "$start_epoch" =~ ^[0-9]+$ ]]; then
@@ -420,7 +484,7 @@ agent_write_result() {
 JSONEOF
 }
 
-# Read agent result from JSON file
+# Read agent result from the latest result JSON file
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -430,9 +494,12 @@ JSONEOF
 agent_read_result() {
     local worker_dir="$1"
     local field="${2:-}"
-    local result_file="$worker_dir/$AGENT_RESULT_FILE"
 
-    if [ ! -f "$result_file" ]; then
+    local agent_type="${AGENT_TYPE:-unknown}"
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$agent_type")
+
+    if [ -z "$result_file" ] || [ ! -f "$result_file" ]; then
         echo ""
         return 1
     fi
@@ -467,7 +534,14 @@ agent_result_is_success() {
 agent_get_output() {
     local worker_dir="$1"
     local key="$2"
-    agent_read_result "$worker_dir" ".outputs.$key"
+
+    local agent_type="${AGENT_TYPE:-unknown}"
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$agent_type")
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        jq -r ".outputs.$key // empty" "$result_file" 2>/dev/null
+    fi
 }
 
 # Set a single output value in existing result
@@ -480,9 +554,12 @@ agent_set_output() {
     local worker_dir="$1"
     local key="$2"
     local value="$3"
-    local result_file="$worker_dir/$AGENT_RESULT_FILE"
 
-    if [ -f "$result_file" ]; then
+    local agent_type="${AGENT_TYPE:-unknown}"
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$agent_type")
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
         local tmp_file
         tmp_file=$(mktemp)
         jq --arg key "$key" --arg value "$value" '.outputs[$key] = $value' "$result_file" > "$tmp_file"
@@ -498,9 +575,12 @@ agent_set_output() {
 agent_add_error() {
     local worker_dir="$1"
     local error_msg="$2"
-    local result_file="$worker_dir/$AGENT_RESULT_FILE"
 
-    if [ -f "$result_file" ]; then
+    local agent_type="${AGENT_TYPE:-unknown}"
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$agent_type")
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
         local tmp_file
         tmp_file=$(mktemp)
         jq --arg err "$error_msg" '.errors += [$err]' "$result_file" > "$tmp_file"
@@ -512,13 +592,13 @@ agent_add_error() {
 # AGENT COMMUNICATION PROTOCOL
 # =============================================================================
 # Standard file paths for inter-agent communication.
-# These replace hardcoded paths with consistent conventions.
+# Results and reports use epoch-named files in results/ and reports/ directories.
 
 # Get the standard path for a communication file
 #
 # Args:
 #   worker_dir - Worker directory path
-#   file_type  - Type of file: result, validation, status, comments, summary
+#   file_type  - Type of file: result, report, comments, summary, prd, workspace
 #
 # Returns: Full path to the file
 agent_comm_path() {
@@ -527,16 +607,10 @@ agent_comm_path() {
 
     case "$file_type" in
         result)
-            echo "$worker_dir/agent-result.json"
+            agent_find_latest_result "$worker_dir" "${AGENT_TYPE:-unknown}"
             ;;
-        validation)
-            echo "$worker_dir/results/validation-result.txt"
-            ;;
-        validation-review)
-            echo "$worker_dir/reports/validation-review.md"
-            ;;
-        status)
-            echo "$worker_dir/reports/comment-status.md"
+        report)
+            agent_find_latest_report "$worker_dir" "${AGENT_TYPE:-unknown}"
             ;;
         comments)
             echo "$worker_dir/task-comments.md"
@@ -569,39 +643,7 @@ agent_comm_exists() {
     local path
     path=$(agent_comm_path "$worker_dir" "$file_type")
 
-    [ -e "$path" ] && [ -s "$path" ]
-}
-
-# Read validation result using standard protocol
-#
-# Args:
-#   worker_dir - Worker directory path
-#
-# Returns: PASS, FAIL, or UNKNOWN
-agent_read_validation() {
-    local worker_dir="$1"
-    local validation_file
-    validation_file=$(agent_comm_path "$worker_dir" "validation")
-
-    if [ -f "$validation_file" ]; then
-        cat "$validation_file"
-    else
-        echo "UNKNOWN"
-    fi
-}
-
-# Write validation result using standard protocol
-#
-# Args:
-#   worker_dir - Worker directory path
-#   result     - PASS, FAIL, or UNKNOWN
-agent_write_validation() {
-    local worker_dir="$1"
-    local result="$2"
-    local validation_file
-    validation_file=$(agent_comm_path "$worker_dir" "validation")
-
-    echo "$result" > "$validation_file"
+    [ -n "$path" ] && [ -e "$path" ] && [ -s "$path" ]
 }
 
 # =============================================================================
@@ -689,7 +731,7 @@ _extract_tag_content_from_stream_json() {
 # UNIFIED RESULT EXTRACTION AND WRITING
 # =============================================================================
 
-# Extract results from log files and write to standard output files
+# Extract results from log files and write to epoch-named result/report files
 # This is the unified function that replaces per-agent extraction logic
 #
 # Args:
@@ -698,8 +740,6 @@ _extract_tag_content_from_stream_json() {
 #   log_prefix    - Log file prefix (e.g., "validation", "audit", "test")
 #   report_tag    - XML tag name for report content (e.g., "review", "report")
 #   valid_values  - Pipe-separated valid result values (e.g., "PASS|FAIL")
-#   result_file   - Output filename for result (e.g., "validation-result.txt")
-#   report_file   - Output filename for report (e.g., "validation-review.md")
 #
 # Returns: Sets global variable ${agent_name}_RESULT (e.g., VALIDATION_RESULT)
 agent_extract_and_write_result() {
@@ -708,8 +748,6 @@ agent_extract_and_write_result() {
     local log_prefix="$3"
     local report_tag="$4"
     local valid_values="$5"
-    local result_file="$6"
-    local report_file="$7"
 
     local result="UNKNOWN"
 
@@ -719,15 +757,14 @@ agent_extract_and_write_result() {
     log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "${log_prefix}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        # Extract report content and save to reports/ directory
-        local report_path="$worker_dir/reports/$report_file"
+        # Extract report content and save using agent_write_report
         local report_content
         report_content=$(_extract_tag_content_from_stream_json "$log_file" "$report_tag")
 
         if [ -n "$report_content" ]; then
-            mkdir -p "$worker_dir/reports"
-            echo "$report_content" > "$report_path"
-            log "${agent_name} report saved to reports/$report_file"
+            local report_path
+            report_path=$(agent_write_report "$worker_dir" "$report_content")
+            log "${agent_name} report saved to $(basename "$report_path")"
         fi
 
         # Extract result value (LAST occurrence to avoid matching examples in prompts)
@@ -737,14 +774,13 @@ agent_extract_and_write_result() {
         fi
     fi
 
-    # Write result file to results/ directory
-    mkdir -p "$worker_dir/results"
-    echo "$result" > "$worker_dir/results/$result_file"
-
-    # Update agent-result.json outputs if it exists
-    if [ -f "$worker_dir/$AGENT_RESULT_FILE" ]; then
-        agent_set_output "$worker_dir" "${agent_name}_result" "$result"
-    fi
+    # Write epoch-named result JSON with gate_result in outputs
+    local gate_outputs
+    gate_outputs=$(printf '{"gate_result":"%s"}' "$result")
+    agent_write_result "$worker_dir" \
+        "$([ "$result" = "PASS" ] && echo "success" || echo "failure")" \
+        "$([ "$result" = "PASS" ] && echo "0" || echo "1")" \
+        "$gate_outputs"
 
     # Set global variable for the calling agent
     eval "${agent_name}_RESULT=\"$result\""
@@ -752,29 +788,23 @@ agent_extract_and_write_result() {
     log "${agent_name} result: $result"
 }
 
-# Read a sub-agent result, preferring agent-result.json outputs, falling back to legacy files
+# Read a sub-agent's gate_result from its latest epoch-named result file
 #
 # Args:
-#   worker_dir     - Worker directory path
-#   output_key     - Key in agent-result.json outputs (e.g., "SECURITY_result")
-#   legacy_file    - Legacy result filename (e.g., "security-result.txt")
+#   worker_dir  - Worker directory path
+#   agent_name  - Agent type name (e.g., "security-audit")
 #
-# Returns: Result value or "UNKNOWN"
+# Returns: gate_result value (PASS/FAIL/FIX/SKIP/STOP) or "UNKNOWN"
 agent_read_subagent_result() {
     local worker_dir="$1"
-    local output_key="$2"
-    local legacy_file="$3"
+    local agent_name="$2"
 
     local result=""
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$agent_name")
 
-    # Try agent-result.json first
-    if [ -f "$worker_dir/$AGENT_RESULT_FILE" ]; then
-        result=$(agent_get_output "$worker_dir" "$output_key")
-    fi
-
-    # Fall back to result file in results/ directory
-    if [ -z "$result" ] && [ -f "$worker_dir/results/$legacy_file" ]; then
-        result=$(cat "$worker_dir/results/$legacy_file" 2>/dev/null)
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        result=$(jq -r '.outputs.gate_result // empty' "$result_file" 2>/dev/null)
     fi
 
     # Default to UNKNOWN

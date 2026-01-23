@@ -24,10 +24,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "results/test-result.txt"
-}
 
 # Source dependencies using base library helpers
 agent_source_core
@@ -56,10 +52,6 @@ agent_run() {
     agent_create_directories "$worker_dir"
 
     # Clean up old test files before re-running
-    rm -f "$worker_dir/results/test-result.txt" "$worker_dir/reports/test-report.md"
-    rm -f "$worker_dir/logs/test-"*.log
-    rm -f "$worker_dir/summaries/test-"*.txt
-
     log "Running test generation..."
 
     # Set up callback context using base library
@@ -321,32 +313,20 @@ EOF
 _extract_test_result() {
     local worker_dir="$1"
 
-    # Use unified extraction function
-    agent_extract_and_write_result "$worker_dir" "TEST" "test" "report" "PASS|FAIL|SKIP" \
-        "test-result.txt" "test-report.md"
+    # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
+    agent_extract_and_write_result "$worker_dir" "TEST" "test" "report" "PASS|FAIL|SKIP"
 }
 
 # Check test result from a worker directory (utility for callers)
 # Returns: 0 if PASS, 1 if FAIL, 2 if SKIP/UNKNOWN
 check_test_result() {
     local worker_dir="$1"
-    local result_file="$worker_dir/results/test-result.txt"
+    local result
+    result=$(agent_read_subagent_result "$worker_dir" "test-coverage")
 
-    if [ -f "$result_file" ]; then
-        local result
-        result=$(cat "$result_file")
-        case "$result" in
-            PASS)
-                return 0
-                ;;
-            FAIL)
-                return 1
-                ;;
-            SKIP|UNKNOWN|*)
-                return 2
-                ;;
-        esac
-    fi
-
-    return 2
+    case "$result" in
+        PASS) return 0 ;;
+        FAIL) return 1 ;;
+        *) return 2 ;;
+    esac
 }

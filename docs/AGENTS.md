@@ -39,8 +39,8 @@ There are two agent patterns, each in its own directory:
 │     ├── Ralph loop iterations (if applicable)                   │
 │     └── Sub-agents may be spawned                               │
 │                                                                 │
-│  6. OUTPUT VALIDATION (agent_output_files)                      │
-│     └── Verifies required output files were created             │
+│  6. OUTPUT VALIDATION (validate_agent_outputs)                  │
+│     └── Verifies epoch-named result JSON exists and is valid    │
 │                                                                 │
 │  7. CLEANUP (agent_cleanup)                                     │
 │     ├── Custom cleanup logic                                    │
@@ -71,8 +71,6 @@ set -euo pipefail
 # AGENT_DESCRIPTION: Brief description of what the agent does.
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code to operate on
-# OUTPUT_FILES:
-#   - my-result.txt : Contains PASS, FAIL, or SKIP
 # =============================================================================
 
 # Source base library and initialize metadata
@@ -82,11 +80,6 @@ agent_init_metadata "my-agent" "Brief description"
 # Required paths before agent can run
 agent_required_paths() {
     echo "workspace"
-}
-
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "my-result.txt"
 }
 
 # Source dependencies using base library helpers
@@ -105,7 +98,7 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # Set up callback context (3-arg form for leaf agents)
+    # Set up callback context
     agent_setup_context "$worker_dir" "$workspace" "$project_dir"
 
     # Run unsupervised ralph loop
@@ -114,6 +107,10 @@ agent_run() {
         "_my_user_prompt" \
         "_my_completion_check" \
         "$max_iterations" "$max_turns" "$worker_dir" "my-prefix"
+
+    # Extract result and write epoch-named result/report
+    # (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
+    agent_extract_and_write_result "$worker_dir" "MY" "my-prefix" "report" "PASS|FAIL|SKIP"
 
     return $?
 }
@@ -318,17 +315,53 @@ agent_create_directories "$worker_dir"
 ### Result Management
 
 ```bash
-# Write structured result to agent-result.json
+# Write epoch-named result to results/<epoch>-<agent-type>-result.json
 # Args: worker_dir, status ("success"|"failure"|"partial"), exit_code, outputs_json
-agent_write_result "$worker_dir" "$result_status" "$result_exit_code" "$outputs_json"
+agent_write_result "$worker_dir" "success" 0 '{"gate_result":"PASS"}'
 
-# Read result from sub-agent
-# Args: worker_dir, result_key (e.g. "SECURITY_result"), fallback_file
-result=$(agent_read_subagent_result "$worker_dir" "SECURITY_result" "security-result.txt")
+# Write epoch-named report to reports/<epoch>-<agent-type>-report.md
+# Returns: path to the written report file
+report_path=$(agent_write_report "$worker_dir" "$markdown_content")
 
-# Read validation result specifically
-validation=$(agent_read_validation "$worker_dir")
+# Read gate_result from a sub-agent's latest epoch-named result
+# Args: worker_dir, agent_name
+result=$(agent_read_subagent_result "$worker_dir" "security-audit")
+
+# Find the latest result/report file for an agent type
+result_file=$(agent_find_latest_result "$worker_dir" "security-audit")
+report_file=$(agent_find_latest_report "$worker_dir" "security-audit")
+
+# Get the result path for the current agent (uses _AGENT_START_EPOCH)
+my_result_path=$(agent_get_result_path "$worker_dir")
+
+# Unified extraction from log files (extracts both report and gate_result)
+# Args: worker_dir, agent_name, log_prefix, report_tag, valid_values
+agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|STOP"
 ```
+
+### Result JSON Schema
+
+```json
+{
+  "agent_type": "security-audit",
+  "status": "success|failure|partial|unknown",
+  "exit_code": 0,
+  "started_at": "2024-01-15T10:30:00Z",
+  "completed_at": "2024-01-15T10:45:00Z",
+  "duration_seconds": 900,
+  "task_id": "TASK-001",
+  "worker_id": "worker-TASK-001-abc123",
+  "iterations_completed": 3,
+  "outputs": {
+    "gate_result": "PASS"
+  },
+  "errors": [],
+  "metadata": {}
+}
+```
+
+The `outputs.gate_result` field replaces legacy text-file values (PASS/FAIL/FIX/SKIP/STOP).
+Agents never delete from `logs/`, `results/`, `reports/`, or `summaries/` — they only append new epoch-named entries.
 
 ## Execution Patterns
 

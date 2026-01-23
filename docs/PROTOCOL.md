@@ -13,7 +13,15 @@ Chief Wiggum agents operate in isolated worker directories but need to share sta
 ├── prd.md                    # Input: Product Requirements Document
 ├── workspace/                # Git worktree for isolated work
 ├── agent.pid                 # PID of running agent
-├── agent-result.json         # Structured output from agent
+├── results/
+│   ├── 1705312200-security-audit-result.json   # Gate decision + metadata
+│   ├── 1705312500-security-fix-result.json     # Gate decision + metadata
+│   ├── 1705312800-validation-review-result.json
+│   └── 1705313100-task-worker-result.json
+├── reports/
+│   ├── 1705312200-security-audit-report.md     # Analysis output
+│   ├── 1705312500-security-fix-report.md       # Status output
+│   └── 1705312800-validation-review-report.md
 ├── logs/
 │   ├── iteration-0.log       # Claude conversation log (iteration 0)
 │   ├── iteration-1.log       # Claude conversation log (iteration 1)
@@ -28,62 +36,78 @@ Chief Wiggum agents operate in isolated worker directories but need to share sta
 └── (agent-specific files)
 ```
 
+**Naming Convention:** `results/<epoch>-<agent-type>-result.json` and `reports/<epoch>-<agent-type>-report.md` where epoch is the unix timestamp at agent start.
+
 ## Result Communication
 
-### Primary: agent-result.json
+### Epoch-Named Result Files
 
-The preferred method for agents to communicate results:
+All agent results are written to epoch-named JSON files in `results/`:
 
 ```json
 {
-  "agent_type": "validation-review",
-  "completed_at": "2024-01-15T10:30:00Z",
+  "agent_type": "security-audit",
+  "status": "success",
   "exit_code": 0,
+  "started_at": "2024-01-15T10:30:00Z",
+  "completed_at": "2024-01-15T10:45:00Z",
+  "duration_seconds": 900,
+  "task_id": "TASK-001",
+  "worker_id": "worker-TASK-001-abc123",
+  "iterations_completed": 3,
   "outputs": {
-    "VALIDATION_result": "PASS",
-    "review_notes": "All requirements met",
-    "files_reviewed": 15
-  }
+    "gate_result": "PASS"
+  },
+  "errors": [],
+  "metadata": {}
 }
 ```
+
+The `outputs.gate_result` field contains the standardized gate decision (PASS/FAIL/STOP/SKIP/FIX).
 
 ### Writing Results
 
 ```bash
-# Using agent-base.sh helper
-agent_write_result "$worker_dir" "VALIDATION_result" "PASS"
-agent_write_result "$worker_dir" "pr_url" "https://github.com/..."
+# Write result with gate_result in outputs
+agent_write_result "$worker_dir" "success" 0 '{"gate_result":"PASS"}'
 
-# Result is appended to outputs object
+# Write result with additional output fields
+local outputs_json='{"gate_result":"PASS","pr_url":"https://github.com/..."}'
+agent_write_result "$worker_dir" "success" 0 "$outputs_json"
+
+# Write a report (analysis/status markdown)
+agent_write_report "$worker_dir" "$report_content"
 ```
 
 ### Reading Results
 
 ```bash
-# Read from sub-agent with fallback
-result=$(agent_read_subagent_result "$worker_dir" "VALIDATION_result" "validation-result.txt")
+# Read gate_result from a sub-agent (2-arg signature)
+result=$(agent_read_subagent_result "$worker_dir" "security-audit")
 
-# Direct jq access
-result=$(jq -r '.outputs.VALIDATION_result' "$worker_dir/agent-result.json")
+# Find the latest result file for an agent type
+result_file=$(agent_find_latest_result "$worker_dir" "security-audit")
+
+# Find the latest report file for an agent type
+report_file=$(agent_find_latest_report "$worker_dir" "security-audit")
 ```
 
-### Gate Result Files
+### Gate Result Values
 
-All agents produce a gate result file in `results/` with standardized values (PASS/FAIL/STOP/SKIP/FIX).
-Reports are written to `reports/`.
+All gate agents produce a `gate_result` field with standardized values:
 
-| Result File | Agent | Values |
-|-------------|-------|--------|
-| `results/validation-result.txt` | validation-review | PASS, FAIL |
-| `results/security-result.txt` | security-audit | PASS, FIX, STOP |
-| `results/review-result.txt` | code-review | PASS, FAIL, FIX |
-| `results/test-result.txt` | test-coverage | PASS, FAIL, SKIP |
-| `results/docs-result.txt` | documentation-writer | PASS, SKIP |
-| `results/fix-result.txt` | security-fix | PASS, FIX, FAIL |
-| `results/resolve-result.txt` | git-conflict-resolver | PASS, FAIL, SKIP |
-| `results/comment-fix-result.txt` | pr-comment-fix | PASS, FIX, FAIL, SKIP |
-| `results/plan-result.txt` | plan-mode | PASS, FAIL |
-| `results/resume-result.txt` | resume-decide | PASS, STOP, FAIL |
+| Agent | gate_result Values |
+|-------|-------------------|
+| validation-review | PASS, FAIL |
+| security-audit | PASS, FIX, STOP |
+| code-review | PASS, FAIL, FIX |
+| test-coverage | PASS, FAIL, SKIP |
+| documentation-writer | PASS, SKIP |
+| security-fix | PASS, FIX, FAIL |
+| git-conflict-resolver | PASS, FAIL, SKIP |
+| pr-comment-fix | PASS, FIX, FAIL, SKIP |
+| plan-mode | PASS, FAIL |
+| resume-decide | PASS, STOP, FAIL |
 
 ## Progress Communication
 
@@ -151,11 +175,10 @@ agent_run() {
 
     # Invoke validation as sub-agent
     run_sub_agent "validation-review" "$worker_dir" "$project_dir"
-    local validation_exit=$?
 
-    # Read sub-agent result
+    # Read sub-agent gate_result (2-arg signature)
     local result
-    result=$(agent_read_subagent_result "$worker_dir" "VALIDATION_result" "validation-result.txt")
+    result=$(agent_read_subagent_result "$worker_dir" "validation-review")
 
     if [ "$result" = "PASS" ]; then
         # Proceed with commit/PR
@@ -291,7 +314,7 @@ wiggum resume TASK-001 -f
 
 ## Best Practices
 
-1. **Always use structured results** - Prefer `agent-result.json` over text files
+1. **Always use epoch-named results** - Use `agent_write_result` which writes to `results/<epoch>-<type>-result.json`
 2. **Write checkpoints regularly** - Enables resume after interruption
 3. **Emit events for observability** - Makes debugging easier
 4. **Use file locks for shared resources** - Prevents race conditions

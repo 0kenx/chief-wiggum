@@ -128,22 +128,6 @@ test_config_loading_unknown_agent_uses_defaults() {
 # Test: Communication Protocol - Paths
 # =============================================================================
 
-test_agent_comm_path_result() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-
-    local path
-    path=$(agent_comm_path "/tmp/worker" "result")
-    assert_equals "/tmp/worker/agent-result.json" "$path" "result path should be correct"
-}
-
-test_agent_comm_path_validation() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-
-    local path
-    path=$(agent_comm_path "/tmp/worker" "validation")
-    assert_equals "/tmp/worker/validation-result.txt" "$path" "validation path should be correct"
-}
-
 test_agent_comm_path_prd() {
     source "$WIGGUM_HOME/lib/core/agent-base.sh"
 
@@ -169,58 +153,10 @@ test_agent_comm_path_summary() {
 }
 
 # =============================================================================
-# Test: Communication Protocol - Validation Read/Write
+# Test: Structured Agent Results (Epoch-Named)
 # =============================================================================
 
-test_agent_write_and_read_validation_pass() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-
-    local tmpdir
-    tmpdir=$(mktemp -d)
-
-    agent_write_validation "$tmpdir" "PASS"
-    local result
-    result=$(agent_read_validation "$tmpdir")
-
-    assert_equals "PASS" "$result" "Should read back PASS"
-
-    rm -rf "$tmpdir"
-}
-
-test_agent_write_and_read_validation_fail() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-
-    local tmpdir
-    tmpdir=$(mktemp -d)
-
-    agent_write_validation "$tmpdir" "FAIL"
-    local result
-    result=$(agent_read_validation "$tmpdir")
-
-    assert_equals "FAIL" "$result" "Should read back FAIL"
-
-    rm -rf "$tmpdir"
-}
-
-test_agent_read_validation_missing_file() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-
-    local tmpdir
-    tmpdir=$(mktemp -d)
-
-    local result
-    result=$(agent_read_validation "$tmpdir")
-
-    assert_equals "UNKNOWN" "$result" "Missing file should return UNKNOWN"
-
-    rm -rf "$tmpdir"
-}
-
-# =============================================================================
-# Test: Structured Agent Results
-# =============================================================================
-
-test_agent_write_result_creates_file() {
+test_agent_write_result_creates_epoch_file() {
     source "$WIGGUM_HOME/lib/core/agent-base.sh"
 
     local tmpdir
@@ -232,7 +168,14 @@ test_agent_write_result_creates_file() {
 
     agent_write_result "$tmpdir" "success" 0 '{}' '[]' '{}'
 
-    assert_file_exists "$tmpdir/agent-result.json" "agent-result.json should be created"
+    # Should create epoch-named file in results/
+    local result_file
+    result_file=$(ls "$tmpdir/results/"*"-test-agent-result.json" 2>/dev/null | head -1)
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        assert_success "true" "epoch-named result file should be created in results/"
+    else
+        assert_failure "true" "epoch-named result file should be created in results/"
+    fi
 
     rm -rf "$tmpdir"
 }
@@ -249,11 +192,13 @@ test_agent_write_result_valid_json() {
 
     agent_write_result "$tmpdir" "success" 0 '{}' '[]' '{}'
 
-    # Validate JSON is parseable
-    if jq '.' "$tmpdir/agent-result.json" > /dev/null 2>&1; then
-        assert_success "true" "agent-result.json should be valid JSON"
+    local result_file
+    result_file=$(agent_find_latest_result "$tmpdir" "test-agent")
+
+    if [ -n "$result_file" ] && jq '.' "$result_file" > /dev/null 2>&1; then
+        assert_success "true" "result file should be valid JSON"
     else
-        assert_failure "true" "agent-result.json should be valid JSON"
+        assert_failure "true" "result file should be valid JSON"
     fi
 
     rm -rf "$tmpdir"
@@ -338,6 +283,127 @@ test_agent_get_output() {
     pr_url=$(agent_get_output "$tmpdir" "pr_url")
 
     assert_equals "https://github.com/test/pr/123" "$pr_url" "Should read pr_url from outputs"
+
+    rm -rf "$tmpdir"
+}
+
+# =============================================================================
+# Test: Epoch-Named Result/Report Helpers
+# =============================================================================
+
+test_agent_find_latest_result() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/results"
+
+    # Create two result files with different epochs
+    echo '{"status":"old"}' > "$tmpdir/results/1000-security-audit-result.json"
+    sleep 0.1
+    echo '{"status":"new"}' > "$tmpdir/results/2000-security-audit-result.json"
+
+    local found
+    found=$(agent_find_latest_result "$tmpdir" "security-audit")
+
+    assert_equals "$tmpdir/results/2000-security-audit-result.json" "$found" \
+        "Should find the latest (most recent) result file"
+
+    rm -rf "$tmpdir"
+}
+
+test_agent_find_latest_result_not_found() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/results"
+
+    local found
+    found=$(agent_find_latest_result "$tmpdir" "nonexistent-agent")
+
+    assert_equals "" "$found" "Should return empty for nonexistent agent"
+
+    rm -rf "$tmpdir"
+}
+
+test_agent_find_latest_report() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/reports"
+
+    echo "old report" > "$tmpdir/reports/1000-security-audit-report.md"
+    sleep 0.1
+    echo "new report" > "$tmpdir/reports/2000-security-audit-report.md"
+
+    local found
+    found=$(agent_find_latest_report "$tmpdir" "security-audit")
+
+    assert_equals "$tmpdir/reports/2000-security-audit-report.md" "$found" \
+        "Should find the latest report file"
+
+    rm -rf "$tmpdir"
+}
+
+test_agent_write_report() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    agent_init_metadata "test-agent" "Test"
+    agent_setup_context "$tmpdir" "$tmpdir/workspace" "/tmp/project" "TEST-001"
+
+    local report_path
+    report_path=$(agent_write_report "$tmpdir" "# Test Report\n\nSome content")
+
+    if [ -f "$report_path" ]; then
+        assert_success "true" "Report file should be created"
+    else
+        assert_failure "true" "Report file should be created"
+    fi
+
+    # Verify it's in reports/ with epoch naming
+    if echo "$report_path" | grep -q "reports/.*-test-agent-report.md"; then
+        assert_success "true" "Report should have epoch-named path"
+    else
+        assert_failure "true" "Report should have epoch-named path"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_agent_read_subagent_result() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/results"
+
+    # Create a result file for security-audit with gate_result
+    echo '{"outputs":{"gate_result":"PASS"}}' > "$tmpdir/results/1234-security-audit-result.json"
+
+    local result
+    result=$(agent_read_subagent_result "$tmpdir" "security-audit")
+
+    assert_equals "PASS" "$result" "Should read gate_result from sub-agent result"
+
+    rm -rf "$tmpdir"
+}
+
+test_agent_read_subagent_result_unknown() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/results"
+
+    local result
+    result=$(agent_read_subagent_result "$tmpdir" "nonexistent-agent")
+
+    assert_equals "UNKNOWN" "$result" "Should return UNKNOWN for missing agent result"
 
     rm -rf "$tmpdir"
 }
@@ -484,20 +550,21 @@ run_test test_config_loading_task_worker
 run_test test_config_loading_pr_comment_fix
 run_test test_config_loading_validation_review
 run_test test_config_loading_unknown_agent_uses_defaults
-run_test test_agent_comm_path_result
-run_test test_agent_comm_path_validation
 run_test test_agent_comm_path_prd
 run_test test_agent_comm_path_workspace
 run_test test_agent_comm_path_summary
-run_test test_agent_write_and_read_validation_pass
-run_test test_agent_write_and_read_validation_fail
-run_test test_agent_read_validation_missing_file
-run_test test_agent_write_result_creates_file
+run_test test_agent_write_result_creates_epoch_file
 run_test test_agent_write_result_valid_json
 run_test test_agent_read_result_status
 run_test test_agent_result_is_success
 run_test test_agent_result_is_success_failure
 run_test test_agent_get_output
+run_test test_agent_find_latest_result
+run_test test_agent_find_latest_result_not_found
+run_test test_agent_find_latest_report
+run_test test_agent_write_report
+run_test test_agent_read_subagent_result
+run_test test_agent_read_subagent_result_unknown
 run_test test_agent_create_directories
 run_test test_default_hooks_return_success
 run_test test_agents_json_is_valid

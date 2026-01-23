@@ -26,12 +26,6 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Output files that must exist (non-empty) after agent completes
-agent_output_files() {
-    echo "reports/comment-status.md"
-    echo "results/comment-fix-result.txt"
-}
-
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
@@ -78,9 +72,9 @@ agent_run() {
     comment_count=$(grep -c '^### ' "$comments_file" 2>/dev/null || echo "0")
     if [ "$comment_count" -eq 0 ]; then
         log "No comments found in $comments_file - nothing to fix"
-        echo "SKIP" > "$worker_dir/results/comment-fix-result.txt"
+        agent_setup_context "$worker_dir" "$workspace" "$project_dir"
         agent_log_complete "$worker_dir" 0 "$start_time"
-        agent_write_result "$worker_dir" "success" 0 '{"comments_fixed":0,"comments_pending":0,"comments_skipped":0}'
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"SKIP","comments_fixed":0,"comments_pending":0,"comments_skipped":0}'
         rm -f "$worker_dir/.needs-fix"
         return 0
     fi
@@ -132,24 +126,23 @@ agent_run() {
         comments_skipped=$(grep -c '^\- \[\*\]' "$status_file" 2>/dev/null || echo "0")
     fi
 
-    # Determine result status
+    # Determine result status and gate_result
     local result_status="failure"
+    local gate_result="FAIL"
     if [ "$loop_result" -eq 0 ] && [ "$comments_pending" -eq 0 ]; then
         result_status="success"
-        echo "PASS" > "$worker_dir/results/comment-fix-result.txt"
+        gate_result="PASS"
     elif [ "$comments_fixed" -gt 0 ]; then
         result_status="partial"
-        echo "FIX" > "$worker_dir/results/comment-fix-result.txt"
-    else
-        echo "FAIL" > "$worker_dir/results/comment-fix-result.txt"
+        gate_result="FIX"
     fi
 
     # Log completion and write structured result
     agent_log_complete "$worker_dir" "$loop_result" "$start_time"
 
     local outputs_json
-    outputs_json=$(printf '{"commit_sha":"%s","push_succeeded":%s,"comments_fixed":%d,"comments_pending":%d,"comments_skipped":%d}' \
-        "$commit_sha" "$push_succeeded" "$comments_fixed" "$comments_pending" "$comments_skipped")
+    outputs_json=$(printf '{"gate_result":"%s","commit_sha":"%s","push_succeeded":%s,"comments_fixed":%d,"comments_pending":%d,"comments_skipped":%d}' \
+        "$gate_result" "$commit_sha" "$push_succeeded" "$comments_fixed" "$comments_pending" "$comments_skipped")
 
     agent_write_result "$worker_dir" "$result_status" "$loop_result" "$outputs_json"
 
