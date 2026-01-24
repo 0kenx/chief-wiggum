@@ -165,7 +165,7 @@ You address PR review feedback by making code changes.
 
 WORKSPACE: $workspace
 COMMENTS: ../task-comments.md (read-only)
-STATUS: ../comment-status.md (update as you fix)
+STATUS: ../reports/comment-status.md (update as you fix)
 
 ## Fix Philosophy
 
@@ -197,7 +197,7 @@ Address feedback from PR review comments.
 ## Process
 
 1. **Read comments**: @../task-comments.md - understand what reviewers want
-2. **Check status**: @../comment-status.md - skip [x] items, fix [ ] items
+2. **Check status**: @../reports/comment-status.md - skip [x] items, fix [ ] items
 3. **For each pending comment**:
    - Understand the concern (read surrounding context if needed)
    - Make the code change
@@ -241,7 +241,7 @@ CONTINUATION CONTEXT (Iteration $iteration):
 
 To understand what has already been fixed:
 - Read @../summaries/fix-$prev_iter-summary.txt for context on previous fixes
-- Check @../comment-status.md to see which comments are already addressed
+- Check @../reports/comment-status.md to see which comments are already addressed
 - Do NOT repeat work that was already completed
 CONTEXT_EOF
         fi
