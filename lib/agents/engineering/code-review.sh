@@ -12,7 +12,7 @@ set -euo pipefail
 #   - workspace : Directory containing the code to review
 # OUTPUT_FILES:
 #   - review-report.md  : Detailed code review findings
-#   - review-result.txt : Contains PASS, FAIL, or FIX
+#   - review-result.json : Contains PASS, FAIL, or FIX
 # =============================================================================
 
 # Source base library and initialize metadata

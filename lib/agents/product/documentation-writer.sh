@@ -11,7 +11,7 @@ set -euo pipefail
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code to document
 # OUTPUT_FILES:
-#   - docs-result.txt : Contains PASS, FAIL, or SKIP
+#   - docs-result.json : Contains PASS, FAIL, or SKIP
 # =============================================================================
 
 # Source base library and initialize metadata

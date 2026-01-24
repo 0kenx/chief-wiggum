@@ -86,6 +86,51 @@ pipeline_get_json() {
     fi
 }
 
+# Get on_result handler for a specific gate result value
+#
+# Args:
+#   idx          - Step index (0-based)
+#   result_value - Gate result value (e.g., "FIX", "FAIL")
+#
+# Returns: Compact JSON handler via stdout, or empty string if no handler defined
+pipeline_get_on_result() {
+    local idx="$1"
+    local result_value="$2"
+
+    local result
+    result=$(_pipeline_jq ".steps[$idx].on_result.\"$result_value\" // null" -c)
+
+    if [ "$result" = "null" ]; then
+        echo ""
+    else
+        echo "$result"
+    fi
+}
+
+# Get on_max jump target for a step
+#
+# Args:
+#   idx - Step index (0-based)
+#
+# Returns: Jump target string (default: "abort")
+pipeline_get_on_max() {
+    local idx="$1"
+    pipeline_get "$idx" ".on_max" "abort"
+}
+
+# Get max visits for a step
+#
+# Args:
+#   idx - Step index (0-based)
+#
+# Returns: Max visit count (0 = unlimited)
+pipeline_get_max() {
+    local idx="$1"
+    local val
+    val=$(pipeline_get "$idx" ".max" "0")
+    echo "$val"
+}
+
 # Get a .fix sub-field from a pipeline step
 #
 # Args:

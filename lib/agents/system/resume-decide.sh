@@ -14,7 +14,7 @@ set -euo pipefail
 # OUTPUT_FILES:
 #   - resume-step.txt         : Contains the step name to resume from (or ABORT)
 #   - resume-instructions.md  : Context and guidance for the resumed worker
-#   - resume-result.txt       : Contains PASS, STOP, or FAIL
+#   - resume-result.json      : Contains PASS, STOP, or FAIL
 # =============================================================================
 
 # Source base library and initialize metadata

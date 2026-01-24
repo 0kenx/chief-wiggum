@@ -12,7 +12,7 @@ set -euo pipefail
 #   - prd.md      : Product Requirements Document to validate against
 #   - workspace   : Directory containing the completed work to review
 # OUTPUT_FILES:
-#   - validation-result.txt : Contains PASS, FAIL, or UNKNOWN
+#   - validation-result.json : Contains PASS, FAIL, or UNKNOWN
 # =============================================================================
 
 # Source base library and initialize metadata

@@ -13,7 +13,7 @@ set -euo pipefail
 #   - workspace                  : Directory containing the code to modify
 # OUTPUT_FILES:
 #   - reports/fix-status.md      : Status tracking file for addressed findings
-#   - results/fix-result.txt     : Contains PASS, FIX, or FAIL
+#   - results/fix-result.json    : Contains PASS, FIX, or FAIL
 # =============================================================================
 
 # Source base library and initialize metadata

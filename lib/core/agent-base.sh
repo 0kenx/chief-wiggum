@@ -348,7 +348,7 @@ agent_log_complete() {
 #   - agent_type is non-empty string
 #   - status is one of: success, failure, partial, unknown
 #   - exit_code is integer
-#   - outputs.gate_result (if present) is one of: PASS, FAIL, FIX, STOP
+#   - outputs.gate_result (if present) matches [A-Z]{3,10}
 #
 # Args:
 #   result_file - Path to the result JSON file
@@ -391,17 +391,14 @@ validate_result_schema() {
         errors=1
     fi
 
-    # Check outputs.gate_result if present
+    # Check outputs.gate_result if present (must match [A-Z]{3,10})
     local gate_result
     gate_result=$(jq -r '.outputs.gate_result // empty' "$result_file" 2>/dev/null)
     if [ -n "$gate_result" ]; then
-        case "$gate_result" in
-            PASS|FAIL|FIX|SKIP) ;;
-            *)
-                log_error "Result schema: 'outputs.gate_result' is invalid ('$gate_result') in $(basename "$result_file") - expected PASS|FAIL|FIX|STOP"
-                errors=1
-                ;;
-        esac
+        if ! [[ "$gate_result" =~ ^[A-Z]{3,10}$ ]]; then
+            log_error "Result schema: 'outputs.gate_result' is invalid ('$gate_result') in $(basename "$result_file") - must match [A-Z]{3,10}"
+            errors=1
+        fi
     fi
 
     return $errors
@@ -858,7 +855,7 @@ agent_extract_and_write_result() {
 #   worker_dir  - Worker directory path
 #   agent_name  - Agent type name (e.g., "engineering.security-audit")
 #
-# Returns: gate_result value (PASS/FAIL/FIX/SKIP/STOP) or "UNKNOWN"
+# Returns: gate_result value ([A-Z]{3,10}) or "UNKNOWN"
 agent_read_subagent_result() {
     local worker_dir="$1"
     local agent_name="$2"
@@ -885,7 +882,7 @@ agent_read_subagent_result() {
 #   worker_dir - Worker directory path
 #   step_id    - Pipeline step ID (e.g., "audit", "execution")
 #
-# Returns: gate_result value (PASS/FAIL/FIX/SKIP/STOP) or "UNKNOWN"
+# Returns: gate_result value ([A-Z]{3,10}) or "UNKNOWN"
 agent_read_step_result() {
     local worker_dir="$1"
     local step_id="$2"

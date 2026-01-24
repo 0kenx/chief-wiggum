@@ -12,7 +12,7 @@ set -euo pipefail
 #   - workspace : Directory containing the git repository with conflicts
 # OUTPUT_FILES:
 #   - resolution-summary.md : Documentation of conflict resolutions applied
-#   - resolve-result.txt    : Contains PASS, FAIL, or SKIP
+#   - resolve-result.json   : Contains PASS, FAIL, or SKIP
 # =============================================================================
 
 # Source base library and initialize metadata

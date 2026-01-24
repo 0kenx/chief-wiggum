@@ -13,7 +13,7 @@ set -euo pipefail
 #   - workspace        : Directory containing the code to modify
 # OUTPUT_FILES:
 #   - comment-status.md       : Status tracking file for addressed comments
-#   - comment-fix-result.txt  : Contains PASS, FIX, FAIL, or SKIP
+#   - comment-fix-result.json : Contains PASS, FIX, FAIL, or SKIP
 # =============================================================================
 
 # Source base library and initialize metadata

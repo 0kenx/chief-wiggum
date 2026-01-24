@@ -127,7 +127,7 @@ report_file=$(agent_find_latest_report "$worker_dir" "engineering.security-audit
 
 ### Gate Result Values
 
-All gate agents produce a `gate_result` field with one of four standardized values, PASS, FIX, FAIL, or SKIP.
+All gate agents produce a `gate_result` field. Default values include PASS, FIX, FAIL, and SKIP. But an agent may define its own value set.
 
 | Agent | gate_result Values |
 |-------|-------------------|

@@ -12,7 +12,7 @@ set -euo pipefail
 #   - workspace : Directory containing the code to audit
 # OUTPUT_FILES:
 #   - security-report.md  : Detailed security findings
-#   - security-result.txt : Contains PASS, FIX, or STOP
+#   - security-result.json : Contains PASS, FIX, or STOP
 # =============================================================================
 
 # Source base library and initialize metadata

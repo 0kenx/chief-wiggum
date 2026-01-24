@@ -12,7 +12,7 @@ set -euo pipefail
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code to test
 # OUTPUT_FILES:
-#   - test-result.txt : Contains PASS, FAIL, or SKIP
+#   - test-result.json : Contains PASS, FAIL, or SKIP
 # =============================================================================
 
 # Source base library and initialize metadata

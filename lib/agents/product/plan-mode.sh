@@ -13,7 +13,7 @@ set -euo pipefail
 #   - prd.md : Product Requirements Document containing task to plan
 # OUTPUT_FILES:
 #   - .ralph/plans/TASK-xxx.md : The generated implementation plan (TASK-xxx from input)
-#   - plan-result.txt          : Contains PASS or FAIL
+#   - plan-result.json         : Contains PASS or FAIL
 # =============================================================================
 
 # Source base library and initialize metadata
