@@ -55,8 +55,8 @@ fi
 # Collect active workers using shared library
 worker_count=0
 running_count=0
-declare -a worker_pids
-declare -a worker_names
+declare -a worker_pids=()
+declare -a worker_names=()
 
 # Count total workers with PID files
 for worker_dir in "$RALPH_DIR/workers"/worker-*; do

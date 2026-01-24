@@ -51,7 +51,7 @@ source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
 source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
 
 # Phase timing tracking
-declare -gA PHASE_TIMINGS
+declare -gA PHASE_TIMINGS=()
 
 _phase_start() {
     local phase="$1"

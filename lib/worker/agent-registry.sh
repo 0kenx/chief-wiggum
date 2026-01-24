@@ -19,6 +19,10 @@
 #   - run_sub_agent() - Execution only, for nested agents (no lifecycle management)
 set -euo pipefail
 
+# Prevent double-sourcing (protects global lifecycle state from being reset)
+[ -n "${_AGENT_REGISTRY_LOADED:-}" ] && return 0
+_AGENT_REGISTRY_LOADED=1
+
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"

@@ -97,6 +97,9 @@ No CRITICAL, HIGH, or MEDIUM security findings were present in the report.
     _FIX_REPORT_FILE="$report_file"
     _FIX_STATUS_FILE="$status_file"
 
+    # Create stable symlink so prompts can reference a known report path
+    ln -sf "$(basename "$report_file")" "$worker_dir/reports/security-report.md"
+
     log "Starting security fix loop (max $max_iterations iterations, $max_turns turns/session)"
 
     # Run the fix loop
@@ -136,8 +139,8 @@ SECURITY FIX AGENT:
 You fix security vulnerabilities identified by the security audit.
 
 WORKSPACE: $workspace
-REPORT: ../security-report.md (read-only - contains findings to fix)
-STATUS: ../fix-status.md (update as you fix)
+REPORT: ../reports/security-report.md (read-only - contains findings to fix)
+STATUS: ../reports/fix-status.md (update as you fix)
 
 ## Fix Philosophy
 
@@ -225,8 +228,8 @@ Fix security vulnerabilities from the audit report.
 
 ## Process
 
-1. **Read the report**: @../security-report.md - understand the vulnerabilities
-2. **Check status**: @../fix-status.md - skip [x] items, fix [ ] items
+1. **Read the report**: @../reports/security-report.md - understand the vulnerabilities
+2. **Check status**: @../reports/fix-status.md - skip [x] items, fix [ ] items
 3. **For each pending finding** (in priority order: CRITICAL → HIGH → MEDIUM):
    - Read the vulnerability details (location, evidence, remediation)
    - Navigate to the affected file and line
@@ -307,7 +310,7 @@ CONTINUATION CONTEXT (Iteration $iteration):
 
 To understand what has already been fixed:
 - Read @../summaries/fix-$prev_iter-summary.txt for context on previous fixes
-- Check @../fix-status.md to see which findings are already addressed
+- Check @../reports/fix-status.md to see which findings are already addressed
 - Do NOT repeat work that was already completed
 CONTEXT_EOF
         fi
