@@ -156,15 +156,15 @@ test_kanban_status_lifecycle() {
 # =============================================================================
 test_checkpoint_creation() {
     source "$WIGGUM_HOME/lib/core/checkpoint.sh"
+    export RALPH_RUN_ID="e2e-test"
 
     local worker_dir="$TEST_DIR/worker-checkpoint"
-    mkdir -p "$worker_dir/checkpoints"
 
     # Write a checkpoint
     checkpoint_write "$worker_dir" 0 "test-session-123" "in_progress" \
         '["src/main.sh","lib/utils.sh"]' "[]" "[]" ""
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-0.json"
+    local checkpoint_file="$worker_dir/checkpoints/e2e-test/checkpoint-0.json"
     assert_file_exists "$checkpoint_file" "Checkpoint file should be created"
 
     # Validate JSON structure

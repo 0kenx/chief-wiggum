@@ -14,6 +14,7 @@ TEST_DIR=""
 setup() {
     TEST_DIR=$(mktemp -d)
     export LOG_FILE="$TEST_DIR/test.log"
+    export RALPH_RUN_ID="test"
 }
 teardown() {
     rm -rf "$TEST_DIR"
@@ -26,14 +27,14 @@ teardown() {
 test_get_dir_returns_checkpoints_subdir() {
     local result
     result=$(checkpoint_get_dir "$TEST_DIR/worker-TASK-123-abc")
-    assert_equals "$TEST_DIR/worker-TASK-123-abc/checkpoints" "$result" \
-        "checkpoint_get_dir should return worker_dir/checkpoints"
+    assert_equals "$TEST_DIR/worker-TASK-123-abc/checkpoints/test" "$result" \
+        "checkpoint_get_dir should return worker_dir/checkpoints/run_id"
 }
 
 test_get_dir_with_trailing_slash() {
     local result
     result=$(checkpoint_get_dir "$TEST_DIR/worker-dir")
-    assert_equals "$TEST_DIR/worker-dir/checkpoints" "$result" \
+    assert_equals "$TEST_DIR/worker-dir/checkpoints/test" "$result" \
         "checkpoint_get_dir should work without trailing slash"
 }
 
@@ -44,21 +45,21 @@ test_get_dir_with_trailing_slash() {
 test_get_path_returns_correct_filename() {
     local result
     result=$(checkpoint_get_path "$TEST_DIR/worker-TASK-42-xyz" "3")
-    assert_equals "$TEST_DIR/worker-TASK-42-xyz/checkpoints/checkpoint-3.json" "$result" \
+    assert_equals "$TEST_DIR/worker-TASK-42-xyz/checkpoints/test/checkpoint-3.json" "$result" \
         "checkpoint_get_path should return checkpoint-N.json in checkpoints dir"
 }
 
 test_get_path_iteration_zero() {
     local result
     result=$(checkpoint_get_path "$TEST_DIR/myworker" "0")
-    assert_equals "$TEST_DIR/myworker/checkpoints/checkpoint-0.json" "$result" \
+    assert_equals "$TEST_DIR/myworker/checkpoints/test/checkpoint-0.json" "$result" \
         "checkpoint_get_path should handle iteration 0"
 }
 
 test_get_path_large_iteration() {
     local result
     result=$(checkpoint_get_path "$TEST_DIR/myworker" "99")
-    assert_equals "$TEST_DIR/myworker/checkpoints/checkpoint-99.json" "$result" \
+    assert_equals "$TEST_DIR/myworker/checkpoints/test/checkpoint-99.json" "$result" \
         "checkpoint_get_path should handle large iteration numbers"
 }
 
@@ -107,7 +108,7 @@ test_write_creates_checkpoint_file() {
     checkpoint_write "$worker_dir" "1" "session-abc123" "in_progress" \
         '["file1.sh","file2.sh"]' '["task1"]' '["step1"]' "Test summary"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     assert_file_exists "$checkpoint_file" \
         "checkpoint_write should create checkpoint file"
 }
@@ -119,7 +120,7 @@ test_write_produces_valid_json() {
     checkpoint_write "$worker_dir" "1" "session-def456" "completed" \
         '["a.sh"]' '["done"]' '["next"]' "Summary text"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local valid
     valid=$(jq empty "$checkpoint_file" 2>&1 && echo "valid" || echo "invalid")
     assert_equals "valid" "$valid" \
@@ -132,7 +133,7 @@ test_write_stores_correct_version() {
 
     checkpoint_write "$worker_dir" "2" "sess-001" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-2.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-2.json"
     local version
     version=$(jq -r '.version' "$checkpoint_file")
     assert_equals "1.0" "$version" \
@@ -145,7 +146,7 @@ test_write_stores_iteration() {
 
     checkpoint_write "$worker_dir" "5" "sess-002" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-5.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-5.json"
     local iteration
     iteration=$(jq -r '.iteration' "$checkpoint_file")
     assert_equals "5" "$iteration" \
@@ -158,7 +159,7 @@ test_write_stores_session_id() {
 
     checkpoint_write "$worker_dir" "1" "my-session-xyz" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local session_id
     session_id=$(jq -r '.session_id' "$checkpoint_file")
     assert_equals "my-session-xyz" "$session_id" \
@@ -171,7 +172,7 @@ test_write_stores_status() {
 
     checkpoint_write "$worker_dir" "1" "sess-003" "completed"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local status
     status=$(jq -r '.status' "$checkpoint_file")
     assert_equals "completed" "$status" \
@@ -185,7 +186,7 @@ test_write_stores_files_modified() {
     checkpoint_write "$worker_dir" "1" "sess-004" "in_progress" \
         '["src/main.sh","lib/util.sh"]'
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local count
     count=$(jq '.files_modified | length' "$checkpoint_file")
     assert_equals "2" "$count" \
@@ -204,7 +205,7 @@ test_write_stores_completed_tasks() {
     checkpoint_write "$worker_dir" "1" "sess-005" "in_progress" \
         '[]' '["Implemented feature X","Fixed bug Y"]'
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local count
     count=$(jq '.completed_tasks | length' "$checkpoint_file")
     assert_equals "2" "$count" \
@@ -218,7 +219,7 @@ test_write_stores_next_steps() {
     checkpoint_write "$worker_dir" "1" "sess-006" "in_progress" \
         '[]' '[]' '["Add tests","Update docs"]'
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local count
     count=$(jq '.next_steps | length' "$checkpoint_file")
     assert_equals "2" "$count" \
@@ -232,7 +233,7 @@ test_write_stores_prose_summary() {
     checkpoint_write "$worker_dir" "1" "sess-007" "in_progress" \
         '[]' '[]' '[]' "This is a detailed prose summary of the work done."
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local summary
     summary=$(jq -r '.prose_summary' "$checkpoint_file")
     assert_equals "This is a detailed prose summary of the work done." "$summary" \
@@ -245,7 +246,7 @@ test_write_defaults_empty_arrays() {
 
     checkpoint_write "$worker_dir" "1" "sess-008" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local files_count
     files_count=$(jq '.files_modified | length' "$checkpoint_file")
     assert_equals "0" "$files_count" \
@@ -268,7 +269,7 @@ test_write_extracts_task_id_from_worker_dir() {
 
     checkpoint_write "$worker_dir" "1" "sess-009" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local task_id
     task_id=$(jq -r '.task_id' "$checkpoint_file")
     assert_equals "PROJ-789" "$task_id" \
@@ -281,7 +282,7 @@ test_write_stores_worker_id() {
 
     checkpoint_write "$worker_dir" "1" "sess-010" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local worker_id
     worker_id=$(jq -r '.worker_id' "$checkpoint_file")
     assert_equals "worker-ABC-100-hashval" "$worker_id" \
@@ -294,7 +295,7 @@ test_write_stores_timestamp() {
 
     checkpoint_write "$worker_dir" "1" "sess-011" "in_progress"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     local timestamp
     timestamp=$(jq -r '.timestamp' "$checkpoint_file")
     assert_not_equals "" "$timestamp" \
@@ -371,7 +372,7 @@ test_read_nested_field() {
 
 test_read_nonexistent_checkpoint_fails() {
     local worker_dir="$TEST_DIR/worker-READ-6-pqr"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local result
     result=$(checkpoint_read "$worker_dir" "999" 2>/dev/null) || true
@@ -405,7 +406,7 @@ test_get_latest_single_checkpoint() {
 
     local latest
     latest=$(checkpoint_get_latest "$worker_dir")
-    assert_equals "$worker_dir/checkpoints/checkpoint-1.json" "$latest" \
+    assert_equals "$worker_dir/checkpoints/test/checkpoint-1.json" "$latest" \
         "checkpoint_get_latest should return only checkpoint"
 }
 
@@ -419,7 +420,7 @@ test_get_latest_multiple_checkpoints() {
 
     local latest
     latest=$(checkpoint_get_latest "$worker_dir")
-    assert_equals "$worker_dir/checkpoints/checkpoint-3.json" "$latest" \
+    assert_equals "$worker_dir/checkpoints/test/checkpoint-3.json" "$latest" \
         "checkpoint_get_latest should return highest iteration"
 }
 
@@ -433,13 +434,13 @@ test_get_latest_nonsequential_iterations() {
 
     local latest
     latest=$(checkpoint_get_latest "$worker_dir")
-    assert_equals "$worker_dir/checkpoints/checkpoint-10.json" "$latest" \
+    assert_equals "$worker_dir/checkpoints/test/checkpoint-10.json" "$latest" \
         "checkpoint_get_latest should handle nonsequential iterations"
 }
 
 test_get_latest_no_checkpoints_fails() {
     local worker_dir="$TEST_DIR/worker-LAT-4-jkl"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local latest
     latest=$(checkpoint_get_latest "$worker_dir" 2>/dev/null) || true
@@ -477,7 +478,7 @@ test_get_latest_iteration_returns_number() {
 
 test_get_latest_iteration_no_checkpoints() {
     local worker_dir="$TEST_DIR/worker-ITER-2-def"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local iteration
     iteration=$(checkpoint_get_latest_iteration "$worker_dir")
@@ -547,7 +548,7 @@ test_list_sorted_output() {
 
 test_list_empty_when_no_checkpoints() {
     local worker_dir="$TEST_DIR/worker-LIST-3-ghi"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local output
     output=$(checkpoint_list "$worker_dir")
@@ -610,7 +611,7 @@ test_update_status_to_interrupted() {
 
 test_update_status_nonexistent_fails() {
     local worker_dir="$TEST_DIR/worker-STAT-4-jkl"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local result=0
     checkpoint_update_status "$worker_dir" "99" "completed" 2>/dev/null || result=$?
@@ -684,7 +685,7 @@ test_update_summary_multiline() {
 
 test_update_summary_nonexistent_checkpoint_fails() {
     local worker_dir="$TEST_DIR/worker-SUM-3-ghi"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local summary_file="$TEST_DIR/summary_no_cp.txt"
     echo "orphan summary" > "$summary_file"
@@ -778,7 +779,7 @@ test_update_supervisor_empty_guidance() {
 
 test_update_supervisor_nonexistent_fails() {
     local worker_dir="$TEST_DIR/worker-SUP-5-mno"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local result=0
     checkpoint_update_supervisor "$worker_dir" "99" "STOP" "no checkpoint" 2>/dev/null || result=$?
@@ -894,7 +895,7 @@ test_from_summary_basic() {
 
     checkpoint_from_summary "$worker_dir" "1" "sess-from01" "completed"
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     assert_file_exists "$checkpoint_file" \
         "checkpoint_from_summary should create checkpoint file"
 
@@ -1006,7 +1007,7 @@ test_exists_returns_true_when_present() {
 
 test_exists_returns_false_when_missing() {
     local worker_dir="$TEST_DIR/worker-EXIST-2-def"
-    mkdir -p "$worker_dir/checkpoints"
+    mkdir -p "$worker_dir/checkpoints/test"
 
     local result=0
     checkpoint_exists "$worker_dir" "42" || result=$?
@@ -1060,7 +1061,7 @@ test_write_invalid_json_arrays_still_writes() {
     checkpoint_write "$worker_dir" "1" "sess-err01" "in_progress" \
         '["valid"]' '["also valid"]' '["fine"]'
 
-    local checkpoint_file="$worker_dir/checkpoints/checkpoint-1.json"
+    local checkpoint_file="$worker_dir/checkpoints/test/checkpoint-1.json"
     assert_file_exists "$checkpoint_file" \
         "checkpoint_write should create file with valid array arguments"
 }

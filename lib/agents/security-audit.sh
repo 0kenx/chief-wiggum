@@ -110,7 +110,7 @@ _audit_completion_check() {
     local worker_dir
     worker_dir=$(agent_get_worker_dir)
     local latest_log
-    latest_log=$(find "$worker_dir/logs" -maxdepth 1 -name "audit-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    latest_log=$(find "$worker_dir/logs" -name "audit-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
         if grep -qP '<result>(PASS|FIX|STOP)</result>' "$latest_log" 2>/dev/null; then

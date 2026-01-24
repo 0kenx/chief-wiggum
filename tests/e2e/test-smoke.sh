@@ -140,10 +140,11 @@ test_start "Checkpoint creation"
     worker_dir=".ralph/workers/worker-TASK-001-12345"
     mkdir -p "$worker_dir"
 
+    export RALPH_RUN_ID="smoke-test"
     checkpoint_write "$worker_dir" 0 "test-session" "in_progress" '["file1.txt"]' '["task1"]' '["step1"]' "Test summary"
 
-    [ -f "$worker_dir/checkpoints/checkpoint-0.json" ] && \
-    grep -q '"iteration": 0' "$worker_dir/checkpoints/checkpoint-0.json"
+    [ -f "$worker_dir/checkpoints/smoke-test/checkpoint-0.json" ] && \
+    grep -q '"iteration": 0' "$worker_dir/checkpoints/smoke-test/checkpoint-0.json"
 ) && test_pass || test_fail "Checkpoint not created"
 
 # Test 10: Event emission

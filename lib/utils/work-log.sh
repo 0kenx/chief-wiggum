@@ -2,9 +2,10 @@
 # =============================================================================
 # work-log.sh - Structured markdown work logs per iteration
 #
-# Creates human-readable markdown files documenting each iteration's work:
-#   work-log/index.md         - Links to all iterations
-#   work-log/iteration-N.md   - Per-iteration structured log
+# Creates human-readable markdown files documenting each iteration's work,
+# namespaced per run using RALPH_RUN_ID:
+#   work-log/{run_id}/index.md         - Links to all iterations in this run
+#   work-log/{run_id}/iteration-N.md   - Per-iteration structured log
 #
 # Provides:
 #   work_log_init(output_dir)
@@ -20,22 +21,23 @@ _WORK_LOG_LOADED=1
 # Args:
 #   output_dir - Worker output directory (contains logs/, summaries/, etc.)
 #
+# Uses RALPH_RUN_ID env var to namespace work logs per run.
+#
 # Returns: 0 on success
 work_log_init() {
     local output_dir="$1"
-    local log_dir="$output_dir/work-log"
+    local run_id="${RALPH_RUN_ID:-default}"
+    local log_dir="$output_dir/work-log/$run_id"
 
     mkdir -p "$log_dir"
 
-    # Create index.md if it doesn't exist
-    if [ ! -f "$log_dir/index.md" ]; then
-        cat > "$log_dir/index.md" << 'EOF'
-# Work Log
+    # Create index.md for this run
+    cat > "$log_dir/index.md" << EOF
+# Work Log: $run_id
 
 | Iteration | Timestamp | Exit Code | Summary |
 |-----------|-----------|-----------|---------|
 EOF
-    fi
 }
 
 # Write a per-iteration markdown log file
@@ -57,7 +59,8 @@ work_log_write_iteration() {
     local summary_text="$5"
     local log_file="${6:-}"
 
-    local log_dir="$output_dir/work-log"
+    local run_id="${RALPH_RUN_ID:-default}"
+    local log_dir="$output_dir/work-log/$run_id"
     local iter_file="$log_dir/iteration-${iteration}.md"
     local timestamp
     timestamp=$(date -Iseconds)

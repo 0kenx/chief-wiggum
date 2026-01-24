@@ -517,7 +517,7 @@ agent_write_result() {
     local iterations_completed=0
     if [ -d "$worker_dir/logs" ]; then
         local count
-        count=$(find "$worker_dir/logs" -maxdepth 1 \( -name "iteration-*.log" -o -name "validation-*.log" -o -name "fix-*.log" \) 2>/dev/null | wc -l || true)
+        count=$(find "$worker_dir/logs" \( -name "iteration-*.log" -o -name "validation-*.log" -o -name "fix-*.log" \) ! -name "*summary*" 2>/dev/null | wc -l || true)
         iterations_completed=$(echo "$count" | tr -d '[:space:]')
     fi
     # Ensure numeric values
@@ -816,7 +816,7 @@ agent_extract_and_write_result() {
     # Find the latest log file (excluding summary logs)
     # Pattern matches both old format (prefix-N.log) and new format (prefix-N-timestamp.log)
     local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "${log_prefix}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    log_file=$(find "$worker_dir/logs" -name "${log_prefix}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
         # Extract report content and save using agent_write_report

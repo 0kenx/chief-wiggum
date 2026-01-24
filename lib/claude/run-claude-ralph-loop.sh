@@ -84,7 +84,12 @@ run_ralph_loop() {
     # Record start time
     local start_time
     start_time=$(date +%s)
-    log "Ralph loop starting (max $max_iterations iterations, $max_turns turns/session)"
+
+    # Generate unique run ID for this execution (namespaces logs, work-log, checkpoints)
+    local run_id="${session_prefix}-${start_time}"
+    export RALPH_RUN_ID="$run_id"
+
+    log "Ralph loop starting (max $max_iterations iterations, $max_turns turns/session, run_id=$run_id)"
 
     # Change to workspace
     cd "$workspace" || {
@@ -92,11 +97,11 @@ run_ralph_loop() {
         return 1
     }
 
-    # Create logs and summaries subdirectories
-    mkdir -p "$output_dir/logs"
+    # Create run-namespaced subdirectories
+    mkdir -p "$output_dir/logs/$run_id"
     mkdir -p "$output_dir/summaries"
 
-    # Initialize work log
+    # Initialize work log (uses RALPH_RUN_ID for namespacing)
     work_log_init "$output_dir"
 
     # Track the last session ID for potential final summary
@@ -141,9 +146,9 @@ run_ralph_loop() {
         # Generate timestamp for log filename uniqueness
         local log_timestamp
         log_timestamp=$(date +%s)
-        local log_file="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}.log"
+        local log_file="$output_dir/logs/$run_id/${session_prefix}-${iteration}-${log_timestamp}.log"
 
-        log "Work phase starting (see logs/${session_prefix}-${iteration}-${log_timestamp}.log for details)"
+        log "Work phase starting (see logs/$run_id/${session_prefix}-${iteration}-${log_timestamp}.log for details)"
 
         # Log initial prompt to iteration log as JSON
         {
@@ -233,7 +238,7 @@ Please provide your summary based on the conversation so far, following this str
         log "Requesting summary for session $session_id"
 
         # Capture full JSON output to logs directory (same format as work phase)
-        local summary_log="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}-summary.log"
+        local summary_log="$output_dir/logs/$run_id/${session_prefix}-${iteration}-${log_timestamp}-summary.log"
         local summary_txt="$output_dir/summaries/${session_prefix}-${iteration}-summary.txt"
 
         local summary_exit_code=0

@@ -157,15 +157,18 @@ test_ralph_loop_creates_checkpoints() {
         "_test_user_prompt_4" "_test_never_complete_2" \
         2 5 "$OUTPUT_DIR" "test" || true
 
-    # Checkpoint files should exist
-    assert_file_exists "$OUTPUT_DIR/checkpoints/checkpoint-0.json" \
+    # Checkpoint files should exist (namespaced by run_id)
+    local checkpoint_dir
+    checkpoint_dir=$(find "$OUTPUT_DIR/checkpoints" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+    assert_not_empty "$checkpoint_dir" "Checkpoint run directory should be created"
+    assert_file_exists "$checkpoint_dir/checkpoint-0.json" \
         "Checkpoint for iteration 0 should exist"
-    assert_file_exists "$OUTPUT_DIR/checkpoints/checkpoint-1.json" \
+    assert_file_exists "$checkpoint_dir/checkpoint-1.json" \
         "Checkpoint for iteration 1 should exist"
 
     # Verify checkpoint JSON is valid
     local status
-    status=$(jq -r '.status' "$OUTPUT_DIR/checkpoints/checkpoint-0.json" 2>/dev/null)
+    status=$(jq -r '.status' "$checkpoint_dir/checkpoint-0.json" 2>/dev/null)
     assert_not_equals "" "$status" "Checkpoint should have a status field"
 }
 
@@ -238,9 +241,13 @@ test_ralph_loop_creates_work_log() {
         "_test_user_prompt_7" "_test_never_complete_5" \
         1 5 "$OUTPUT_DIR" "test" || true
 
-    assert_file_exists "$OUTPUT_DIR/work-log/index.md" \
+    # Work log is namespaced by run_id (RALPH_RUN_ID is exported from ralph loop)
+    local work_log_dir
+    work_log_dir=$(find "$OUTPUT_DIR/work-log" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+    assert_not_empty "$work_log_dir" "Work log run directory should be created"
+    assert_file_exists "$work_log_dir/index.md" \
         "Work log index should be created"
-    assert_file_contains "$OUTPUT_DIR/work-log/index.md" "Work Log" \
+    assert_file_contains "$work_log_dir/index.md" "Work Log" \
         "Work log index should have header"
 }
 

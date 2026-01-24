@@ -253,26 +253,22 @@ convert_dir() {
 
     local converted=0
 
-    # 1. Process iteration logs in numerical order
-    if ls "$logs_dir"/iteration-*.log >/dev/null 2>&1; then
-        for log_file in $(ls "$logs_dir"/iteration-*.log | sort -t- -k2 -n); do
+    # 1. Process iteration logs in time order (searches subdirectories)
+    while IFS= read -r log_file; do
+        [ -f "$log_file" ] || continue
+        local_name=$(basename "$log_file" .log)
+        convert_log "$log_file" "$conv_dir/${local_name}.md"
+        ((converted++)) || true
+    done < <(find "$logs_dir" -name "iteration-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -n | cut -d' ' -f2-)
+
+    # 2. Process sub-agent logs (audit, test, docs, etc.) in time order
+    for prefix in audit test docs security fix validation; do
+        while IFS= read -r log_file; do
             [ -f "$log_file" ] || continue
             local_name=$(basename "$log_file" .log)
             convert_log "$log_file" "$conv_dir/${local_name}.md"
             ((converted++)) || true
-        done
-    fi
-
-    # 2. Process sub-agent logs (audit, test, docs, etc.)
-    for prefix in audit test docs security fix validation; do
-        if ls "$logs_dir"/${prefix}-*.log >/dev/null 2>&1; then
-            for log_file in $(ls "$logs_dir"/${prefix}-*.log | sort -t- -k2 -n); do
-                [ -f "$log_file" ] || continue
-                local_name=$(basename "$log_file" .log)
-                convert_log "$log_file" "$conv_dir/${local_name}.md"
-                ((converted++)) || true
-            done
-        fi
+        done < <(find "$logs_dir" -name "${prefix}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -n | cut -d' ' -f2-)
     done
 
     echo "Converted $converted log files to conversations in $conv_dir" >&2

@@ -195,7 +195,12 @@ run_ralph_loop_supervised() {
     # Record start time
     local start_time
     start_time=$(date +%s)
-    log "Supervised ralph loop starting (max $max_iterations iterations, supervisor every $supervisor_interval)"
+
+    # Generate unique run ID for this execution (namespaces logs, work-log, checkpoints)
+    local run_id="${session_prefix}-${start_time}"
+    export RALPH_RUN_ID="$run_id"
+
+    log "Supervised ralph loop starting (max $max_iterations iterations, supervisor every $supervisor_interval, run_id=$run_id)"
 
     # Change to workspace
     cd "$workspace" || {
@@ -203,8 +208,8 @@ run_ralph_loop_supervised() {
         return 1
     }
 
-    # Create directory structure
-    mkdir -p "$output_dir/logs"
+    # Create run-namespaced directory structure
+    mkdir -p "$output_dir/logs/$run_id"
     mkdir -p "$output_dir/summaries"
     mkdir -p "$output_dir/supervisors"
 
@@ -239,9 +244,9 @@ run_ralph_loop_supervised() {
         # Generate timestamp for log filename uniqueness
         local log_timestamp
         log_timestamp=$(date +%s)
-        local log_file="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}.log"
+        local log_file="$output_dir/logs/$run_id/${session_prefix}-${iteration}-${log_timestamp}.log"
 
-        log "Work phase starting (see logs/${session_prefix}-${iteration}-${log_timestamp}.log for details)"
+        log "Work phase starting (see logs/$run_id/${session_prefix}-${iteration}-${log_timestamp}.log for details)"
 
         # Log initial prompt to iteration log as JSON
         {
@@ -333,7 +338,7 @@ Please provide your summary based on the conversation so far, following this str
         log "Requesting summary for session $session_id"
 
         # Capture full JSON output to logs directory
-        local summary_log="$output_dir/logs/${session_prefix}-${iteration}-${log_timestamp}-summary.log"
+        local summary_log="$output_dir/logs/$run_id/${session_prefix}-${iteration}-${log_timestamp}-summary.log"
         local summary_txt="$output_dir/summaries/${session_prefix}-${iteration}-summary.txt"
 
         local summary_exit_code=0
@@ -499,24 +504,26 @@ Please provide your summary based on the conversation so far, following this str
                         return 1
                     fi
 
-                    log "Supervisor: RESTART - archiving run-$((restart_count - 1)) and resetting to iteration 0"
-                    echo "[$(date -Iseconds)] SUPERVISOR_RESTART iteration=$iteration restart_count=$restart_count" >> "$output_dir/worker.log" 2>/dev/null || true
+                    log "Supervisor: RESTART - archiving run $run_id and resetting to iteration 0"
+                    echo "[$(date -Iseconds)] SUPERVISOR_RESTART iteration=$iteration restart_count=$restart_count run_id=$run_id" >> "$output_dir/worker.log" 2>/dev/null || true
 
-                    # Archive current run
+                    # Archive current run's logs and summaries
                     local archive_dir="$output_dir/supervisors/run-$((restart_count - 1))"
                     mkdir -p "$archive_dir"
-
-                    # Move logs and summaries to archive
-                    mv "$output_dir/logs/"* "$archive_dir/" 2>/dev/null || true
+                    mv "$output_dir/logs/$run_id" "$archive_dir/" 2>/dev/null || true
                     mv "$output_dir/summaries/"* "$archive_dir/" 2>/dev/null || true
 
-                    # Re-create directories
-                    mkdir -p "$output_dir/logs"
+                    # Generate new run ID for the restart
+                    run_id="${session_prefix}-$(date +%s)"
+                    export RALPH_RUN_ID="$run_id"
+
+                    # Create fresh directories for new run
+                    mkdir -p "$output_dir/logs/$run_id"
                     mkdir -p "$output_dir/summaries"
 
                     # Reset iteration
                     iteration=0
-                    log "Restarted loop - beginning run-$restart_count with supervisor guidance"
+                    log "Restarted loop - beginning run $run_id (restart_count=$restart_count) with supervisor guidance"
                     ;;
             esac
         fi

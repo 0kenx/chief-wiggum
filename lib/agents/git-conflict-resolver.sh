@@ -54,7 +54,7 @@ agent_run() {
 
     # Clean up old resolution files before re-running
     rm -f "$worker_dir/reports/resolution-summary.md"
-    rm -f "$worker_dir/logs/resolve-"*.log
+    find "$worker_dir/logs" -name "resolve-*.log" -delete 2>/dev/null || true
     rm -f "$worker_dir/summaries/resolve-"*.txt
 
     # Check for conflicts
@@ -246,7 +246,7 @@ _extract_resolution_summary() {
 
     # Find the latest resolve log (excluding summary logs)
     local log_file
-    log_file=$(find "$worker_dir/logs" -maxdepth 1 -name "resolve-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    log_file=$(find "$worker_dir/logs" -name "resolve-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     local report_content=""
 

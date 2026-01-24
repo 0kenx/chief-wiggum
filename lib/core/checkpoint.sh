@@ -10,13 +10,27 @@ source "$WIGGUM_HOME/lib/core/logger.sh"
 # Checkpoint schema version
 CHECKPOINT_VERSION="1.0"
 
-# Get checkpoint directory for a worker
+# Get checkpoint directory for a worker (namespaced by run ID)
 #
 # Args:
 #   worker_dir - Worker directory path
 #
-# Returns: Checkpoint directory path
+# Uses RALPH_RUN_ID env var to namespace checkpoints per run.
+#
+# Returns: Checkpoint directory path for the current run
 checkpoint_get_dir() {
+    local worker_dir="$1"
+    local run_id="${RALPH_RUN_ID:-default}"
+    echo "$worker_dir/checkpoints/$run_id"
+}
+
+# Get the base checkpoint directory (all runs)
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: Base checkpoint directory path
+checkpoint_get_base_dir() {
     local worker_dir="$1"
     echo "$worker_dir/checkpoints"
 }
@@ -137,7 +151,7 @@ checkpoint_read() {
     fi
 }
 
-# Get the latest checkpoint file
+# Get the latest checkpoint file (searches across all runs)
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -145,18 +159,16 @@ checkpoint_read() {
 # Returns: Path to latest checkpoint file, or empty if none
 checkpoint_get_latest() {
     local worker_dir="$1"
-    local checkpoint_dir
-    checkpoint_dir=$(checkpoint_get_dir "$worker_dir")
+    local base_dir
+    base_dir=$(checkpoint_get_base_dir "$worker_dir")
 
-    if [ ! -d "$checkpoint_dir" ]; then
+    if [ ! -d "$base_dir" ]; then
         return 1
     fi
 
-    # Find checkpoint with highest iteration number
-    find "$checkpoint_dir" -maxdepth 1 -name "checkpoint-*.json" -printf '%f\n' 2>/dev/null | \
-        sort -t'-' -k2 -n | tail -1 | while read -r file; do
-            echo "$checkpoint_dir/$file"
-        done
+    # Find the most recently modified checkpoint across all run subdirectories
+    find "$base_dir" -name "checkpoint-*.json" -printf '%T@ %p\n' 2>/dev/null | \
+        sort -rn | head -1 | cut -d' ' -f2-
 }
 
 # Get the latest iteration number from checkpoints
@@ -186,31 +198,32 @@ checkpoint_get_latest_iteration() {
     jq -r '.iteration // -1' "$latest_file" 2>/dev/null || echo "-1"
 }
 
-# List all checkpoints for a worker
+# List all checkpoints for a worker (searches across all runs)
 #
 # Args:
 #   worker_dir - Worker directory path
 #
-# Returns: List of iteration numbers with their status
+# Returns: List of run_id/iteration numbers with their status
 checkpoint_list() {
     local worker_dir="$1"
-    local checkpoint_dir
-    checkpoint_dir=$(checkpoint_get_dir "$worker_dir")
+    local base_dir
+    base_dir=$(checkpoint_get_base_dir "$worker_dir")
 
-    if [ ! -d "$checkpoint_dir" ]; then
+    if [ ! -d "$base_dir" ]; then
         return 0
     fi
 
-    for checkpoint_file in "$checkpoint_dir"/checkpoint-*.json; do
+    find "$base_dir" -name "checkpoint-*.json" -print 2>/dev/null | sort | while read -r checkpoint_file; do
         [ -f "$checkpoint_file" ] || continue
 
-        local iteration status timestamp
+        local iteration status timestamp run_dir
         iteration=$(jq -r '.iteration' "$checkpoint_file" 2>/dev/null)
         status=$(jq -r '.status' "$checkpoint_file" 2>/dev/null)
         timestamp=$(jq -r '.timestamp' "$checkpoint_file" 2>/dev/null)
+        run_dir=$(basename "$(dirname "$checkpoint_file")")
 
-        echo "$iteration $status $timestamp"
-    done | sort -n
+        echo "$run_dir/$iteration $status $timestamp"
+    done
 }
 
 # Update checkpoint status
