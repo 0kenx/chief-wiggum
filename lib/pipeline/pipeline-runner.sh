@@ -168,16 +168,7 @@ _pipeline_run_step() {
         local fix_agent
         fix_agent=$(pipeline_get_fix "$idx" ".agent")
         if [ -n "$fix_agent" ]; then
-            if _handle_fix_retry "$idx" "$worker_dir" "$project_dir" "$workspace"; then
-                gate_result="PASS"
-            else
-                # Fix failed - check if blocking
-                if [ "$blocking" = "true" ]; then
-                    _phase_end "$step_id"
-                    unset WIGGUM_STEP_ID
-                    return 1
-                fi
-            fi
+            gate_result=$(_handle_fix_retry "$idx" "$worker_dir" "$project_dir" "$workspace")
         else
             # No fix agent configured, treat FIX as failure for blocking
             if [ "$blocking" = "true" ]; then
@@ -209,7 +200,11 @@ _pipeline_run_step() {
     return 0
 }
 
-# Handle FIX retry loop: run fix agent, re-verify, up to max_attempts
+# Handle FIX retry loop
+#
+# Behaviour: agentA returned FIX. Deduct max_attempts, run fix agent.
+# If max_attempts > 0 after deduction, re-run agentA. If agentA returns
+# FIX again, repeat. If max_attempts reaches 0, continue to next step.
 #
 # Args:
 #   idx         - Step index
@@ -217,66 +212,71 @@ _pipeline_run_step() {
 #   project_dir - Project directory
 #   workspace   - Workspace directory
 #
-# Returns: 0 if fix succeeded (PASS on re-verify), 1 if exhausted
+# Outputs: final gate result to stdout (from verify or fix agent's result)
 _handle_fix_retry() {
     local idx="$1"
     local worker_dir="$2"
     local project_dir="$3"
     local workspace="$4"
 
-    local step_id step_agent step_readonly fix_agent max_attempts fix_commit
+    local step_id step_agent step_readonly fix_id fix_agent max_attempts fix_commit
     step_id=$(pipeline_get "$idx" ".id")
     step_agent=$(pipeline_get "$idx" ".agent")
     step_readonly=$(pipeline_get "$idx" ".readonly" "false")
+    fix_id=$(pipeline_get_fix "$idx" ".id")
     fix_agent=$(pipeline_get_fix "$idx" ".agent")
     max_attempts=$(pipeline_get_fix "$idx" ".max_attempts" "2")
     fix_commit=$(pipeline_get_fix "$idx" ".commit_after" "true")
 
-    local attempt=1
-    while [ $attempt -le "$max_attempts" ]; do
-        log "Fix attempt $attempt/$max_attempts for step '$step_id' using agent '$fix_agent'"
+    local _fix_result="CONTINUE"
+    local attempt=0
+
+    while true; do
+        ((++attempt))
+        ((max_attempts--))
+
+        log "Fix attempt $attempt for step '$step_id' using agent '$fix_agent' (remaining=$max_attempts)" >&2
 
         # Run fix agent (never readonly - it must modify files)
-        export WIGGUM_STEP_ID="${step_id}-fix-${attempt}"
-        run_sub_agent "$fix_agent" "$worker_dir" "$project_dir"
+        export WIGGUM_STEP_ID="${fix_id}-${attempt}"
+        run_sub_agent "$fix_agent" "$worker_dir" "$project_dir" >&2
 
         # Commit fix changes
         if [ "$fix_commit" = "true" ]; then
-            _commit_subagent_changes "$workspace" "$fix_agent"
+            _commit_subagent_changes "$workspace" "$fix_agent" >&2
+        fi
+
+        # If no attempts remaining, do not re-run agentA - pass fix agent's result on
+        if [ "$max_attempts" -le 0 ]; then
+            _fix_result=$(agent_read_step_result "$worker_dir" "${fix_id}-${attempt}")
+            log "Fix attempts exhausted for step '$step_id', passing fix result: $_fix_result" >&2
+            break
         fi
 
         # Re-run original agent to verify
         local verify_id="${step_id}-verify-${attempt}"
         export WIGGUM_STEP_ID="$verify_id"
 
-        # Set readonly flag for verification if the step is readonly
         export WIGGUM_STEP_READONLY="$step_readonly"
-        run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
+        run_sub_agent "$step_agent" "$worker_dir" "$project_dir" >&2
         unset WIGGUM_STEP_READONLY
 
         # Check verification result
         local verify_result
         verify_result=$(agent_read_step_result "$worker_dir" "$verify_id")
-        log "Verify attempt $attempt result: $verify_result"
+        log "Verify attempt $attempt result: $verify_result" >&2
 
-        if [ "$verify_result" = "PASS" ]; then
-            # Promote verify result to canonical step_id
-            log "Fix verified successfully for step '$step_id'"
-            export WIGGUM_STEP_ID="$step_id"
-            return 0
-        elif [ "$verify_result" = "FAIL" ] || [ "$verify_result" = "STOP" ]; then
-            log_error "Verification returned $verify_result after fix - halting retry"
-            export WIGGUM_STEP_ID="$step_id"
-            return 1
+        if [ "$verify_result" != "FIX" ]; then
+            log "Step '$step_id' returned '$verify_result' after fix attempt $attempt" >&2
+            _fix_result="$verify_result"
+            break
         fi
 
-        # Still FIX - try again
-        ((++attempt))
+        # Still FIX - loop again
     done
 
-    log_error "Fix retry exhausted ($max_attempts attempts) for step '$step_id'"
     export WIGGUM_STEP_ID="$step_id"
-    return 1
+    echo "$_fix_result"
 }
 
 # Execute pre or post hook commands for a step

@@ -26,7 +26,7 @@
       "agent": "security-audit",
       "blocking": true,
       "readonly": true,
-      "fix": { "agent": "security-fix", "max_attempts": 2, "commit_after": true }
+      "fix": { "id": "audit-fix", "agent": "security-fix", "max_attempts": 2, "commit_after": true }
     },
     {
       "id": "test",

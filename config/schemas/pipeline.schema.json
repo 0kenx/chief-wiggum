@@ -62,6 +62,11 @@
         "fix": {
           "type": "object",
           "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]*$",
+              "description": "Unique fix step ID used for result files"
+            },
             "agent": {
               "type": "string",
               "description": "Agent to run if result is FIX"
@@ -70,7 +75,7 @@
               "type": "integer",
               "default": 2,
               "minimum": 1,
-              "description": "Max fix+verify cycles"
+              "description": "The maximum number of times the fix agent will be run, if max_attempts is 1, it will not re-run the outer agent upon exit"
             },
             "commit_after": {
               "type": "boolean",
@@ -78,7 +83,7 @@
               "description": "Commit after fix agent"
             }
           },
-          "required": ["agent"]
+          "required": ["id", "agent"]
         },
         "hooks": {
           "type": "object",

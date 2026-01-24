@@ -201,7 +201,7 @@ pipeline_load_builtin_defaults() {
     {"id":"planning","agent":"plan-mode","blocking":false,"readonly":true,"enabled_by":"WIGGUM_PLAN_MODE"},
     {"id":"execution","agent":"task-executor","blocking":true,"config":{"max_iterations":20,"max_turns":50,"supervisor_interval":2}},
     {"id":"summary","agent":"task-summarizer","blocking":false,"readonly":true,"depends_on":"execution"},
-    {"id":"audit","agent":"security-audit","blocking":true,"readonly":true,"fix":{"agent":"security-fix","max_attempts":2,"commit_after":true}},
+    {"id":"audit","agent":"security-audit","blocking":true,"readonly":true,"fix":{"id":"audit-fix","agent":"security-fix","max_attempts":2,"commit_after":true}},
     {"id":"test","agent":"test-coverage","blocking":true,"commit_after":true},
     {"id":"docs","agent":"documentation-writer","blocking":false,"commit_after":true},
     {"id":"validation","agent":"validation-review","blocking":true,"readonly":true}

@@ -220,6 +220,7 @@ test_load_fix_config() {
             "id": "audit-step",
             "agent": "security-audit",
             "fix": {
+                "id": "audit-fix",
                 "agent": "security-fix",
                 "max_attempts": 5,
                 "commit_after": true
