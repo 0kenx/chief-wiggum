@@ -6,6 +6,39 @@ This document describes how agents communicate and share information in Chief Wi
 
 Chief Wiggum agents operate in isolated worker directories but need to share state, results, and context. This protocol defines the communication patterns and file-based interfaces.
 
+## Inter-Agent Data Passing
+
+Agents can pass state and data through two scopes: **sequential** (to the next pipeline step) and **arbitrary** (to any agent regardless of order).
+
+### Sequential: Next Agent in Pipeline (5 mechanisms)
+
+| # | Mechanism | How It Works | Key Location |
+|---|-----------|-------------|--------------|
+| 1 | **Gate result files** | Each agent writes `outputs.gate_result` (PASS/FAIL/FIX/STOP/SKIP) to its epoch-named result JSON. The pipeline runner reads this to decide whether to continue, skip, or trigger a fix loop. | `lib/pipeline/pipeline-runner.sh:160` |
+| 2 | **Step dependencies (`depends_on`)** | A pipeline step declares `"depends_on": "step_id"` in `config/pipeline.json`. If the dependency's gate result is FAIL or UNKNOWN, the step is skipped. | `lib/pipeline/pipeline-runner.sh:68-79` |
+| 3 | **Environment variable inheritance** | Parent exports context vars (`PIPELINE_PLAN_FILE`, `PIPELINE_RESUME_INSTRUCTIONS`, `WIGGUM_STEP_ID`, etc.) that sub-agents inherit via `run_sub_agent()`. | `lib/worker/agent-registry.sh:220-230` |
+| 4 | **Git state globals** | Git operations set shell globals (`GIT_COMMIT_BRANCH`, `GIT_PR_URL`, `GIT_SAFETY_CHECKPOINT_SHA`) consumed by subsequent steps in the same process. | `lib/git/git-operations.sh:72,211,289` |
+| 5 | **Fix-retry loop** | When an agent returns `FIX`, the pipeline invokes a nested fix agent, then re-runs the original agent to verify. State flows: audit result → fix agent → re-audit. | `lib/pipeline/pipeline-runner.sh:216` |
+
+### Arbitrary: Any Agent to Any Agent (7 mechanisms)
+
+| # | Mechanism | How It Works | Key Location |
+|---|-----------|-------------|--------------|
+| 1 | **`agent_comm_*` interface** | Unified lookup API. Any agent calls `agent_comm_path(worker_dir, type)` to resolve paths to another agent's result, report, summary, comments, prd, or workspace. | `lib/core/agent-base.sh:651-708` |
+| 2 | **Result file reads by agent name** | `agent_read_subagent_result(worker_dir, agent_name)` and `agent_find_latest_result()` let any agent read any other agent's epoch-named result JSON. | `lib/core/agent-base.sh:860,428` |
+| 3 | **Shared workspace** | All agents in a task share `worker_dir/workspace/` (a git worktree). Code changes committed by one agent are visible to all subsequent agents. | `lib/worker/agent-registry.sh:376-387` |
+| 4 | **Event log (JSONL)** | Append-only stream at `.ralph/logs/events.jsonl`. Any agent can emit events (`emit_task_started`, `emit_agent_completed`, `emit_pr_created`, etc.) and query by type/task/worker. | `lib/utils/event-emitter.sh:271-311` |
+| 5 | **Checkpoint files** | Structured JSON at `checkpoints/checkpoint-N.json` containing `files_modified`, `completed_tasks`, `next_steps`, and `prose_summary`. Readable by any agent in the worker. | `lib/core/checkpoint.sh:100-113` |
+| 6 | **Kanban status** | Shared `.ralph/kanban.md` with file-locked status markers (`[=]`, `[x]`, `[*]`, `[P]`). Any agent can read task status set by any other agent. | `lib/tasks/task-parser.sh` |
+| 7 | **Reports, summaries, and logs** | Markdown reports (`reports/`), iteration summaries (`summaries/`), and conversation logs (`logs/`) in the shared worker directory are readable by any agent. | worker directory convention |
+
+### Architectural Notes
+
+- **No message broker.** All communication is file-based (POSIX filesystem + `flock` for atomicity).
+- **Worker directory = shared memory.** The worker dir is the namespace boundary for inter-agent state.
+- **Epoch naming prevents collisions.** Multiple runs of the same agent produce distinct result files.
+- **Read-only agents are safe.** `readonly: true` agents get a git checkpoint that is restored after they exit, preventing unintended state leakage.
+
 ## Worker Directory Structure
 
 ```
@@ -94,7 +127,7 @@ report_file=$(agent_find_latest_report "$worker_dir" "engineering.security-audit
 
 ### Gate Result Values
 
-All gate agents produce a `gate_result` field with standardized values:
+All gate agents produce a `gate_result` field with one of four standardized values, PASS, FIX, FAIL, or SKIP.
 
 | Agent | gate_result Values |
 |-------|-------------------|
