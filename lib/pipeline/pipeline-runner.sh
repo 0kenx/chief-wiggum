@@ -151,8 +151,7 @@ _run_inline_agent() {
 
     # Check inline max visits (global count, never resets)
     local visit_key="${parent_id}:${handler_id}"
-    local current_visits=0
-    [[ -v "_PIPELINE_INLINE_VISITS[$visit_key]" ]] && current_visits="${_PIPELINE_INLINE_VISITS[$visit_key]}"
+    local current_visits="${_PIPELINE_INLINE_VISITS[$visit_key]:-0}"
 
     if [ "$handler_max" -gt 0 ] && [ "$current_visits" -ge "$handler_max" ]; then
         log "Inline handler '$handler_id' max ($handler_max) exceeded, resolving on_max"
@@ -221,9 +220,10 @@ pipeline_run_all() {
     step_count=$(pipeline_step_count)
 
     # Initialize visit counters (global for entire workflow)
-    _PIPELINE_VISITS=()
-    _PIPELINE_INLINE_VISITS=()
-    _PIPELINE_ON_MAX_CASCADE=()
+    # Use declare -gA to ensure associative array type is set (required for set -u compatibility)
+    declare -gA _PIPELINE_VISITS=()
+    declare -gA _PIPELINE_INLINE_VISITS=()
+    declare -gA _PIPELINE_ON_MAX_CASCADE=()
 
     local current_idx=0
 
@@ -264,14 +264,13 @@ pipeline_run_all() {
         # Check max visits (global count, never resets)
         local max_visits
         max_visits=$(pipeline_get_max "$current_idx")
-        local visit_count=0
-        [[ -v "_PIPELINE_VISITS[$step_id]" ]] && visit_count="${_PIPELINE_VISITS[$step_id]}"
+        local visit_count="${_PIPELINE_VISITS[$step_id]:-0}"
 
         if [ "$max_visits" -gt 0 ] && [ "$visit_count" -ge "$max_visits" ]; then
             log "Step '$step_id' max visits ($max_visits) exceeded"
 
             # Check for on_max loop: if this step already hit on_max in this cascade, abort
-            if [[ -v "_PIPELINE_ON_MAX_CASCADE[$step_id]" ]] && [ "${_PIPELINE_ON_MAX_CASCADE[$step_id]}" = "1" ]; then
+            if [ "${_PIPELINE_ON_MAX_CASCADE[$step_id]:-0}" = "1" ]; then
                 log_error "Detected on_max loop at step '$step_id', aborting"
                 return 1
             fi
