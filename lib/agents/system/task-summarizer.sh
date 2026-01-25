@@ -4,9 +4,11 @@ set -euo pipefail
 # AGENT METADATA
 # =============================================================================
 # AGENT_TYPE: task-summarizer
-# AGENT_DESCRIPTION: Generates final task summary by resuming the executor's
+# AGENT_DESCRIPTION: Generates final task summary by resuming a prior agent's
 #   Claude session. Produces a comprehensive summary for changelogs and PRs
 #   by extracting structured content from the resumed session output.
+#   The session source is configurable via step-config.json (resume_from key),
+#   defaulting to task-executor for backwards compatibility.
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code (for context)
 # OUTPUT_FILES:
@@ -36,29 +38,35 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # Find session_id from task-executor result
-    local executor_result_file session_id
-    executor_result_file=$(agent_find_latest_result "$worker_dir" "task-executor")
+    # Determine which agent to read session_id from.
+    # Check step-config.json for optional "resume_from" key, default to task-executor.
+    local step_config resume_from_agent
+    step_config=$(agent_read_step_config "$worker_dir")
+    resume_from_agent=$(echo "$step_config" | jq -r '.resume_from // "task-executor"')
 
-    if [ -z "$executor_result_file" ] || [ ! -f "$executor_result_file" ]; then
-        log_warn "No task-executor result found - skipping summary generation"
+    # Find session_id from the configured agent's result
+    local source_result_file session_id
+    source_result_file=$(agent_find_latest_result "$worker_dir" "$resume_from_agent")
+
+    if [ -z "$source_result_file" ] || [ ! -f "$source_result_file" ]; then
+        log_warn "No $resume_from_agent result found - skipping summary generation"
         local outputs_json
         outputs_json=$(jq -n '{gate_result: "SKIP", summary_file: ""}')
         agent_write_result "$worker_dir" "success" 0 "$outputs_json"
         return 0
     fi
 
-    session_id=$(jq -r '.outputs.session_id // ""' "$executor_result_file")
+    session_id=$(jq -r '.outputs.session_id // ""' "$source_result_file")
 
     if [ -z "$session_id" ]; then
-        log_warn "No session_id in task-executor result - skipping summary generation"
+        log_warn "No session_id in $resume_from_agent result - skipping summary generation"
         local outputs_json
         outputs_json=$(jq -n '{gate_result: "SKIP", summary_file: ""}')
         agent_write_result "$worker_dir" "success" 0 "$outputs_json"
         return 0
     fi
 
-    log "Generating final summary by resuming session: $session_id"
+    log "Generating final summary by resuming $resume_from_agent session: $session_id"
 
     # Resume the executor's session with summary prompt
     run_agent_resume "$session_id" \

@@ -37,6 +37,127 @@ agent_output_files() {
 agent_source_core
 agent_source_once
 
+# Source pipeline loader for dynamic config reading
+source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
+
+# Load pipeline configuration and cache step info for prompt generation
+# Sets _PIPELINE_STEPS array with step IDs in order
+_load_pipeline_config() {
+    local project_dir="${1:-$WIGGUM_HOME}"
+
+    # Try to resolve and load pipeline config
+    local pipeline_path
+    pipeline_path=$(pipeline_resolve "$project_dir" "" "")
+
+    if [ -n "$pipeline_path" ] && [ -f "$pipeline_path" ]; then
+        pipeline_load "$pipeline_path" 2>/dev/null || pipeline_load_builtin_defaults
+    else
+        pipeline_load_builtin_defaults
+    fi
+}
+
+# Generate the "Pipeline Steps" table dynamically from loaded pipeline
+# Returns markdown table via stdout
+_generate_steps_table() {
+    local step_count
+    step_count=$(pipeline_step_count)
+
+    echo "| # | Step | Agent | Special Handling |"
+    echo "|---|------|-------|------------------|"
+
+    local i=0
+    local step_num=1
+    while [ "$i" -lt "$step_count" ]; do
+        local step_id agent readonly enabled_by special=""
+        step_id=$(pipeline_get "$i" ".id")
+        agent=$(pipeline_get "$i" ".agent")
+        readonly=$(pipeline_get "$i" ".readonly" "false")
+        enabled_by=$(pipeline_get "$i" ".enabled_by" "")
+
+        # Skip disabled-by-default steps in the table
+        if [ -n "$enabled_by" ]; then
+            i=$((i + 1))
+            continue
+        fi
+
+        # Determine special handling notes
+        if [ "$step_id" = "execution" ]; then
+            special="Cannot resume mid-step"
+        elif [ "$readonly" = "true" ]; then
+            special="Read-only"
+        fi
+
+        echo "| $step_num | \`$step_id\` | $agent | $special |"
+        step_num=$((step_num + 1))
+        i=$((i + 1))
+    done
+}
+
+# Generate the "Decision Criteria" table dynamically from loaded pipeline
+# Returns markdown table via stdout
+_generate_decision_criteria() {
+    local step_count
+    step_count=$(pipeline_step_count)
+
+    echo "| Scenario | Decision |"
+    echo "|----------|----------|"
+
+    # Always start with execution-related criteria
+    echo "| PRD has incomplete \\\`- [ ]\\\` tasks | \\\`execution\\\` |"
+    echo "| PRD says complete but workspace diff contradicts claims | \\\`execution\\\` |"
+
+    # Build criteria for each step after execution
+    local prev_step="execution"
+    local i=0
+    while [ "$i" -lt "$step_count" ]; do
+        local step_id enabled_by
+        step_id=$(pipeline_get "$i" ".id")
+        enabled_by=$(pipeline_get "$i" ".enabled_by" "")
+
+        # Skip disabled-by-default and execution (handled above)
+        if [ -n "$enabled_by" ] || [ "$step_id" = "execution" ]; then
+            i=$((i + 1))
+            continue
+        fi
+
+        # Generate criterion: if prev_step complete but this step never ran
+        if [ "$prev_step" != "execution" ]; then
+            echo "| ${prev_step^} complete, $step_id never ran or has no result file | \\\`$step_id\\\` |"
+        else
+            echo "| Execution complete, $step_id never ran or has no result file | \\\`$step_id\\\` |"
+        fi
+
+        prev_step="$step_id"
+        i=$((i + 1))
+    done
+
+    # Final criteria
+    echo "| All phases complete with outputs | \\\`ABORT\\\` |"
+    echo "| Fundamental issue (impossible task, repeated failures, bad PRD) | \\\`ABORT\\\` |"
+}
+
+# Get list of valid step IDs for the <step> tag validation
+_get_valid_steps() {
+    local step_count
+    step_count=$(pipeline_step_count)
+
+    local steps="execution"  # Always valid
+    local i=0
+    while [ "$i" -lt "$step_count" ]; do
+        local step_id enabled_by
+        step_id=$(pipeline_get "$i" ".id")
+        enabled_by=$(pipeline_get "$i" ".enabled_by" "")
+
+        # Include all non-disabled steps except execution (already added)
+        if [ -z "$enabled_by" ] && [ "$step_id" != "execution" ]; then
+            steps="$steps|$step_id"
+        fi
+        i=$((i + 1))
+    done
+
+    echo "$steps"
+}
+
 # Main entry point
 agent_run() {
     local worker_dir="$1"
@@ -48,6 +169,9 @@ agent_run() {
     export LOG_FILE="$worker_dir/worker.log"
 
     log "Resume-decide agent analyzing previous run..."
+
+    # Load pipeline configuration for dynamic prompt generation
+    _load_pipeline_config "$project_dir"
 
     # Create standard directories
     agent_create_directories "$worker_dir"
@@ -241,14 +365,7 @@ $worker_dir/
 
 ## Pipeline Steps (in execution order)
 
-| # | Step | What It Does | Cannot Resume Mid-Step |
-|---|------|-------------|----------------------|
-| 1 | \`execution\` | Ralph loop: implements PRD tasks | YES - restarts from scratch |
-| 2 | \`audit\` | Security vulnerability scan | No |
-| 3 | \`test\` | Test generation and execution | No |
-| 4 | \`docs\` | Documentation updates | No |
-| 5 | \`validation\` | Code review against PRD | No |
-| 6 | \`finalization\` | Commit and PR creation | No |
+$(_generate_steps_table)
 
 ## Phase Completion Evidence
 
@@ -379,17 +496,7 @@ Read ONLY the conversations relevant to understanding what was accomplished (not
 
 ## Decision Criteria
 
-| Scenario | Decision |
-|----------|----------|
-| PRD has incomplete \`- [ ]\` tasks | \`execution\` |
-| PRD says complete but workspace diff contradicts claims | \`execution\` |
-| Execution complete, audit never ran or has no result file | \`audit\` |
-| Audit complete, test never ran or has no result file | \`test\` |
-| Test complete, docs never ran or has no result file | \`docs\` |
-| Docs complete, validation never ran or has no result file | \`validation\` |
-| Validation complete, no commit/PR created | \`finalization\` |
-| All phases complete with outputs | \`ABORT\` |
-| Fundamental issue (impossible task, repeated failures, bad PRD) | \`ABORT\` |
+$(_generate_decision_criteria)
 
 ## Common Mistakes to Avoid
 
@@ -427,7 +534,7 @@ Read ONLY the conversations relevant to understanding what was accomplished (not
 - Patterns or decisions that should be maintained]
 </instructions>
 
-The <step> tag MUST be exactly one of: execution, audit, test, docs, validation, finalization, ABORT
+The <step> tag MUST be exactly one of the pipeline step IDs shown in the table above, or ABORT
 EOF
 }
 
@@ -460,9 +567,12 @@ _extract_decision() {
     fi
 
     # Extract step value from <step>...</step> (last occurrence, like _extract_result_value)
+    # Use dynamic step list from pipeline config
+    local valid_steps
+    valid_steps=$(_get_valid_steps)
     local step
     step=$(echo "$full_text" | \
-        grep -oP '(?<=<step>)(execution|audit|test|docs|validation|finalization|ABORT)(?=</step>)' 2>/dev/null | \
+        grep -oP "(?<=<step>)(${valid_steps}|ABORT)(?=</step>)" 2>/dev/null | \
         tail -1) || true
 
     if [ -z "$step" ]; then

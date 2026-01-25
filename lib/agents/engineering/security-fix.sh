@@ -25,14 +25,12 @@ agent_required_paths() {
     echo "workspace"
 }
 
-# Pre-run hook: locate upstream security-audit report
+# Pre-run hook: locate upstream security-audit report (optional)
 agent_on_ready() {
     local worker_dir="$1"
+    # Try to find upstream report, but don't fail if missing.
+    # The pipeline handles dependencies via depends_on in config, not hardcoded here.
     _SECURITY_REPORT_FILE=$(agent_find_latest_report "$worker_dir" "security-audit")
-    if [ -z "$_SECURITY_REPORT_FILE" ] || [ ! -f "$_SECURITY_REPORT_FILE" ]; then
-        log_error "No security-audit report found. Run security-audit agent first."
-        return 1
-    fi
     return 0
 }
 
@@ -63,13 +61,12 @@ agent_run() {
         return 1
     fi
 
-    # Verify security report exists (should be set by agent_on_ready)
+    # Check if security report exists (may not exist if security-audit wasn't run)
     if [ -z "$report_file" ] || [ ! -f "$report_file" ]; then
-        log_error "Security report not found"
-        log_error "Run security-audit agent first"
-        FIX_RESULT="FAIL"
-        agent_write_result "$worker_dir" "failure" 1 '{"gate_result":"FAIL"}'
-        return 1
+        log "No security-audit report found - skipping security fix"
+        FIX_RESULT="SKIP"
+        agent_write_result "$worker_dir" "success" 0 '{"gate_result":"SKIP"}'
+        return 0
     fi
 
     # Check if there are any findings to fix

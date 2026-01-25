@@ -166,6 +166,13 @@ _run_inline_agent() {
     export WIGGUM_STEP_ID="$handler_id"
     export WIGGUM_STEP_READONLY="$handler_readonly"
 
+    # Change to workspace directory before running the agent
+    cd "$workspace" || {
+        log_error "Cannot access workspace: $workspace"
+        _PIPELINE_NEXT_IDX=-1
+        return
+    }
+
     log "Running inline agent: $handler_id (agent=$handler_agent, parent=$parent_id)"
     run_sub_agent "$handler_agent" "$worker_dir" "$project_dir"
 
@@ -359,6 +366,14 @@ _pipeline_run_step() {
 
     # Export readonly flag for agent-registry's git checkpoint logic
     export WIGGUM_STEP_READONLY="$step_readonly"
+
+    # Change to workspace directory before running the agent
+    # Claude sessions are stored per-directory in .claude/, so agents must run
+    # from the workspace to access sessions created by the executor
+    cd "$workspace" || {
+        log_error "Cannot access workspace: $workspace"
+        return 1
+    }
 
     # Run the agent
     run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
