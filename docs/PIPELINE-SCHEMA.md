@@ -38,7 +38,7 @@ results default to `PASS -> jump:next, FIX -> jump:prev , FAIL -> abort, SKIP ->
 | `id` | yes | — | Unique step identifier |
 | `agent` | yes | — | Agent type to execute |
 | `max` | no | 0 (unlimited) | Max times this step can be visited |
-| `on_max` | no | `abort` | Jump target when `max` is exceeded |
+| `on_max` | no | `next` | Jump target when `max` is exceeded |
 | `on_result` | no | `{}` | Per-result handlers (see below) |
 | `readonly` | no | `false` | Git checkpoint before, restore after |
 | `enabled_by` | no | — | Env var that must be `"true"` for step to run |
@@ -82,10 +82,10 @@ A handler is one of:
 
 An inline agent handler runs a sub-step. After the inline agent completes:
 - If the inline handler has its own `on_result`, dispatch on the inline agent's result.
-- If no matching handler exists, default to re-running the parent step (implicit `jump:self`
-  on the parent, since the handler was triggered by a result that needed remediation).
+- If no matching handler exists, default to re-running the parent step (implicit `jump:prev`
+  since the handler was triggered by a result that needed remediation).
 
-The `max` on an inline handler bounds how many times that handler can fire per parent visit.
+The `max` on an inline handler bounds how many times that handler can fire (global for workflow).
 
 ### Jump Targets
 
@@ -101,7 +101,7 @@ The `max` on an inline handler bounds how many times that handler can fire per p
 
 The `max` field on a step bounds total visits across the pipeline run. When a step
 has been visited `max` times and control would transfer to it again, the pipeline
-jumps to the `on_max` target (default: `abort`).
+jumps to the `on_max` target (default: `next`).
 
 ```json
 { "id": "audit", "agent": "...", "max": 3, "on_max": "next" }
@@ -109,8 +109,8 @@ jumps to the `on_max` target (default: `abort`).
 
 | `on_max` value | Behavior when max exceeded |
 |----------------|---------------------------|
-| `abort` | Halt pipeline with failure (default) |
-| `next` | Give up on this step, continue pipeline |
+| `next` | Give up on this step, continue pipeline (default) |
+| `abort` | Halt pipeline with failure |
 | `<id>` | Jump to a specific step |
 
 Without `max`, a step can be visited unboundedly (not recommended — use `max` on
@@ -122,7 +122,7 @@ any step that participates in loops).
 2. After a step completes, check `on_result` for the agent's gate result.
 3. If a handler exists for the result, execute it (jump or inline agent).
 4. If no handler exists, `jump:next`.
-5. If `max` is exceeded on any step, `abort`.
+5. If `max` is exceeded on any step, jump to `on_max` target (default: `next`).
 6. If control reaches past the last step, pipeline succeeds.
 7. `abort` halts the pipeline immediately with failure status.
 
@@ -186,10 +186,10 @@ FAIL aborts. All other results continue to next.
 Execution:
 1. Run `security-audit`.
 2. Result is FIX → run inline `security-fix`.
-3. After fix, re-run `security-audit` (parent step, implicit `jump:self`).
+3. After fix, re-run `security-audit` (parent step, implicit `jump:prev`).
 4. If audit returns PASS → `jump:next` (unhandled = default).
 5. If audit returns FIX again → run fix again (if within `max`).
-6. If `max` on audit (3) or fix (2) exceeded → abort.
+6. If `max` on audit (3) or fix (2) exceeded → `on_max` target (default: `next`).
 
 ### Inline Agent with its own on_result
 
@@ -215,7 +215,7 @@ Execution:
 Here the fix agent's result controls flow:
 - Fix returns PASS → `jump:self` (re-run parent audit to verify).
 - Fix returns FAIL → abort.
-- Fix returns FIX → unhandled in fix's on_result, so default = re-run parent (implicit `jump:self` on parent).
+- Fix returns FIX → unhandled in fix's on_result, so default = re-run parent (implicit `jump:prev`).
 
 ### Backward Jump
 
@@ -299,8 +299,8 @@ has at least one step with a finite `max` whose `on_max` target breaks the cycle
 cycle does not guarantee termination unless the target also has a bounded `max`.
 
 Recommended: set `max` on any step that can be the target of a backward jump
-or self-reference. Use `on_max: "next"` to degrade gracefully, `on_max: "abort"`
-to fail fast.
+or self-reference. The default `on_max: "next"` degrades gracefully; use
+`on_max: "abort"` to fail fast.
 
 ## Legacy Compatibility
 

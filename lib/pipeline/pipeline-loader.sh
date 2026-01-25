@@ -10,7 +10,9 @@
 #   pipeline_step_count()            - Return number of steps
 #   pipeline_get(idx, field, default) - Get scalar field from step
 #   pipeline_get_json(idx, field, default) - Get compact JSON from step
-#   pipeline_get_fix(idx, field, default) - Get .fix sub-field
+#   pipeline_get_on_result(idx, result_value) - Get on_result handler
+#   pipeline_get_on_max(idx)         - Get on_max jump target
+#   pipeline_get_max(idx)            - Get max visits
 # =============================================================================
 
 # Prevent double-sourcing
@@ -41,7 +43,7 @@ _pipeline_jq() {
 #
 # Args:
 #   idx     - Step index (0-based)
-#   field   - jq field path (e.g., ".agent", ".blocking", ".enabled_by")
+#   field   - jq field path (e.g., ".agent", ".enabled_by")
 #   default - Default value if field is null/missing (default: "")
 #
 # Returns: Field value via stdout
@@ -112,10 +114,10 @@ pipeline_get_on_result() {
 # Args:
 #   idx - Step index (0-based)
 #
-# Returns: Jump target string (default: "abort")
+# Returns: Jump target string (default: "next")
 pipeline_get_on_max() {
     local idx="$1"
-    pipeline_get "$idx" ".on_max" "abort"
+    pipeline_get "$idx" ".on_max" "next"
 }
 
 # Get max visits for a step
@@ -131,33 +133,10 @@ pipeline_get_max() {
     echo "$val"
 }
 
-# Get a .fix sub-field from a pipeline step
-#
-# Args:
-#   idx     - Step index (0-based)
-#   field   - Field name under .fix (e.g., ".agent", ".max_attempts")
-#   default - Default value if null/missing
-#
-# Returns: Field value via stdout
-pipeline_get_fix() {
-    local idx="$1"
-    local field="$2"
-    local default="${3:-}"
-
-    local result
-    result=$(_pipeline_jq ".steps[$idx].fix${field} // null" -r)
-
-    if [ "$result" = "null" ] || [ -z "$result" ]; then
-        echo "$default"
-    else
-        echo "$result"
-    fi
-}
-
 # Load pipeline configuration from a JSON file
 #
 # Validates JSON structure, checks for unique IDs, valid agents, and
-# valid depends_on references.
+# valid on_result jump targets.
 #
 # Args:
 #   file - Path to pipeline JSON file
@@ -212,16 +191,16 @@ pipeline_load() {
         return 1
     fi
 
-    # Validate depends_on references exist
-    local bad_dep
-    bad_dep=$(jq -r '
+    # Validate on_result jump targets reference valid step IDs or special targets
+    local bad_jump
+    bad_jump=$(jq -r '
         [.steps[].id] as $ids |
-        .steps[] | select(.depends_on != null and .depends_on != "") |
-        select([.depends_on] | inside($ids) | not) |
-        .depends_on
-    ' "$file" | head -1)
-    if [ -n "$bad_dep" ]; then
-        log_error "Pipeline step depends_on references unknown step: $bad_dep"
+        ["self","prev","next","abort"] as $special |
+        [.steps[].on_result // {} | to_entries[].value | select(.jump != null) | .jump] |
+        .[] | select(. as $t | ($special | index($t)) == null and ($ids | index($t)) == null)
+    ' "$file" 2>/dev/null | head -1)
+    if [ -n "$bad_jump" ]; then
+        log_error "Pipeline on_result references unknown jump target: $bad_jump"
         return 1
     fi
 
@@ -234,7 +213,7 @@ pipeline_load() {
     return 0
 }
 
-# Load built-in defaults matching the hardcoded TASK_PIPELINE behavior
+# Load built-in defaults matching the new jump-based schema
 # Used as fallback when no pipeline config file exists
 pipeline_load_builtin_defaults() {
     PIPELINE_NAME="builtin-default"
@@ -243,13 +222,13 @@ pipeline_load_builtin_defaults() {
     _PIPELINE_JSON='{
   "name": "builtin-default",
   "steps": [
-    {"id":"planning","agent":"product.plan-mode","blocking":false,"readonly":true,"enabled_by":"WIGGUM_PLAN_MODE"},
-    {"id":"execution","agent":"system.task-executor","blocking":true,"config":{"max_iterations":20,"max_turns":50,"supervisor_interval":2}},
-    {"id":"summary","agent":"system.task-summarizer","blocking":false,"readonly":true,"depends_on":"execution"},
-    {"id":"audit","agent":"engineering.security-audit","blocking":true,"readonly":true,"fix":{"id":"audit-fix","agent":"engineering.security-fix","max_attempts":2,"commit_after":true}},
-    {"id":"test","agent":"engineering.test-coverage","blocking":true,"commit_after":true},
-    {"id":"docs","agent":"product.documentation-writer","blocking":false,"commit_after":true},
-    {"id":"validation","agent":"engineering.validation-review","blocking":true,"readonly":true}
+    {"id":"planning","agent":"product.plan-mode","readonly":true,"enabled_by":"WIGGUM_PLAN_MODE"},
+    {"id":"execution","agent":"system.task-executor","max":3,"config":{"max_iterations":20,"max_turns":50,"supervisor_interval":2},"on_result":{"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}},
+    {"id":"summary","agent":"system.task-summarizer","readonly":true},
+    {"id":"audit","agent":"engineering.security-audit","max":3,"readonly":true,"on_result":{"FIX":{"id":"audit-fix","agent":"engineering.security-fix","max":2,"commit_after":true},"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}},
+    {"id":"test","agent":"engineering.test-coverage","max":2,"commit_after":true,"on_result":{"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}},
+    {"id":"docs","agent":"product.documentation-writer","commit_after":true},
+    {"id":"validation","agent":"engineering.validation-review","readonly":true,"on_result":{"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}}
   ]
 }'
     _PIPELINE_STEP_COUNT=7

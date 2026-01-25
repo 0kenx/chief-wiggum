@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pipeline Configuration",
-  "description": "Defines a linear pipeline of agent steps for system.task-worker execution",
+  "description": "Defines a linear pipeline of agent steps with jump-based control flow",
   "type": "object",
   "required": ["name", "steps"],
   "properties": {
@@ -25,16 +25,29 @@
         "id": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_-]*$",
-          "description": "Unique step ID used for result files and start_from_step"
+          "description": "Unique step ID used for result files and jump targets"
         },
         "agent": {
           "type": "string",
           "description": "Leaf agent name from lib/agents/"
         },
-        "blocking": {
-          "type": "boolean",
-          "default": true,
-          "description": "If true, FAIL/STOP halts the pipeline"
+        "max": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Max times this step can be visited (0 = unlimited)"
+        },
+        "on_max": {
+          "type": "string",
+          "default": "next",
+          "description": "Jump target when max visits exceeded (default: next)"
+        },
+        "on_result": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/handler"
+          },
+          "description": "Per-result handlers mapping gate result values to actions"
         },
         "readonly": {
           "type": "boolean",
@@ -45,10 +58,6 @@
           "type": "string",
           "description": "Environment variable name; step runs only if var is 'true'"
         },
-        "depends_on": {
-          "type": "string",
-          "description": "Step ID; skip if that step's result is FAIL/UNKNOWN"
-        },
         "commit_after": {
           "type": "boolean",
           "default": false,
@@ -58,32 +67,6 @@
           "type": "object",
           "default": {},
           "description": "Per-step config written to step-config.json for the agent to read"
-        },
-        "fix": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]*$",
-              "description": "Unique fix step ID used for result files"
-            },
-            "agent": {
-              "type": "string",
-              "description": "Agent to run if result is FIX"
-            },
-            "max_attempts": {
-              "type": "integer",
-              "default": 2,
-              "minimum": 1,
-              "description": "The maximum number of times the fix agent will be run, if max_attempts is 1, it will not re-run the outer agent upon exit"
-            },
-            "commit_after": {
-              "type": "boolean",
-              "default": true,
-              "description": "Commit after fix agent"
-            }
-          },
-          "required": ["id", "agent"]
         },
         "hooks": {
           "type": "object",
@@ -101,6 +84,71 @@
               "description": "Shell commands to run after agent"
             }
           }
+        }
+      }
+    },
+    "handler": {
+      "oneOf": [
+        { "$ref": "#/$defs/jump_handler" },
+        { "$ref": "#/$defs/inline_agent_handler" }
+      ]
+    },
+    "jump_handler": {
+      "type": "object",
+      "required": ["jump"],
+      "properties": {
+        "jump": {
+          "type": "string",
+          "description": "Jump target: self, prev, next, abort, or a step ID"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inline_agent_handler": {
+      "type": "object",
+      "required": ["id", "agent"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Unique handler step ID used for result files"
+        },
+        "agent": {
+          "type": "string",
+          "description": "Agent to run for this handler"
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Max times this inline handler can fire (global for workflow, 0 = unlimited)"
+        },
+        "on_max": {
+          "type": "string",
+          "default": "next",
+          "description": "Jump target when inline handler max exceeded (default: next)"
+        },
+        "on_result": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/handler"
+          },
+          "description": "Per-result handlers for the inline agent"
+        },
+        "readonly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Git checkpoint for inline agent"
+        },
+        "commit_after": {
+          "type": "boolean",
+          "default": false,
+          "description": "Commit after inline agent completes"
+        },
+        "config": {
+          "type": "object",
+          "default": {},
+          "description": "Config for inline agent"
         }
       }
     }

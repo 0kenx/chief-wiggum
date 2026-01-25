@@ -5,9 +5,9 @@
 # Tests pipeline execution including:
 # - Step sequencing (runs in order)
 # - enabled_by condition checking
-# - depends_on condition checking
-# - Blocking vs non-blocking failure handling
-# - Fix retry loop
+# - on_result jump-based control flow
+# - max visits and on_max handling
+# - Inline agent handlers (fix loop)
 # - Step config writing
 # - start_from_step resolution
 # =============================================================================
@@ -76,6 +76,44 @@ agent_run() {
     local step_id="\${WIGGUM_STEP_ID:-unknown}"
     mkdir -p "\$worker_dir/results"
     echo '{"gate_result": "${result}"}' > "\$worker_dir/results/\${step_id}.json"
+}
+EOF
+}
+
+# Helper: Create a counting agent that returns different results on successive calls
+_create_counting_agent() {
+    local agent_name="$1"
+    shift
+    # Remaining args are results in order (e.g., "FIX" "PASS")
+    local results=("$@")
+
+    local agent_dir="$TEST_DIR/fake-home/lib/agents"
+    mkdir -p "$agent_dir"
+
+    local counter_file="$TEST_DIR/counter_${agent_name}.txt"
+    echo "0" > "$counter_file"
+
+    # Build results array in bash syntax
+    local results_str=""
+    for r in "${results[@]}"; do
+        results_str="${results_str} \"$r\""
+    done
+
+    cat > "$agent_dir/${agent_name}.sh" << EOF
+agent_required_paths() { echo ""; }
+agent_run() {
+    local worker_dir="\$1"
+    echo "${agent_name}" >> "$TEST_DIR/agent_invocations.txt"
+    local counter_file="$counter_file"
+    local count=\$(cat "\$counter_file")
+    local results=(${results_str})
+    local result_count=\${#results[@]}
+    local idx=\$((count % result_count))
+    local result="\${results[\$idx]}"
+    echo \$((count + 1)) > "\$counter_file"
+    local step_id="\${WIGGUM_STEP_ID:-unknown}"
+    mkdir -p "\$worker_dir/results"
+    echo "{\"gate_result\": \"\$result\"}" > "\$worker_dir/results/\${step_id}.json"
 }
 EOF
 }
@@ -209,42 +247,15 @@ test_pipeline_enabled_by_runs() {
 }
 
 # =============================================================================
-# Test: depends_on skips step when dependency failed
+# Test: on_result FAIL with jump:abort halts pipeline
 # =============================================================================
-test_pipeline_depends_on_skips_on_fail() {
-    # Create a mock agent that writes FAIL result
-    _create_mock_agent "dep-fail-agent" "FAIL"
-
-    _create_pipeline "$TEST_DIR/pipeline.json" '{
-        "name": "test-depends-on",
-        "steps": [
-            {"id": "dep-step", "agent": "dep-fail-agent", "blocking": false},
-            {"id": "dependent", "agent": "agent-dependent", "depends_on": "dep-step"}
-        ]
-    }'
-
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
-
-    : > "$TEST_DIR/agent_invocations.txt"
-    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
-
-    local invocations
-    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
-    assert_output_not_contains "$invocations" "agent-dependent" \
-        "Dependent step should be skipped when dependency failed"
-}
-
-# =============================================================================
-# Test: Blocking step failure halts pipeline
-# =============================================================================
-test_pipeline_blocking_failure_halts() {
+test_pipeline_on_result_fail_abort() {
     _create_mock_agent "fail-agent" "FAIL"
 
     _create_pipeline "$TEST_DIR/pipeline.json" '{
-        "name": "test-blocking",
+        "name": "test-abort",
         "steps": [
-            {"id": "blocker", "agent": "fail-agent", "blocking": true},
+            {"id": "blocker", "agent": "fail-agent", "on_result": {"FAIL": {"jump": "abort"}}},
             {"id": "after", "agent": "agent-after"}
         ]
     }'
@@ -256,24 +267,24 @@ test_pipeline_blocking_failure_halts() {
     local exit_code=0
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
 
-    assert_equals "1" "$exit_code" "Pipeline should return 1 on blocking failure"
+    assert_equals "1" "$exit_code" "Pipeline should return 1 on FAIL->abort"
 
     local invocations
     invocations=$(cat "$TEST_DIR/agent_invocations.txt")
     assert_output_not_contains "$invocations" "agent-after" \
-        "Steps after blocking failure should not run"
+        "Steps after abort should not run"
 }
 
 # =============================================================================
-# Test: Non-blocking step failure continues pipeline
+# Test: No on_result handler means continue to next
 # =============================================================================
-test_pipeline_nonblocking_failure_continues() {
+test_pipeline_no_handler_continues() {
     _create_mock_agent "soft-fail" "FAIL"
 
     _create_pipeline "$TEST_DIR/pipeline.json" '{
-        "name": "test-nonblocking",
+        "name": "test-no-handler",
         "steps": [
-            {"id": "soft", "agent": "soft-fail", "blocking": "false"},
+            {"id": "soft", "agent": "soft-fail"},
             {"id": "continues", "agent": "agent-continues"}
         ]
     }'
@@ -285,12 +296,300 @@ test_pipeline_nonblocking_failure_continues() {
     local exit_code=0
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
 
-    assert_equals "0" "$exit_code" "Pipeline should return 0 with non-blocking failure"
+    assert_equals "0" "$exit_code" "Pipeline should return 0 with no handler (continues)"
 
     local invocations
     invocations=$(cat "$TEST_DIR/agent_invocations.txt")
     assert_output_contains "$invocations" "agent-continues" \
-        "Steps after non-blocking failure should continue"
+        "Steps after unhandled result should continue"
+}
+
+# =============================================================================
+# Test: Jump to named step
+# =============================================================================
+test_pipeline_jump_to_named_step() {
+    _create_mock_agent "fail-jump-agent" "FAIL"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-named-jump",
+        "steps": [
+            {"id": "step-a", "agent": "fail-jump-agent", "on_result": {"FAIL": {"jump": "step-c"}}},
+            {"id": "step-b", "agent": "agent-b"},
+            {"id": "step-c", "agent": "agent-c"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
+
+    local invocations
+    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
+    assert_output_not_contains "$invocations" "agent-b" "Step B should be skipped by jump"
+    assert_output_contains "$invocations" "agent-c" "Step C should run after jump"
+}
+
+# =============================================================================
+# Test: Max visits triggers abort (explicit on_max: abort)
+# =============================================================================
+test_pipeline_max_visits_abort() {
+    _create_mock_agent "always-fail" "FAIL"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-max-abort",
+        "steps": [
+            {"id": "looper", "agent": "always-fail", "max": 2, "on_max": "abort", "on_result": {"FAIL": {"jump": "self"}}},
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    assert_equals "1" "$exit_code" "Pipeline should abort when max visits exceeded"
+
+    # Should have run the step exactly max times (2)
+    local invocation_count
+    invocation_count=$(grep -c "always-fail" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "2" "$invocation_count" "Step should run exactly max (2) times"
+}
+
+# =============================================================================
+# Test: Max visits with on_max:"next" continues pipeline
+# =============================================================================
+test_pipeline_max_visits_next() {
+    _create_mock_agent "always-fail" "FAIL"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-max-next",
+        "steps": [
+            {"id": "looper", "agent": "always-fail", "max": 2, "on_max": "next", "on_result": {"FAIL": {"jump": "self"}}},
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    assert_equals "0" "$exit_code" "Pipeline should continue when on_max is next"
+
+    local invocations
+    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
+    assert_output_contains "$invocations" "agent-after" "After step should run when on_max=next"
+}
+
+# =============================================================================
+# Test: Inline agent FIX loop - FIX triggers inline, re-runs parent, PASS continues
+# =============================================================================
+test_pipeline_inline_agent_fix_loop() {
+    # Parent returns FIX first, PASS second
+    _create_counting_agent "audit-agent" "FIX" "PASS"
+    # Inline fix agent always returns PASS
+    _create_mock_agent "fix-agent" "PASS"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-inline-fix",
+        "steps": [
+            {
+                "id": "audit",
+                "agent": "audit-agent",
+                "max": 3,
+                "on_result": {
+                    "FIX": {
+                        "id": "audit-fix",
+                        "agent": "fix-agent",
+                        "max": 2,
+                        "commit_after": true
+                    }
+                }
+            },
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    assert_equals "0" "$exit_code" "Pipeline should succeed after fix loop"
+
+    local invocations
+    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
+
+    # audit-agent should run twice (FIX then PASS)
+    local audit_count
+    audit_count=$(grep -c "audit-agent" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "2" "$audit_count" "Audit agent should run twice (FIX then PASS)"
+
+    # fix-agent should run once
+    local fix_count
+    fix_count=$(grep -c "fix-agent" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "1" "$fix_count" "Fix agent should run once"
+
+    # after step should run
+    assert_output_contains "$invocations" "agent-after" "After step should run after successful fix"
+}
+
+# =============================================================================
+# Test: Inline handler max exceeded triggers on_max
+# =============================================================================
+test_pipeline_inline_max_exceeded() {
+    # Parent always returns FIX
+    _create_mock_agent "always-fix" "FIX"
+    # Fix agent always returns PASS (causing parent re-run via default)
+    _create_mock_agent "fix-agent" "PASS"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-inline-max",
+        "steps": [
+            {
+                "id": "audit",
+                "agent": "always-fix",
+                "max": 5,
+                "on_result": {
+                    "FIX": {
+                        "id": "audit-fix",
+                        "agent": "fix-agent",
+                        "max": 2
+                    }
+                }
+            },
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    # inline max=2, on_max defaults to next (continues to after step)
+    assert_equals "0" "$exit_code" "Pipeline should continue when inline handler max exceeded (default on_max: next)"
+
+    # Fix agent should have run exactly 2 times
+    local fix_count
+    fix_count=$(grep -c "fix-agent" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "2" "$fix_count" "Fix agent should run exactly max (2) times"
+}
+
+# =============================================================================
+# Test: jump:prev goes to previous step
+# =============================================================================
+test_pipeline_jump_prev() {
+    # step-b returns FAIL first time, PASS second time
+    _create_counting_agent "prev-agent" "FAIL" "PASS"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-jump-prev",
+        "steps": [
+            {"id": "step-a", "agent": "agent-a", "max": 3},
+            {"id": "step-b", "agent": "prev-agent", "max": 3, "on_result": {"FAIL": {"jump": "prev"}}}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    assert_equals "0" "$exit_code" "Pipeline should succeed after prev jump and retry"
+
+    # step-a should run twice (initial + after prev jump)
+    local a_count
+    a_count=$(grep -c "agent-a\|mock-agent:agent-a" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "2" "$a_count" "Step A should run twice (initial + after prev jump)"
+
+    # step-b should run twice (FAIL then PASS)
+    local b_count
+    b_count=$(grep -c "prev-agent" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "2" "$b_count" "Step B should run twice (FAIL then PASS)"
+}
+
+# =============================================================================
+# Test: STOP with abort handler halts pipeline
+# =============================================================================
+test_pipeline_stop_aborts() {
+    _create_mock_agent "stop-agent" "STOP"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-stop",
+        "steps": [
+            {"id": "stopper", "agent": "stop-agent", "on_result": {"STOP": {"jump": "abort"}}},
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    assert_equals "1" "$exit_code" "Pipeline should abort on STOP with abort handler"
+
+    local invocations
+    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
+    assert_output_not_contains "$invocations" "agent-after" "After step should not run"
+}
+
+# =============================================================================
+# Test: on_max loop detection aborts pipeline
+# =============================================================================
+test_pipeline_on_max_loop_detection() {
+    # Two steps that loop back to themselves (triggering max), with on_max jumping to each other
+    # step-a always returns FAIL → jump:self, hits max, on_max → step-b
+    # step-b always returns FAIL → jump:self, hits max, on_max → step-a
+    # step-a already hit on_max in this cascade → loop detected
+    _create_mock_agent "loop-agent-a" "FAIL"
+    _create_mock_agent "loop-agent-b" "FAIL"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-on-max-loop",
+        "steps": [
+            {"id": "step-a", "agent": "loop-agent-a", "max": 1, "on_max": "step-b", "on_result": {"FAIL": {"jump": "self"}}},
+            {"id": "step-b", "agent": "loop-agent-b", "max": 1, "on_max": "step-a", "on_result": {"FAIL": {"jump": "self"}}}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    # Flow:
+    # 1. step-a runs (visit 1), FAIL → jump:self
+    # 2. step-a max (1) exceeded → on_max:step-b, cascade[step-a]=1
+    # 3. step-b runs (visit 1), FAIL → jump:self
+    # 4. step-b max (1) exceeded → on_max:step-a, cascade[step-b]=1
+    # 5. step-a max exceeded AND cascade[step-a]=1 → loop detected, abort
+    assert_equals "1" "$exit_code" "Pipeline should abort on on_max loop detection"
+
+    # Each agent should run exactly once (max=1)
+    local a_count b_count
+    a_count=$(grep -c "loop-agent-a" "$TEST_DIR/agent_invocations.txt" || echo 0)
+    b_count=$(grep -c "loop-agent-b" "$TEST_DIR/agent_invocations.txt" || echo 0)
+    assert_equals "1" "$a_count" "Step A should run exactly once before loop detected"
+    assert_equals "1" "$b_count" "Step B should run exactly once before loop detected"
 }
 
 # =============================================================================
@@ -394,9 +693,16 @@ test_pipeline_emits_activity_events() {
 run_test test_pipeline_runs_steps_in_order
 run_test test_pipeline_enabled_by_skips
 run_test test_pipeline_enabled_by_runs
-run_test test_pipeline_depends_on_skips_on_fail
-run_test test_pipeline_blocking_failure_halts
-run_test test_pipeline_nonblocking_failure_continues
+run_test test_pipeline_on_result_fail_abort
+run_test test_pipeline_no_handler_continues
+run_test test_pipeline_jump_to_named_step
+run_test test_pipeline_max_visits_abort
+run_test test_pipeline_max_visits_next
+run_test test_pipeline_inline_agent_fix_loop
+run_test test_pipeline_inline_max_exceeded
+run_test test_pipeline_jump_prev
+run_test test_pipeline_stop_aborts
+run_test test_pipeline_on_max_loop_detection
 run_test test_pipeline_start_from_step
 run_test test_pipeline_writes_step_config
 run_test test_pipeline_aborts_on_missing_workspace

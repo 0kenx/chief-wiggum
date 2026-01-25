@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# pipeline-runner.sh - Execute pipeline steps sequentially
+# pipeline-runner.sh - Execute pipeline steps as a jump-based state machine
 #
 # Provides:
 #   pipeline_run_all(worker_dir, project_dir, workspace, start_from_step)
@@ -10,6 +10,13 @@
 #   - agent-base.sh sourced (for run_sub_agent, agent_read_subagent_result, etc.)
 #   - _phase_start/_phase_end/_commit_subagent_changes from system/task-worker.sh
 #   - PIPELINE_PLAN_FILE, PIPELINE_RESUME_INSTRUCTIONS exported by caller
+#
+# Jump target semantics:
+#   self  - Re-run the current step
+#   prev  - Re-run the caller (step that invoked current step)
+#   next  - Continue to next step in array order
+#   abort - Halt pipeline with failure
+#   <id>  - Jump to step with matching ID
 # =============================================================================
 
 # Prevent double-sourcing
@@ -18,7 +25,183 @@ _PIPELINE_RUNNER_LOADED=1
 
 source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 
-# Run all pipeline steps from start_from_step onward
+# Global state for jump-based control flow
+declare -A _PIPELINE_VISITS=()          # step_id -> visit count (global for workflow)
+declare -A _PIPELINE_INLINE_VISITS=()   # "parent_id:handler_id" -> count (global for workflow)
+declare -A _PIPELINE_ON_MAX_CASCADE=()  # step_id -> 1 if hit on_max in current cascade
+_PIPELINE_NEXT_IDX=0                    # return value for dispatch functions
+
+# Resolve a jump target to a step index
+#
+# Args:
+#   target      - Jump target (self, prev, next, abort, or step ID)
+#   current_idx - Current step index
+#
+# Sets: _PIPELINE_NEXT_IDX
+_resolve_jump_target() {
+    local target="$1"
+    local current_idx="$2"
+
+    case "$target" in
+        self)
+            _PIPELINE_NEXT_IDX="$current_idx"
+            ;;
+        prev)
+            _PIPELINE_NEXT_IDX=$((current_idx - 1))
+            ;;
+        next)
+            _PIPELINE_NEXT_IDX=$((current_idx + 1))
+            ;;
+        abort)
+            _PIPELINE_NEXT_IDX=-1
+            ;;
+        *)
+            # Named step ID
+            local resolved
+            resolved=$(pipeline_find_step_index "$target")
+            if [ "$resolved" -ge 0 ]; then
+                _PIPELINE_NEXT_IDX="$resolved"
+            else
+                log_error "Jump target '$target' not found, aborting"
+                _PIPELINE_NEXT_IDX=-1
+            fi
+            ;;
+    esac
+}
+
+# Dispatch on a gate result using the step's on_result handlers
+#
+# Args:
+#   idx         - Step index
+#   gate_result - Gate result value from the agent
+#   worker_dir  - Worker directory
+#   project_dir - Project directory
+#   workspace   - Workspace directory
+#
+# Sets: _PIPELINE_NEXT_IDX
+_dispatch_on_result() {
+    local idx="$1"
+    local gate_result="$2"
+    local worker_dir="$3"
+    local project_dir="$4"
+    local workspace="$5"
+
+    local handler
+    handler=$(pipeline_get_on_result "$idx" "$gate_result")
+
+    if [ -z "$handler" ]; then
+        # No handler for this result - default to next
+        _PIPELINE_NEXT_IDX=$((idx + 1))
+        return
+    fi
+
+    # Check if it's a jump handler (has "jump" field)
+    local jump_target
+    jump_target=$(echo "$handler" | jq -r '.jump // empty' 2>/dev/null)
+
+    if [ -n "$jump_target" ]; then
+        # Jump handler
+        _resolve_jump_target "$jump_target" "$idx"
+        return
+    fi
+
+    # Check if it's an inline agent handler (has "agent" field)
+    local inline_agent
+    inline_agent=$(echo "$handler" | jq -r '.agent // empty' 2>/dev/null)
+
+    if [ -n "$inline_agent" ]; then
+        # Inline agent handler
+        _run_inline_agent "$idx" "$handler" "$worker_dir" "$project_dir" "$workspace"
+        return
+    fi
+
+    # Unknown handler format - default to next
+    log_warn "Unknown on_result handler format for step index $idx, continuing"
+    _PIPELINE_NEXT_IDX=$((idx + 1))
+}
+
+# Run an inline agent handler
+#
+# Args:
+#   parent_idx   - Parent step index (the caller)
+#   handler_json - JSON string of the inline agent handler
+#   worker_dir   - Worker directory
+#   project_dir  - Project directory
+#   workspace    - Workspace directory
+#
+# Sets: _PIPELINE_NEXT_IDX
+_run_inline_agent() {
+    local parent_idx="$1"
+    local handler_json="$2"
+    local worker_dir="$3"
+    local project_dir="$4"
+    local workspace="$5"
+
+    local parent_id
+    parent_id=$(pipeline_get "$parent_idx" ".id")
+
+    # Parse inline handler fields
+    local handler_id handler_agent handler_max handler_on_max handler_readonly handler_commit
+    handler_id=$(echo "$handler_json" | jq -r '.id // "inline"')
+    handler_agent=$(echo "$handler_json" | jq -r '.agent')
+    handler_max=$(echo "$handler_json" | jq -r '.max // 0')
+    handler_on_max=$(echo "$handler_json" | jq -r '.on_max // "next"')
+    handler_readonly=$(echo "$handler_json" | jq -r '.readonly // false')
+    handler_commit=$(echo "$handler_json" | jq -r '.commit_after // false')
+
+    # Check inline max visits (global count, never resets)
+    local visit_key="${parent_id}:${handler_id}"
+    local current_visits="${_PIPELINE_INLINE_VISITS[$visit_key]:-0}"
+
+    if [ "$handler_max" -gt 0 ] && [ "$current_visits" -ge "$handler_max" ]; then
+        log "Inline handler '$handler_id' max ($handler_max) exceeded, resolving on_max"
+        _resolve_jump_target "$handler_on_max" "$parent_idx"
+        return
+    fi
+
+    # Increment inline visit counter
+    _PIPELINE_INLINE_VISITS[$visit_key]=$((current_visits + 1))
+
+    # Run the inline agent
+    export WIGGUM_STEP_ID="$handler_id"
+    export WIGGUM_STEP_READONLY="$handler_readonly"
+
+    log "Running inline agent: $handler_id (agent=$handler_agent, parent=$parent_id)"
+    run_sub_agent "$handler_agent" "$worker_dir" "$project_dir"
+
+    unset WIGGUM_STEP_READONLY
+
+    # Commit if configured
+    if [ "$handler_commit" = "true" ] && [ "$handler_readonly" != "true" ]; then
+        _commit_subagent_changes "$workspace" "$handler_agent"
+    fi
+
+    # Read inline agent result
+    local inline_result
+    inline_result=$(agent_read_step_result "$worker_dir" "$handler_id")
+    log "Inline agent '$handler_id' result: $inline_result"
+
+    # Check inline handler's own on_result
+    local inline_on_result
+    inline_on_result=$(echo "$handler_json" | jq -c ".on_result.\"$inline_result\" // null" 2>/dev/null)
+
+    if [ -n "$inline_on_result" ] && [ "$inline_on_result" != "null" ]; then
+        # Inline handler has its own on_result for this value
+        local inline_jump
+        inline_jump=$(echo "$inline_on_result" | jq -r '.jump // empty' 2>/dev/null)
+
+        if [ -n "$inline_jump" ]; then
+            # Jump target resolves in parent context (prev = parent's caller)
+            _resolve_jump_target "$inline_jump" "$parent_idx"
+            return
+        fi
+    fi
+
+    # Default: re-run caller (parent step) - implicit jump:prev
+    _PIPELINE_NEXT_IDX="$parent_idx"
+}
+
+# Run all pipeline steps using jump-based state machine
 #
 # Args:
 #   worker_dir      - Worker directory path
@@ -26,7 +209,7 @@ source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 #   workspace       - Workspace directory (git worktree)
 #   start_from_step - Step ID to start from (empty = first step)
 #
-# Returns: 0 on success, 1 if a blocking step failed
+# Returns: 0 on success, 1 on abort
 pipeline_run_all() {
     local worker_dir="$1"
     local project_dir="$2"
@@ -35,45 +218,38 @@ pipeline_run_all() {
 
     local step_count
     step_count=$(pipeline_step_count)
-    local start_idx=0
+
+    # Initialize visit counters (global for entire workflow)
+    _PIPELINE_VISITS=()
+    _PIPELINE_INLINE_VISITS=()
+    _PIPELINE_ON_MAX_CASCADE=()
+
+    local current_idx=0
 
     # Resolve start_from_step to index
     if [ -n "$start_from_step" ]; then
         local resolved_idx
         resolved_idx=$(pipeline_find_step_index "$start_from_step")
         if [ "$resolved_idx" -ge 0 ]; then
-            start_idx="$resolved_idx"
+            current_idx="$resolved_idx"
         else
             log_warn "Unknown start_from_step '$start_from_step' - starting from beginning"
         fi
     fi
 
-    local i="$start_idx"
-    while [ "$i" -lt "$step_count" ]; do
+    # Main state machine loop
+    while [ "$current_idx" -ge 0 ] && [ "$current_idx" -lt "$step_count" ]; do
         local step_id
-        step_id=$(pipeline_get "$i" ".id")
+        step_id=$(pipeline_get "$current_idx" ".id")
 
         # Check enabled_by condition
         local enabled_by
-        enabled_by=$(pipeline_get "$i" ".enabled_by")
+        enabled_by=$(pipeline_get "$current_idx" ".enabled_by")
         if [ -n "$enabled_by" ]; then
             local env_val="${!enabled_by:-}"
             if [ "$env_val" != "true" ]; then
                 log_debug "Skipping step '$step_id' (enabled_by=$enabled_by is not 'true')"
-                ((++i))
-                continue
-            fi
-        fi
-
-        # Check depends_on condition
-        local depends_on
-        depends_on=$(pipeline_get "$i" ".depends_on")
-        if [ -n "$depends_on" ]; then
-            local dep_result
-            dep_result=$(agent_read_step_result "$worker_dir" "$depends_on")
-            if [ "$dep_result" = "FAIL" ] || [ "$dep_result" = "UNKNOWN" ]; then
-                log "Skipping step '$step_id' (depends_on '$depends_on' result: $dep_result)"
-                ((++i))
+                current_idx=$((current_idx + 1))
                 continue
             fi
         fi
@@ -84,45 +260,79 @@ pipeline_run_all() {
             return 1
         fi
 
-        # Run the step
-        if ! _pipeline_run_step "$i" "$worker_dir" "$project_dir" "$workspace"; then
-            local blocking
-            blocking=$(pipeline_get "$i" ".blocking" "true")
-            if [ "$blocking" = "true" ]; then
-                log_error "Blocking step '$step_id' failed - halting pipeline"
+        # Check max visits (global count, never resets)
+        local max_visits
+        max_visits=$(pipeline_get_max "$current_idx")
+        local visit_count="${_PIPELINE_VISITS[$step_id]:-0}"
+
+        if [ "$max_visits" -gt 0 ] && [ "$visit_count" -ge "$max_visits" ]; then
+            log "Step '$step_id' max visits ($max_visits) exceeded"
+
+            # Check for on_max loop: if this step already hit on_max in this cascade, abort
+            if [ "${_PIPELINE_ON_MAX_CASCADE[$step_id]:-0}" = "1" ]; then
+                log_error "Detected on_max loop at step '$step_id', aborting"
                 return 1
             fi
+            _PIPELINE_ON_MAX_CASCADE[$step_id]=1
+
+            local on_max_target
+            on_max_target=$(pipeline_get_on_max "$current_idx")
+            _resolve_jump_target "$on_max_target" "$current_idx"
+            if [ "$_PIPELINE_NEXT_IDX" -lt 0 ]; then
+                log_error "Step '$step_id' max exceeded, aborting"
+                return 1
+            fi
+            current_idx="$_PIPELINE_NEXT_IDX"
+            continue
         fi
 
-        ((++i))
+        # Clear on_max cascade tracker when we actually run a step
+        _PIPELINE_ON_MAX_CASCADE=()
+
+        # Increment visit counter
+        _PIPELINE_VISITS[$step_id]=$((visit_count + 1))
+
+        # Run the step (agent execution only)
+        _pipeline_run_step "$current_idx" "$worker_dir" "$project_dir" "$workspace"
+
+        # Read the gate result
+        local gate_result
+        gate_result=$(agent_read_step_result "$worker_dir" "$step_id")
+
+        # Dispatch on result (sets _PIPELINE_NEXT_IDX)
+        _dispatch_on_result "$current_idx" "$gate_result" "$worker_dir" "$project_dir" "$workspace"
+
+        if [ "$_PIPELINE_NEXT_IDX" -lt 0 ]; then
+            log_error "Step '$step_id' result '$gate_result' triggered abort"
+            return 1
+        fi
+
+        current_idx="$_PIPELINE_NEXT_IDX"
     done
 
     return 0
 }
 
-# Run a single pipeline step
+# Run a single pipeline step (agent execution only)
 #
 # Args:
 #   idx         - Step index in pipeline arrays
 #   worker_dir  - Worker directory path
 #   project_dir - Project root directory
 #   workspace   - Workspace directory
-#
-# Returns: 0 on success/non-blocking-failure, 1 on blocking failure
 _pipeline_run_step() {
     local idx="$1"
     local worker_dir="$2"
     local project_dir="$3"
     local workspace="$4"
 
-    local step_id step_agent blocking step_readonly commit_after
+    local step_id step_agent step_readonly commit_after
     step_id=$(pipeline_get "$idx" ".id")
     step_agent=$(pipeline_get "$idx" ".agent")
-    blocking=$(pipeline_get "$idx" ".blocking" "true")
     step_readonly=$(pipeline_get "$idx" ".readonly" "false")
     commit_after=$(pipeline_get "$idx" ".commit_after" "false")
 
-    log "Running pipeline step: $step_id (agent=$step_agent, blocking=$blocking, readonly=$step_readonly)"
+    log "Running pipeline step: $step_id (agent=$step_agent, readonly=$step_readonly)"
 
     # Emit activity log event
     local _worker_id
@@ -151,43 +361,11 @@ _pipeline_run_step() {
 
     # Run the agent
     run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
-    local agent_exit=$?
 
     unset WIGGUM_STEP_READONLY
 
-    # Read the step result
-    local gate_result
-    gate_result=$(agent_read_step_result "$worker_dir" "$step_id")
-    log "Step '$step_id' result: $gate_result (exit: $agent_exit)"
-
     # Run post-hooks
     _run_step_hooks "post" "$idx" "$worker_dir" "$project_dir" "$workspace"
-
-    # Handle FIX result
-    if [ "$gate_result" = "FIX" ]; then
-        local fix_agent
-        fix_agent=$(pipeline_get_fix "$idx" ".agent")
-        if [ -n "$fix_agent" ]; then
-            gate_result=$(_handle_fix_retry "$idx" "$worker_dir" "$project_dir" "$workspace")
-        else
-            # No fix agent configured, treat FIX as failure for blocking
-            if [ "$blocking" = "true" ]; then
-                log_error "Step '$step_id' returned FIX but no fix agent configured"
-                _phase_end "$step_id"
-                unset WIGGUM_STEP_ID
-                return 1
-            fi
-        fi
-    fi
-
-    # Handle FAIL/STOP
-    if [ "$gate_result" = "FAIL" ] || [ "$gate_result" = "STOP" ]; then
-        if [ "$blocking" = "true" ]; then
-            _phase_end "$step_id"
-            unset WIGGUM_STEP_ID
-            return 1
-        fi
-    fi
 
     # Commit changes if configured (and not readonly)
     if [ "$commit_after" = "true" ] && [ "$step_readonly" != "true" ]; then
@@ -195,88 +373,10 @@ _pipeline_run_step() {
     fi
 
     _phase_end "$step_id"
+    local gate_result
+    gate_result=$(agent_read_step_result "$worker_dir" "$step_id")
     activity_log "step.completed" "$_worker_id" "${WIGGUM_TASK_ID:-}" "step_id=$step_id" "agent=$step_agent" "result=${gate_result:-UNKNOWN}"
     unset WIGGUM_STEP_ID
-    return 0
-}
-
-# Handle FIX retry loop
-#
-# Behaviour: agentA returned FIX. Deduct max_attempts, run fix agent.
-# If max_attempts > 0 after deduction, re-run agentA. If agentA returns
-# FIX again, repeat. If max_attempts reaches 0, continue to next step.
-#
-# Args:
-#   idx         - Step index
-#   worker_dir  - Worker directory
-#   project_dir - Project directory
-#   workspace   - Workspace directory
-#
-# Outputs: final gate result to stdout (from verify or fix agent's result)
-_handle_fix_retry() {
-    local idx="$1"
-    local worker_dir="$2"
-    local project_dir="$3"
-    local workspace="$4"
-
-    local step_id step_agent step_readonly fix_id fix_agent max_attempts fix_commit
-    step_id=$(pipeline_get "$idx" ".id")
-    step_agent=$(pipeline_get "$idx" ".agent")
-    step_readonly=$(pipeline_get "$idx" ".readonly" "false")
-    fix_id=$(pipeline_get_fix "$idx" ".id")
-    fix_agent=$(pipeline_get_fix "$idx" ".agent")
-    max_attempts=$(pipeline_get_fix "$idx" ".max_attempts" "2")
-    fix_commit=$(pipeline_get_fix "$idx" ".commit_after" "true")
-
-    local _fix_result="CONTINUE"
-    local attempt=0
-
-    while true; do
-        ((++attempt))
-        ((max_attempts--))
-
-        log "Fix attempt $attempt for step '$step_id' using agent '$fix_agent' (remaining=$max_attempts)" >&2
-
-        # Run fix agent (never readonly - it must modify files)
-        export WIGGUM_STEP_ID="${fix_id}-${attempt}"
-        run_sub_agent "$fix_agent" "$worker_dir" "$project_dir" >&2
-
-        # Commit fix changes
-        if [ "$fix_commit" = "true" ]; then
-            _commit_subagent_changes "$workspace" "$fix_agent" >&2
-        fi
-
-        # If no attempts remaining, do not re-run agentA - pass fix agent's result on
-        if [ "$max_attempts" -le 0 ]; then
-            _fix_result=$(agent_read_step_result "$worker_dir" "${fix_id}-${attempt}")
-            log "Fix attempts exhausted for step '$step_id', passing fix result: $_fix_result" >&2
-            break
-        fi
-
-        # Re-run original agent to verify
-        local verify_id="${step_id}-verify-${attempt}"
-        export WIGGUM_STEP_ID="$verify_id"
-
-        export WIGGUM_STEP_READONLY="$step_readonly"
-        run_sub_agent "$step_agent" "$worker_dir" "$project_dir" >&2
-        unset WIGGUM_STEP_READONLY
-
-        # Check verification result
-        local verify_result
-        verify_result=$(agent_read_step_result "$worker_dir" "$verify_id")
-        log "Verify attempt $attempt result: $verify_result" >&2
-
-        if [ "$verify_result" != "FIX" ]; then
-            log "Step '$step_id' returned '$verify_result' after fix attempt $attempt" >&2
-            _fix_result="$verify_result"
-            break
-        fi
-
-        # Still FIX - loop again
-    done
-
-    export WIGGUM_STEP_ID="$step_id"
-    echo "$_fix_result"
 }
 
 # Execute pre or post hook commands for a step
@@ -331,8 +431,9 @@ _run_step_hooks() {
             local func_name="${cmd%% *}"
             local func_args="${cmd#* }"
             [ "$func_args" = "$func_name" ] && func_args=""
-            # Validate and call
+            # Validate and call (word splitting on func_args is intentional for multi-arg hooks)
             if declare -F "$func_name" > /dev/null 2>&1; then
+                # shellcheck disable=SC2086
                 $func_name $func_args
             else
                 log_warn "Hook function not found: $func_name"
@@ -393,4 +494,3 @@ _prepare_executor_config() {
             resume_instructions: $resume_instructions
         }' > "$worker_dir/executor-config.json"
 }
-

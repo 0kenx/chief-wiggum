@@ -38,16 +38,17 @@ test_load_valid_two_step_pipeline() {
         {
             "id": "step-one",
             "agent": "agent-alpha",
-            "blocking": true,
+            "max": 3,
+            "on_result": {
+                "FAIL": { "jump": "abort" }
+            },
             "readonly": false,
             "commit_after": true
         },
         {
             "id": "step-two",
             "agent": "agent-beta",
-            "blocking": false,
             "readonly": true,
-            "depends_on": "step-one",
             "commit_after": false
         }
     ]
@@ -64,7 +65,8 @@ PIPE
     assert_equals "step-two" "$(pipeline_get 1 ".id")" "Second step ID should be step-two"
     assert_equals "agent-alpha" "$(pipeline_get 0 ".agent")" "First agent should be agent-alpha"
     assert_equals "agent-beta" "$(pipeline_get 1 ".agent")" "Second agent should be agent-beta"
-    assert_equals "step-one" "$(pipeline_get 1 ".depends_on")" "Second step depends_on should be step-one"
+    assert_equals "3" "$(pipeline_get_max 0)" "First step max should be 3"
+    assert_equals "0" "$(pipeline_get_max 1)" "Second step max should be 0 (unlimited)"
 }
 
 # =============================================================================
@@ -152,28 +154,11 @@ PIPE
     assert_equals "1" "$rc" "pipeline_load should return 1 for missing agent field"
 }
 
-test_load_unknown_depends_on_reference() {
-    cat > "$TEST_DIR/bad-dep.json" << 'PIPE'
-{
-    "name": "bad-dep-pipeline",
-    "steps": [
-        { "id": "step-a", "agent": "agent-one" },
-        { "id": "step-b", "agent": "agent-two", "depends_on": "nonexistent-step" }
-    ]
-}
-PIPE
-
-    pipeline_load "$TEST_DIR/bad-dep.json" 2>/dev/null
-    local rc=$?
-
-    assert_equals "1" "$rc" "pipeline_load should return 1 for unknown depends_on reference"
-}
-
 # =============================================================================
 # pipeline_load - Field Parsing Tests
 # =============================================================================
 
-test_load_blocking_readonly_enabled_by_commit_after() {
+test_load_readonly_enabled_by_commit_after() {
     cat > "$TEST_DIR/fields.json" << 'PIPE'
 {
     "name": "fields-pipeline",
@@ -181,7 +166,8 @@ test_load_blocking_readonly_enabled_by_commit_after() {
         {
             "id": "step-x",
             "agent": "agent-x",
-            "blocking": true,
+            "max": 5,
+            "on_max": "next",
             "readonly": true,
             "enabled_by": "FEATURE_FLAG_X",
             "commit_after": true
@@ -201,49 +187,165 @@ PIPE
     local rc=$?
 
     assert_equals "0" "$rc" "pipeline_load should succeed"
-    assert_equals "true" "$(pipeline_get 0 ".blocking" "true")" "First step blocking should be true"
-    assert_equals "true" "$(pipeline_get 1 ".blocking" "true")" "Second step blocking should default to true"
     assert_equals "true" "$(pipeline_get 0 ".readonly" "false")" "First step readonly should be true"
     assert_equals "false" "$(pipeline_get 1 ".readonly" "false")" "Second step readonly should be false"
     assert_equals "FEATURE_FLAG_X" "$(pipeline_get 0 ".enabled_by")" "First step enabled_by should be FEATURE_FLAG_X"
     assert_equals "" "$(pipeline_get 1 ".enabled_by")" "Second step enabled_by should be empty"
     assert_equals "true" "$(pipeline_get 0 ".commit_after" "false")" "First step commit_after should be true"
     assert_equals "false" "$(pipeline_get 1 ".commit_after" "false")" "Second step commit_after should be false"
+    assert_equals "5" "$(pipeline_get_max 0)" "First step max should be 5"
+    assert_equals "next" "$(pipeline_get_on_max 0)" "First step on_max should be next"
+    assert_equals "0" "$(pipeline_get_max 1)" "Second step max should default to 0"
+    assert_equals "next" "$(pipeline_get_on_max 1)" "Second step on_max should default to next"
 }
 
-test_load_fix_config() {
-    cat > "$TEST_DIR/fix.json" << 'PIPE'
+test_load_on_result_handlers() {
+    cat > "$TEST_DIR/on-result.json" << 'PIPE'
 {
-    "name": "fix-pipeline",
+    "name": "on-result-pipeline",
     "steps": [
         {
-            "id": "audit-step",
-            "agent": "engineering.security-audit",
-            "fix": {
-                "id": "audit-fix",
-                "agent": "engineering.security-fix",
-                "max_attempts": 5,
-                "commit_after": true
+            "id": "step-a",
+            "agent": "agent-a",
+            "on_result": {
+                "FAIL": { "jump": "abort" },
+                "FIX": {
+                    "id": "fix-a",
+                    "agent": "agent-fix",
+                    "max": 2,
+                    "commit_after": true
+                }
             }
         },
         {
-            "id": "plain-step",
-            "agent": "plain-agent"
+            "id": "step-b",
+            "agent": "agent-b"
         }
     ]
 }
 PIPE
 
-    pipeline_load "$TEST_DIR/fix.json"
+    pipeline_load "$TEST_DIR/on-result.json"
     local rc=$?
 
     assert_equals "0" "$rc" "pipeline_load should succeed"
-    assert_equals "engineering.security-fix" "$(pipeline_get_fix 0 ".agent")" "First step fix agent should be engineering.security-fix"
-    assert_equals "5" "$(pipeline_get_fix 0 ".max_attempts" "2")" "First step fix max_attempts should be 5"
-    assert_equals "true" "$(pipeline_get_fix 0 ".commit_after" "true")" "First step fix commit_after should be true"
-    assert_equals "" "$(pipeline_get_fix 1 ".agent")" "Second step fix agent should be empty"
-    assert_equals "2" "$(pipeline_get_fix 1 ".max_attempts" "2")" "Second step fix max_attempts should default to 2"
-    assert_equals "true" "$(pipeline_get_fix 1 ".commit_after" "true")" "Second step fix commit_after should default to true"
+
+    # Check jump handler
+    local fail_handler
+    fail_handler=$(pipeline_get_on_result 0 "FAIL")
+    assert_output_contains "$fail_handler" "abort" "FAIL handler should reference abort"
+
+    # Check inline agent handler
+    local fix_handler
+    fix_handler=$(pipeline_get_on_result 0 "FIX")
+    assert_output_contains "$fix_handler" "agent-fix" "FIX handler should reference agent-fix"
+    assert_output_contains "$fix_handler" "fix-a" "FIX handler should have id fix-a"
+
+    # No handler for PASS
+    local pass_handler
+    pass_handler=$(pipeline_get_on_result 0 "PASS")
+    assert_equals "" "$pass_handler" "PASS handler should be empty (unhandled)"
+
+    # No on_result for step-b
+    local step_b_handler
+    step_b_handler=$(pipeline_get_on_result 1 "FAIL")
+    assert_equals "" "$step_b_handler" "step-b should have no FAIL handler"
+}
+
+test_load_max_and_on_max() {
+    cat > "$TEST_DIR/max.json" << 'PIPE'
+{
+    "name": "max-pipeline",
+    "steps": [
+        {
+            "id": "bounded",
+            "agent": "agent-a",
+            "max": 3,
+            "on_max": "next"
+        },
+        {
+            "id": "bounded-abort",
+            "agent": "agent-b",
+            "max": 5
+        },
+        {
+            "id": "unbounded",
+            "agent": "agent-c"
+        }
+    ]
+}
+PIPE
+
+    pipeline_load "$TEST_DIR/max.json"
+    local rc=$?
+
+    assert_equals "0" "$rc" "pipeline_load should succeed"
+    assert_equals "3" "$(pipeline_get_max 0)" "First step max should be 3"
+    assert_equals "next" "$(pipeline_get_on_max 0)" "First step on_max should be next"
+    assert_equals "5" "$(pipeline_get_max 1)" "Second step max should be 5"
+    assert_equals "next" "$(pipeline_get_on_max 1)" "Second step on_max should default to next"
+    assert_equals "0" "$(pipeline_get_max 2)" "Third step max should be 0 (unlimited)"
+    assert_equals "next" "$(pipeline_get_on_max 2)" "Third step on_max should default to next"
+}
+
+test_load_validates_jump_targets() {
+    cat > "$TEST_DIR/bad-jump.json" << 'PIPE'
+{
+    "name": "bad-jump-pipeline",
+    "steps": [
+        {
+            "id": "step-a",
+            "agent": "agent-a",
+            "on_result": {
+                "FAIL": { "jump": "nonexistent-step" }
+            }
+        }
+    ]
+}
+PIPE
+
+    pipeline_load "$TEST_DIR/bad-jump.json" 2>/dev/null
+    local rc=$?
+
+    assert_equals "1" "$rc" "pipeline_load should return 1 for unknown jump target"
+}
+
+test_load_allows_special_jump_targets() {
+    cat > "$TEST_DIR/special-jumps.json" << 'PIPE'
+{
+    "name": "special-jumps-pipeline",
+    "steps": [
+        {
+            "id": "step-a",
+            "agent": "agent-a",
+            "on_result": {
+                "FAIL": { "jump": "abort" },
+                "FIX": { "jump": "self" }
+            }
+        },
+        {
+            "id": "step-b",
+            "agent": "agent-b",
+            "on_result": {
+                "FAIL": { "jump": "prev" },
+                "STOP": { "jump": "next" }
+            }
+        },
+        {
+            "id": "step-c",
+            "agent": "agent-c",
+            "on_result": {
+                "FAIL": { "jump": "step-a" }
+            }
+        }
+    ]
+}
+PIPE
+
+    pipeline_load "$TEST_DIR/special-jumps.json" 2>/dev/null
+    local rc=$?
+
+    assert_equals "0" "$rc" "pipeline_load should accept special jump targets (self/prev/next/abort) and valid step IDs"
 }
 
 test_load_hooks() {
@@ -304,6 +406,29 @@ test_builtin_defaults_correct_step_ids() {
     assert_equals "docs" "$(pipeline_get 5 ".id")" "Step 5 ID should be docs"
     assert_equals "validation" "$(pipeline_get 6 ".id")" "Step 6 ID should be validation"
     assert_equals "builtin-default" "$PIPELINE_NAME" "Pipeline name should be builtin-default"
+}
+
+test_builtin_defaults_has_on_result() {
+    pipeline_load_builtin_defaults
+
+    # execution should have FAIL->abort
+    local exec_fail
+    exec_fail=$(pipeline_get_on_result 1 "FAIL")
+    assert_output_contains "$exec_fail" "abort" "Execution FAIL should jump to abort"
+
+    # audit should have FIX inline agent
+    local audit_fix
+    audit_fix=$(pipeline_get_on_result 3 "FIX")
+    assert_output_contains "$audit_fix" "audit-fix" "Audit FIX should have inline agent audit-fix"
+    assert_output_contains "$audit_fix" "engineering.security-fix" "Audit FIX should reference security-fix agent"
+
+    # execution should have max:3
+    assert_equals "3" "$(pipeline_get_max 1)" "Execution max should be 3"
+
+    # planning should have no FAIL handler (non-blocking equivalent)
+    local plan_fail
+    plan_fail=$(pipeline_get_on_result 0 "FAIL")
+    assert_equals "" "$plan_fail" "Planning should have no FAIL handler"
 }
 
 # =============================================================================
@@ -441,7 +566,7 @@ PIPE
 }
 
 # =============================================================================
-# pipeline_get / pipeline_get_json / pipeline_get_fix Tests
+# pipeline_get / pipeline_get_json Tests
 # =============================================================================
 
 test_pipeline_get_returns_default_for_missing_field() {
@@ -481,16 +606,19 @@ run_test test_load_empty_steps_array
 run_test test_load_duplicate_step_ids
 run_test test_load_missing_step_id
 run_test test_load_missing_agent_field
-run_test test_load_unknown_depends_on_reference
 
 # pipeline_load - field parsing
-run_test test_load_blocking_readonly_enabled_by_commit_after
-run_test test_load_fix_config
+run_test test_load_readonly_enabled_by_commit_after
+run_test test_load_on_result_handlers
+run_test test_load_max_and_on_max
+run_test test_load_validates_jump_targets
+run_test test_load_allows_special_jump_targets
 run_test test_load_hooks
 
 # pipeline_load_builtin_defaults
 run_test test_builtin_defaults_populates_seven_steps
 run_test test_builtin_defaults_correct_step_ids
+run_test test_builtin_defaults_has_on_result
 
 # pipeline_resolve
 run_test test_resolve_cli_pipeline_name
