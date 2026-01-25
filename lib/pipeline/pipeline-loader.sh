@@ -223,12 +223,12 @@ pipeline_load_builtin_defaults() {
   "name": "builtin-default",
   "steps": [
     {"id":"planning","agent":"product.plan-mode","readonly":true,"enabled_by":"WIGGUM_PLAN_MODE"},
-    {"id":"execution","agent":"system.task-executor","max":3,"config":{"max_iterations":20,"max_turns":50,"supervisor_interval":2},"on_result":{"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}},
+    {"id":"execution","agent":"system.task-executor","max":3,"config":{"max_iterations":20,"max_turns":50,"supervisor_interval":2}},
     {"id":"summary","agent":"system.task-summarizer","readonly":true},
-    {"id":"audit","agent":"engineering.security-audit","max":3,"readonly":true,"on_result":{"FIX":{"id":"audit-fix","agent":"engineering.security-fix","max":2,"commit_after":true},"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}},
-    {"id":"test","agent":"engineering.test-coverage","max":2,"commit_after":true,"on_result":{"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}},
+    {"id":"audit","agent":"engineering.security-audit","max":3,"readonly":true,"on_result":{"FIX":{"id":"audit-fix","agent":"engineering.security-fix","max":2,"commit_after":true}}},
+    {"id":"test","agent":"engineering.test-coverage","max":2,"commit_after":true},
     {"id":"docs","agent":"product.documentation-writer","commit_after":true},
-    {"id":"validation","agent":"engineering.validation-review","readonly":true,"on_result":{"FAIL":{"jump":"abort"},"STOP":{"jump":"abort"}}}
+    {"id":"validation","agent":"engineering.validation-review","readonly":true}
   ]
 }'
     _PIPELINE_STEP_COUNT=7

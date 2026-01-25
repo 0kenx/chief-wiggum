@@ -184,9 +184,11 @@ test_no_zombie_processes() {
 # Test: EXIT trap fires after signal
 # =============================================================================
 test_exit_trap_fires() {
+    local marker_file="$TEST_DIR/exit-trap-marker"
+
     # Run a subshell that sets an EXIT trap then receives SIGTERM
     (
-        trap 'touch "$1"' EXIT
+        trap "touch '$marker_file'" EXIT
         sleep 300
     ) &
     local subshell_pid=$!
@@ -198,7 +200,7 @@ test_exit_trap_fires() {
     # The EXIT trap in bash fires on SIGTERM
     # (This tests the general behavior, not wiggum-specific)
     # Note: This test validates that our trap EXIT approach works
-    assert_success "Exit trap mechanism should work" true
+    assert_file_exists "$marker_file" "Exit trap should have created marker file on SIGTERM"
 }
 
 # =============================================================================

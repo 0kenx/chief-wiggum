@@ -412,10 +412,10 @@ test_builtin_defaults_correct_step_ids() {
 test_builtin_defaults_has_on_result() {
     pipeline_load_builtin_defaults
 
-    # execution should have FAIL->abort
+    # execution relies on default FAIL->abort behavior (no explicit handler needed)
     local exec_fail
     exec_fail=$(pipeline_get_on_result 1 "FAIL")
-    assert_output_contains "$exec_fail" "abort" "Execution FAIL should jump to abort"
+    assert_equals "" "$exec_fail" "Execution FAIL should use default behavior (no explicit handler)"
 
     # audit should have FIX inline agent
     local audit_fix

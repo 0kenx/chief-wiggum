@@ -24,6 +24,97 @@
 _PIPELINE_RUNNER_LOADED=1
 
 source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+# =============================================================================
+# PARENT/NEXT CONTEXT PROPAGATION
+# =============================================================================
+
+# Compute and export parent step context for the current step
+#
+# This enables markdown agents to access upstream outputs via variables like
+# {{parent.step_id}}, {{parent.session_id}}, {{parent.report}}, etc.
+#
+# Args:
+#   idx        - Current step index
+#   worker_dir - Worker directory
+#
+# Exports:
+#   WIGGUM_PARENT_STEP_ID     - Parent step's ID
+#   WIGGUM_PARENT_RUN_ID      - Parent step's run ID
+#   WIGGUM_PARENT_SESSION_ID  - Parent step's Claude session ID (if any)
+#   WIGGUM_PARENT_RESULT      - Parent step's gate result
+#   WIGGUM_PARENT_REPORT      - Path to parent step's report file (if any)
+#   WIGGUM_PARENT_OUTPUT_DIR  - Parent step's output directory
+#   WIGGUM_NEXT_STEP_ID       - Next step's ID
+_export_step_context() {
+    local idx="$1"
+    local worker_dir="$2"
+
+    # Clear previous context
+    unset WIGGUM_PARENT_STEP_ID WIGGUM_PARENT_RUN_ID WIGGUM_PARENT_SESSION_ID
+    unset WIGGUM_PARENT_RESULT WIGGUM_PARENT_REPORT WIGGUM_PARENT_OUTPUT_DIR
+    unset WIGGUM_NEXT_STEP_ID
+
+    local step_count
+    step_count=$(pipeline_step_count)
+
+    # Determine parent step (previous step in pipeline, if any)
+    if [ "$idx" -gt 0 ]; then
+        local parent_idx=$((idx - 1))
+        local parent_step_id
+        parent_step_id=$(pipeline_get "$parent_idx" ".id")
+
+        export WIGGUM_PARENT_STEP_ID="$parent_step_id"
+
+        # Find parent's latest result file
+        local parent_result_file
+        parent_result_file=$(agent_find_latest_result "$worker_dir" "$parent_step_id")
+
+        if [ -n "$parent_result_file" ] && [ -f "$parent_result_file" ]; then
+            # Extract outputs from parent result
+            local parent_session_id parent_result parent_report
+            parent_session_id=$(jq -r '.outputs.session_id // ""' "$parent_result_file" 2>/dev/null)
+            parent_result=$(jq -r '.outputs.gate_result // ""' "$parent_result_file" 2>/dev/null)
+            parent_report=$(jq -r '.outputs.report_file // ""' "$parent_result_file" 2>/dev/null)
+
+            [ -n "$parent_session_id" ] && export WIGGUM_PARENT_SESSION_ID="$parent_session_id"
+            [ -n "$parent_result" ] && export WIGGUM_PARENT_RESULT="$parent_result"
+            [ -n "$parent_report" ] && export WIGGUM_PARENT_REPORT="$parent_report"
+
+            # Extract run_id from result filename (format: <epoch>-<step_id>-result.json)
+            local result_basename
+            result_basename=$(basename "$parent_result_file" "-result.json")
+            export WIGGUM_PARENT_RUN_ID="$result_basename"
+        fi
+
+        # Parent output directory (logs under parent's run_id)
+        if [ -n "${WIGGUM_PARENT_RUN_ID:-}" ]; then
+            export WIGGUM_PARENT_OUTPUT_DIR="$worker_dir/logs/${WIGGUM_PARENT_RUN_ID}"
+        fi
+    fi
+
+    # Determine next step (next in pipeline, if any)
+    local next_idx=$((idx + 1))
+    if [ "$next_idx" -lt "$step_count" ]; then
+        local next_step_id
+        next_step_id=$(pipeline_get "$next_idx" ".id")
+        export WIGGUM_NEXT_STEP_ID="$next_step_id"
+    fi
+
+    log_debug "Step context: parent=${WIGGUM_PARENT_STEP_ID:-none}, next=${WIGGUM_NEXT_STEP_ID:-none}"
+}
+
+# Clear exported step context (called after step completes)
+_clear_step_context() {
+    unset WIGGUM_PARENT_STEP_ID WIGGUM_PARENT_RUN_ID WIGGUM_PARENT_SESSION_ID
+    unset WIGGUM_PARENT_RESULT WIGGUM_PARENT_REPORT WIGGUM_PARENT_OUTPUT_DIR
+    unset WIGGUM_NEXT_STEP_ID
+}
+
+# =============================================================================
+# JUMP-BASED STATE MACHINE
+# =============================================================================
 
 # Global state for jump-based control flow
 declare -A _PIPELINE_VISITS=()          # step_id -> visit count (global for workflow)
@@ -385,6 +476,9 @@ _pipeline_run_step() {
     # Export step ID for result file naming
     export WIGGUM_STEP_ID="$step_id"
 
+    # Export parent/next step context for markdown agents
+    _export_step_context "$idx" "$worker_dir"
+
     # Write step config
     _write_step_config "$worker_dir" "$idx"
 
@@ -430,6 +524,9 @@ _pipeline_run_step() {
     log_kv "Finished" "$(date -Iseconds)"
 
     activity_log "step.completed" "$_worker_id" "${WIGGUM_TASK_ID:-}" "step_id=$step_id" "agent=$step_agent" "result=${gate_result:-UNKNOWN}"
+
+    # Clear step context exports
+    _clear_step_context
     unset WIGGUM_STEP_ID
 }
 

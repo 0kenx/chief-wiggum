@@ -11,15 +11,11 @@
       "id": "execution",
       "agent": "system.task-executor",
       "max": 3,
-      "config": { "max_iterations": 20, "max_turns": 50, "supervisor_interval": 2 },
-      "on_result": {
-        "FAIL": { "jump": "abort" },
-        "STOP": { "jump": "abort" }
-      }
+      "config": { "max_iterations": 20, "max_turns": 50, "supervisor_interval": 2 }
     },
     {
       "id": "summary",
-      "agent": "system.task-summarizer",
+      "agent": "general.task-summarizer",
       "readonly": true
     },
     {
@@ -33,34 +29,24 @@
           "agent": "engineering.security-fix",
           "max": 2,
           "commit_after": true
-        },
-        "FAIL": { "jump": "abort" },
-        "STOP": { "jump": "abort" }
+        }
       }
     },
     {
       "id": "test",
       "agent": "engineering.test-coverage",
       "max": 2,
-      "commit_after": true,
-      "on_result": {
-        "FAIL": { "jump": "abort" },
-        "STOP": { "jump": "abort" }
-      }
+      "commit_after": true
     },
     {
       "id": "docs",
-      "agent": "product.documentation-writer",
+      "agent": "general.documentation-writer",
       "commit_after": true
     },
     {
       "id": "validation",
       "agent": "engineering.validation-review",
-      "readonly": true,
-      "on_result": {
-        "FAIL": { "jump": "abort" },
-        "STOP": { "jump": "abort" }
-      }
+      "readonly": true
     }
   ]
 }

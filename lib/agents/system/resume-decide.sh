@@ -419,7 +419,7 @@ $(_generate_steps_table)
 | Phase | Log Pattern (in worker.log) | Output File |
 |-------|---------------------------|-------------|
 | execution | "Task completed successfully" or "Ralph loop finished" | summaries/summary.txt |
-| audit | "Security audit result: PASS\|FIX\|STOP" | results/*-security-audit-result.json |
+| audit | "Security audit result: PASS\|FIX\|FAIL" | results/*-security-audit-result.json |
 | test | "Test coverage result: PASS\|FAIL\|SKIP" | results/*-test-coverage-result.json |
 | docs | "Documentation writer result:" | results/*-documentation-writer-result.json |
 | validation | "Validation review completed with result:" | results/*-validation-review-result.json |

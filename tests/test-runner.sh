@@ -86,7 +86,7 @@ print_footer() {
         echo -e "${GREEN}All tests passed! ✓${NC}"
         return 0
     else
-        echo -e "${RED}Some tests failed ✗${NC}"
+        echo -e "${RED}Some tests failed ✗${NC}" >&2
         return 1
     fi
 }
@@ -119,7 +119,7 @@ run_test_file() {
         local end_time
         end_time=$(date +%s%N 2>/dev/null || date +%s)
         local duration_ms=$(( (end_time - start_time) / 1000000 ))
-        echo -e "${RED}✗ ${test_name} failed${NC} ${DIM}(${duration_ms}ms)${NC}"
+        echo -e "${RED}✗ ${test_name} failed${NC} ${DIM}(${duration_ms}ms)${NC}" >&2
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_TIMINGS+=("${duration_ms}ms  ${test_name} [FAILED]")
     fi

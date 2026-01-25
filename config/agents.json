@@ -12,10 +12,15 @@
       "supervisor_interval": 2,
       "timeout_seconds": 3600
     },
-    "system.task-summarizer": {
+    "general.task-summarizer": {
       "max_iterations": 1,
       "max_turns": 3,
       "timeout_seconds": 120
+    },
+    "general.documentation-writer": {
+      "max_iterations": 1,
+      "max_turns": 100,
+      "timeout_seconds": 600
     },
     "product.plan-mode": {
       "max_iterations": 5,

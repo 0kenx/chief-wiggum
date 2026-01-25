@@ -26,6 +26,7 @@ _AGENT_REGISTRY_LOADED=1
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
+source "$WIGGUM_HOME/lib/core/agent-md.sh"
 source "$WIGGUM_HOME/lib/worker/agent-runner.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/utils/activity-log.sh"
@@ -41,8 +42,21 @@ _AGENT_REGISTRY_COMPLETED_NORMALLY=false
 
 # Load an agent by type
 #
+# Supports two agent formats in the same directory with inheritance:
+#   1. Markdown agents: lib/agents/<path>.md - defines base behavior
+#   2. Shell agents: lib/agents/<path>.sh - can override/extend markdown
+#
+# Loading order:
+#   - If only .md exists: load markdown agent
+#   - If only .sh exists: load shell agent (legacy)
+#   - If both exist: load markdown first, then source shell to override
+#
+# This allows shell scripts to act as an override layer on top of markdown,
+# similar to function inheritance. Shell can override hooks, add custom logic,
+# while markdown defines the standard prompts and configuration.
+#
 # Args:
-#   agent_type - Dotted agent name (e.g., "system.task-worker" → lib/agents/system/task-worker.sh)
+#   agent_type - Dotted agent name (e.g., "system.task-worker")
 #
 # Returns: 0 on success, 1 if agent not found
 load_agent() {
@@ -51,21 +65,50 @@ load_agent() {
 
     # Convert dotted name to path: system.task-worker → system/task-worker
     local agent_path="${agent_type//./\/}"
-    local agent_file="$agents_dir/${agent_path}.sh"
-
-    if [ ! -f "$agent_file" ]; then
-        log_error "Unknown agent type: $agent_type (expected at $agent_file)"
-        log_error "Available agents: $(list_agents | tr '\n' ' ')"
-        return 1
-    fi
 
     # Clear previous agent functions to avoid conflicts
     if [ -n "$_LOADED_AGENT" ] && [ "$_LOADED_AGENT" != "$agent_type" ]; then
         unset -f agent_required_paths agent_run agent_cleanup 2>/dev/null || true
     fi
 
-    # shellcheck source=/dev/null
-    source "$agent_file"
+    local md_file="$agents_dir/${agent_path}.md"
+    local sh_file="$agents_dir/${agent_path}.sh"
+
+    local has_md=false
+    local has_sh=false
+    [ -f "$md_file" ] && has_md=true
+    [ -f "$sh_file" ] && has_sh=true
+
+    # At least one must exist
+    if [ "$has_md" = false ] && [ "$has_sh" = false ]; then
+        log_error "Unknown agent type: $agent_type"
+        log_error "Searched: $md_file (not found)"
+        log_error "Searched: $sh_file (not found)"
+        log_error "Available agents: $(list_agents | tr '\n' ' ')"
+        return 1
+    fi
+
+    # Load markdown base first (if exists)
+    if [ "$has_md" = true ]; then
+        log_debug "Loading markdown agent base: $agent_type"
+        if ! md_agent_init "$md_file" "$agent_type"; then
+            log_error "Failed to load markdown agent: $agent_type"
+            return 1
+        fi
+    fi
+
+    # Load shell override/extension (if exists)
+    if [ "$has_sh" = true ]; then
+        if [ "$has_md" = true ]; then
+            log_debug "Loading shell overrides for: $agent_type"
+        else
+            log_debug "Loading shell agent: $agent_type"
+        fi
+
+        # shellcheck source=/dev/null
+        source "$sh_file"
+    fi
+
     _LOADED_AGENT="$agent_type"
 
     # Verify required functions exist
@@ -86,7 +129,15 @@ load_agent() {
         log_debug "Agent $agent_type has no agent_output_files (outputs not validated)"
     fi
 
-    log_debug "Loaded agent: $agent_type"
+    # Log what was loaded
+    if [ "$has_md" = true ] && [ "$has_sh" = true ]; then
+        log_debug "Loaded hybrid agent: $agent_type (markdown + shell overrides)"
+    elif [ "$has_md" = true ]; then
+        log_debug "Loaded markdown agent: $agent_type"
+    else
+        log_debug "Loaded shell agent: $agent_type"
+    fi
+
     return 0
 }
 
@@ -493,6 +544,8 @@ run_sub_agent() {
 # List available agents
 #
 # Returns: List of dotted agent names (one per line)
+# Includes both markdown (.md) and shell (.sh) agents from the same directories.
+# When both formats exist for an agent, only lists it once (markdown takes precedence).
 list_agents() {
     local agents_dir="$WIGGUM_HOME/lib/agents"
 
@@ -500,10 +553,33 @@ list_agents() {
         return 0
     fi
 
-    find "$agents_dir" -name "*.sh" -type f | sort | while read -r f; do
-        local rel="${f#$agents_dir/}"
-        echo "${rel%.sh}" | tr '/' '.'
-    done
+    # Use associative array to deduplicate (markdown takes precedence)
+    declare -A seen_agents
+
+    # First pass: list all markdown agents
+    while IFS= read -r f; do
+        local rel="${f#"$agents_dir"/}"
+        local agent_name="${rel%.md}"
+        local dotted_name
+        dotted_name=$(echo "$agent_name" | tr '/' '.')
+        seen_agents["$dotted_name"]=1
+        echo "$dotted_name"
+    done < <(find "$agents_dir" -name "*.md" -type f 2>/dev/null | sort)
+
+    # Second pass: list shell agents not already covered by markdown
+    while IFS= read -r f; do
+        local rel="${f#"$agents_dir"/}"
+        local agent_name="${rel%.sh}"
+        local dotted_name
+        dotted_name=$(echo "$agent_name" | tr '/' '.')
+
+        # Skip if markdown version exists
+        if [ -n "${seen_agents[$dotted_name]:-}" ]; then
+            continue
+        fi
+
+        echo "$dotted_name"
+    done < <(find "$agents_dir" -name "*.sh" -type f 2>/dev/null | sort)
 }
 
 # Get information about an agent

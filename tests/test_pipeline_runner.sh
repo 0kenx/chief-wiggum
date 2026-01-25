@@ -38,7 +38,7 @@ setup() {
     mkdir -p "$TEST_DIR/worker/workspace" "$TEST_DIR/worker/logs" "$TEST_DIR/worker/results"
 
     # Reset loaded state to allow fresh sourcing
-    unset _PIPELINE_LOADER_LOADED _PIPELINE_RUNNER_LOADED _ACTIVITY_LOG_LOADED 2>/dev/null || true
+    unset _PIPELINE_LOADER_LOADED _PIPELINE_RUNNER_LOADED _ACTIVITY_LOG_LOADED _AGENT_BASE_LOADED 2>/dev/null || true
 
     source "$WIGGUM_HOME/lib/core/logger.sh"
     source "$WIGGUM_HOME/lib/utils/activity-log.sh"
@@ -72,10 +72,11 @@ agent_required_paths() { echo ""; }
 agent_run() {
     local worker_dir="\$1"
     echo "${agent_name}" >> "$TEST_DIR/agent_invocations.txt"
-    # Write result file
+    # Write result file in correct format: <epoch>-<step_id>-result.json
     local step_id="\${WIGGUM_STEP_ID:-unknown}"
+    local epoch=\$(date +%s)
     mkdir -p "\$worker_dir/results"
-    echo '{"gate_result": "${result}"}' > "\$worker_dir/results/\${step_id}.json"
+    echo '{"outputs": {"gate_result": "${result}"}}' > "\$worker_dir/results/\${epoch}-\${step_id}-result.json"
 }
 EOF
 }
@@ -112,22 +113,11 @@ agent_run() {
     local result="\${results[\$idx]}"
     echo \$((count + 1)) > "\$counter_file"
     local step_id="\${WIGGUM_STEP_ID:-unknown}"
+    local epoch=\$(date +%s)
     mkdir -p "\$worker_dir/results"
-    echo "{\"gate_result\": \"\$result\"}" > "\$worker_dir/results/\${step_id}.json"
+    echo "{\"outputs\": {\"gate_result\": \"\$result\"}}" > "\$worker_dir/results/\${epoch}-\${step_id}-result.json"
 }
 EOF
-}
-
-# Stub: agent_read_step_result reads from results/
-agent_read_step_result() {
-    local worker_dir="$1"
-    local step_id="$2"
-    local result_file="$worker_dir/results/${step_id}.json"
-    if [ -f "$result_file" ]; then
-        jq -r '.gate_result // "UNKNOWN"' "$result_file" 2>/dev/null
-    else
-        echo "UNKNOWN"
-    fi
 }
 
 # Stub: run_sub_agent calls agent_run from the mocked agent
@@ -143,10 +133,12 @@ run_sub_agent() {
         agent_run "$worker_dir" "$project_dir"
     else
         echo "mock-agent:$agent_type" >> "$TEST_DIR/agent_invocations.txt"
-        # Write a PASS result by default
+        # Write a PASS result by default in correct format
         local step_id="${WIGGUM_STEP_ID:-unknown}"
+        local epoch
+        epoch=$(date +%s)
         mkdir -p "$worker_dir/results"
-        echo '{"gate_result": "PASS"}' > "$worker_dir/results/${step_id}.json"
+        echo '{"outputs": {"gate_result": "PASS"}}' > "$worker_dir/results/${epoch}-${step_id}-result.json"
     fi
 }
 

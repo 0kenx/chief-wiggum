@@ -229,7 +229,7 @@ The TUI component uses Python 3.10+ with [uv](https://docs.astral.sh/uv/) for de
 ### Gate Result Values (easy to forget)
 | Agent | Possible Values |
 |-------|-----------------|
-| `security-audit` | PASS, FIX, STOP |
+| `security-audit` | PASS, FIX, FAIL |
 | `security-fix` | PASS, FIX, FAIL |
 | `validation-review` | PASS, FAIL |
 | `test-coverage` | PASS, FAIL, SKIP |

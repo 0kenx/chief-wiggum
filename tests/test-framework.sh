@@ -35,9 +35,9 @@ assert_success() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Expected: success (exit 0)${NC}"
-        echo -e "    ${RED}Command: $*${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Expected: success (exit 0)${NC}" >&2
+        echo -e "    ${RED}Command: $*${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -52,9 +52,9 @@ assert_failure() {
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 
     if "$@" >/dev/null 2>&1; then
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Expected: failure (non-zero exit)${NC}"
-        echo -e "    ${RED}Command: $*${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Expected: failure (non-zero exit)${NC}" >&2
+        echo -e "    ${RED}Command: $*${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     else
@@ -75,9 +75,9 @@ assert_equals() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Expected: '$expected'${NC}"
-        echo -e "    ${RED}Actual:   '$actual'${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Expected: '$expected'${NC}" >&2
+        echo -e "    ${RED}Actual:   '$actual'${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -95,9 +95,9 @@ assert_not_equals() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Should not equal: '$not_expected'${NC}"
-        echo -e "    ${RED}Actual:           '$actual'${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Should not equal: '$not_expected'${NC}" >&2
+        echo -e "    ${RED}Actual:           '$actual'${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -114,8 +114,8 @@ assert_file_exists() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}File not found: $file_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}File not found: $file_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -132,8 +132,8 @@ assert_file_not_exists() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}File exists: $file_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}File exists: $file_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -150,8 +150,8 @@ assert_dir_exists() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Directory not found: $dir_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Directory not found: $dir_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -166,8 +166,8 @@ assert_file_contains() {
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 
     if [ ! -f "$file_path" ]; then
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}File not found: $file_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}File not found: $file_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -176,9 +176,9 @@ assert_file_contains() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Pattern not found: $pattern${NC}"
-        echo -e "    ${RED}In file: $file_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Pattern not found: $pattern${NC}" >&2
+        echo -e "    ${RED}In file: $file_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -193,16 +193,16 @@ assert_file_not_contains() {
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 
     if [ ! -f "$file_path" ]; then
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}File not found: $file_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}File not found: $file_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
 
     if grep -qF -- "$pattern" "$file_path"; then
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Pattern found (should not be): $pattern${NC}"
-        echo -e "    ${RED}In file: $file_path${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Pattern found (should not be): $pattern${NC}" >&2
+        echo -e "    ${RED}In file: $file_path${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     else
@@ -223,9 +223,9 @@ assert_output_contains() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Pattern not found: $pattern${NC}"
-        echo -e "    ${RED}In output: $output${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Pattern not found: $pattern${NC}" >&2
+        echo -e "    ${RED}In output: $output${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -240,9 +240,9 @@ assert_output_not_contains() {
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 
     if echo "$output" | grep -qF -- "$pattern"; then
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Pattern found (should not be): $pattern${NC}"
-        echo -e "    ${RED}In output: $output${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Pattern found (should not be): $pattern${NC}" >&2
+        echo -e "    ${RED}In output: $output${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     else
@@ -267,10 +267,10 @@ assert_exit_code() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Expected exit code: $expected_code${NC}"
-        echo -e "    ${RED}Actual exit code:   $actual_code${NC}"
-        echo -e "    ${RED}Command: $*${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Expected exit code: $expected_code${NC}" >&2
+        echo -e "    ${RED}Actual exit code:   $actual_code${NC}" >&2
+        echo -e "    ${RED}Command: $*${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -288,9 +288,9 @@ assert_greater_than() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Expected: > $threshold${NC}"
-        echo -e "    ${RED}Actual:   $value${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Expected: > $threshold${NC}" >&2
+        echo -e "    ${RED}Actual:   $value${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -307,9 +307,9 @@ assert_not_empty() {
         echo -e "  ${GREEN}✓${NC} $message"
         return 0
     else
-        echo -e "  ${RED}✗${NC} $message"
-        echo -e "    ${RED}Expected: non-empty value${NC}"
-        echo -e "    ${RED}Actual:   (empty)${NC}"
+        echo -e "  ${RED}✗${NC} $message" >&2
+        echo -e "    ${RED}Expected: non-empty value${NC}" >&2
+        echo -e "    ${RED}Actual:   (empty)${NC}" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
         return 1
     fi
@@ -423,7 +423,7 @@ print_test_summary() {
         echo -e "${GREEN}All assertions passed ✓${NC}"
         return 0
     else
-        echo -e "${RED}Some assertions failed ✗${NC}"
+        echo -e "${RED}Some assertions failed ✗${NC}" >&2
         return 1
     fi
 }

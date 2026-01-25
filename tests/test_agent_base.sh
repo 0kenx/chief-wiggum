@@ -553,12 +553,8 @@ test_pr_comment_fix_sh_syntax() {
     fi
 }
 
-test_validation_review_sh_syntax() {
-    if bash -n "$WIGGUM_HOME/lib/agents/engineering/validation-review.sh" 2>/dev/null; then
-        assert_success "engineering/validation-review.sh should have valid bash syntax" true
-    else
-        assert_failure "engineering/validation-review.sh should have valid bash syntax" true
-    fi
+test_validation_review_md_exists() {
+    assert_file_exists "$WIGGUM_HOME/lib/agents/engineering/validation-review.md" "validation-review.md should exist"
 }
 
 test_task_executor_sh_syntax() {
@@ -569,12 +565,8 @@ test_task_executor_sh_syntax() {
     fi
 }
 
-test_task_summarizer_sh_syntax() {
-    if bash -n "$WIGGUM_HOME/lib/agents/system/task-summarizer.sh" 2>/dev/null; then
-        assert_success "system/task-summarizer.sh should have valid bash syntax" true
-    else
-        assert_failure "system/task-summarizer.sh should have valid bash syntax" true
-    fi
+test_task_summarizer_md_exists() {
+    assert_file_exists "$WIGGUM_HOME/lib/agents/general/task-summarizer.md" "task-summarizer.md should exist"
 }
 
 test_agents_json_has_new_agents() {
@@ -582,7 +574,7 @@ test_agents_json_has_new_agents() {
     agents=$(jq -r '.agents | keys[]' "$WIGGUM_HOME/config/agents.json" 2>/dev/null | sort | tr '\n' ',')
 
     assert_output_contains "$agents" "system.task-executor" "agents.json should have system.task-executor"
-    assert_output_contains "$agents" "system.task-summarizer" "agents.json should have system.task-summarizer"
+    assert_output_contains "$agents" "general.task-summarizer" "agents.json should have general.task-summarizer"
 }
 
 # =============================================================================
@@ -622,9 +614,9 @@ run_test test_exit_codes_sh_syntax
 run_test test_agent_registry_sh_syntax
 run_test test_task_worker_sh_syntax
 run_test test_pr_comment_fix_sh_syntax
-run_test test_validation_review_sh_syntax
+run_test test_validation_review_md_exists
 run_test test_task_executor_sh_syntax
-run_test test_task_summarizer_sh_syntax
+run_test test_task_summarizer_md_exists
 run_test test_agents_json_has_new_agents
 
 # Print summary

@@ -96,7 +96,8 @@ run_suite() {
             FAILED_SUITE_NAMES+=("$name")
         fi
     else
-        if "$script" > /dev/null 2>&1; then
+        # Redirect stdout to /dev/null, let stderr (failures) pass through
+        if "$script" > /dev/null; then
             PASSED_SUITES=$((PASSED_SUITES + 1))
             echo "PASSED"
         else

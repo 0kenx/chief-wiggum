@@ -4,16 +4,361 @@ This document describes how to create and configure agents in Chief Wiggum.
 
 ## Overview
 
-Agents are self-contained Bash scripts that implement specific workflows.
-There are two agent patterns, each in its own directory:
+Agents in Chief Wiggum can be implemented in two formats:
+
+1. **Declarative Markdown Agents** (recommended) — `.md` files with YAML frontmatter and templated prompts
+2. **Shell Script Agents** (legacy) — `.sh` files with full Bash implementation
+
+Markdown agents are recommended for most use cases as they reduce boilerplate, make prompts easier to maintain, and ensure consistent behavior. Shell agents remain available for complex orchestration logic.
+
+There are two agent patterns:
 
 - **Orchestrator agents** (`lib/agents/system/`) — `system.task-worker` —
   manage the full task pipeline, spawn sub-agents, and handle commits/PRs.
   The orchestrator controls workflow only and never calls `claude/*` directly.
   Plan mode is enabled via `WIGGUM_PLAN_MODE=true` or config `plan_mode: true`.
-- **Leaf agents** (`lib/agents/`) — all others — perform a single focused task (audit,
+- **Leaf agents** (`lib/agents/definitions/` or `lib/agents/`) — all others — perform a single focused task (audit,
   review, test, execution, etc.), invoked as sub-agents by orchestrators, using
   unsupervised/supervised ralph loops or single-run execution.
+
+---
+
+## Declarative Markdown Agents
+
+Markdown agents define agent behavior declaratively using YAML frontmatter and templated prompt sections. The interpreter (`lib/core/agent-md.sh`) handles all execution logic.
+
+### File Location
+
+Markdown agent definitions are stored alongside shell agents in `lib/agents/`. Both formats can coexist for the same agent with an inheritance pattern:
+
+```
+lib/agents/
+├── engineering/
+│   ├── security-audit.md    # Markdown base
+│   ├── security-audit.sh    # Shell overrides (optional, extends .md)
+│   ├── security-fix.md      # Markdown only
+│   ├── validation-review.md
+│   └── test-coverage.md
+├── product/
+│   ├── documentation-writer.md
+│   └── plan-mode.md
+└── system/
+    ├── task-worker.sh       # Shell only (complex orchestrator)
+    ├── task-executor.md
+    └── task-summarizer.md
+```
+
+### Inheritance Model
+
+When both `.md` and `.sh` exist for the same agent:
+
+1. **Markdown loads first** - defines base behavior (prompts, config)
+2. **Shell loads second** - can override any function from markdown
+
+This allows:
+- Standard prompts/config defined declaratively in markdown
+- Custom hooks, special logic defined in shell
+- Gradual migration: start with shell, add markdown, keep custom overrides
+
+```bash
+# security-audit.md defines: agent_run, agent_required_paths
+# security-audit.sh can override: agent_on_ready, agent_cleanup, etc.
+```
+
+### Basic Structure
+
+```markdown
+---
+type: engineering.security-audit
+description: Security vulnerability scanner
+required_paths: [workspace]
+valid_results: [PASS, FIX, FAIL]
+mode: ralph_loop
+readonly: true
+report_tag: report
+---
+
+<WIGGUM_SYSTEM_PROMPT>
+You are a security auditor...
+WORKSPACE: {{workspace}}
+
+## Audit Philosophy
+...
+</WIGGUM_SYSTEM_PROMPT>
+
+<WIGGUM_USER_PROMPT>
+{{context_section}}
+
+SECURITY AUDIT TASK:
+...
+</WIGGUM_USER_PROMPT>
+
+<WIGGUM_CONTINUATION_PROMPT>
+CONTINUATION CONTEXT (Iteration {{iteration}}):
+Your previous work: @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt
+</WIGGUM_CONTINUATION_PROMPT>
+```
+
+### Frontmatter Fields
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | yes | - | Agent type (dotted path, e.g., `engineering.security-audit`) |
+| `description` | string | yes | - | Human-readable description |
+| `required_paths` | array | yes | - | Input paths that must exist (relative to worker_dir) |
+| `valid_results` | array | yes | - | Valid result tag values (e.g., `[PASS, FAIL, FIX]`) |
+| `mode` | string | yes | - | Execution mode: `ralph_loop`, `once`, or `resume` |
+| `readonly` | bool | no | false | If true, inject git restrictions into prompts |
+| `report_tag` | string | no | `report` | XML tag to extract for report |
+| `result_tag` | string | no | `result` | XML tag containing result |
+| `output_path` | string | no | - | Custom output file path (for plan-mode style agents) |
+| `workspace_override` | string | no | - | Use `project_dir` instead of `workspace` |
+| `completion_check` | string | no | `result_tag` | Completion check type (see below) |
+| `session_from` | string | no | - | For resume mode: `parent` to use parent session |
+| `outputs` | array | no | - | Output keys to expose for downstream steps |
+
+### Prompt Sections
+
+Three XML-tagged sections define the prompts:
+
+| Section | Required | Usage |
+|---------|----------|-------|
+| `<WIGGUM_SYSTEM_PROMPT>` | yes | System prompt - sets context and behavior |
+| `<WIGGUM_USER_PROMPT>` | yes | User prompt - the task to perform |
+| `<WIGGUM_CONTINUATION_PROMPT>` | no | Appended on iteration > 0 (ralph_loop mode only) |
+
+### Variable Interpolation
+
+Variables use `{{name}}` syntax and are replaced at runtime.
+
+#### Path Variables
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `{{workspace}}` | `$worker_dir/workspace` | Git worktree containing code |
+| `{{worker_dir}}` | arg 1 to `agent_run()` | Worker directory root |
+| `{{project_dir}}` | arg 2 to `agent_run()` | Original project root |
+
+#### Current Step Context
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `{{task_id}}` | Extracted from worker_dir | Task identifier (e.g., `TASK-001`) |
+| `{{step_id}}` | `$WIGGUM_STEP_ID` | Current pipeline step ID |
+| `{{run_id}}` | `$RALPH_RUN_ID` | Current run ID (`step_id-epoch`) |
+| `{{session_id}}` | Generated per-iteration | Claude session ID for current iteration |
+
+#### Parent Step Context (Pipeline Chaining)
+
+These variables enable modular agents that consume outputs from upstream steps:
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `{{parent.step_id}}` | `$WIGGUM_PARENT_STEP_ID` | Parent step's ID |
+| `{{parent.run_id}}` | `$WIGGUM_PARENT_RUN_ID` | Parent step's run ID |
+| `{{parent.session_id}}` | Parent result outputs | Claude session from parent |
+| `{{parent.result}}` | `$WIGGUM_PARENT_RESULT` | Parent's gate result |
+| `{{parent.output_dir}}` | Computed | Parent's output directory |
+| `{{parent.report}}` | `$WIGGUM_PARENT_REPORT` | Path to parent's report file |
+
+#### Next Step Context
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `{{next.step_id}}` | `$WIGGUM_NEXT_STEP_ID` | Next step's ID (for output naming) |
+
+#### Iteration Variables (ralph_loop mode only)
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `{{iteration}}` | Callback arg 1 | Current iteration (0-based) |
+| `{{prev_iteration}}` | Computed | Previous iteration number |
+| `{{output_dir}}` | Callback arg 2 | Output directory for this run |
+
+#### Generated Content Variables
+
+| Variable | Generated By | Description |
+|----------|--------------|-------------|
+| `{{context_section}}` | `_md_generate_context_section()` | Dynamic context based on available files |
+| `{{git_restrictions}}` | `_md_generate_git_restrictions()` | Forbidden/allowed git commands block |
+
+### Execution Modes
+
+#### Mode: `ralph_loop` (default)
+
+Iterative execution with optional supervision. Uses all three prompt sections.
+
+```yaml
+mode: ralph_loop
+```
+
+The continuation prompt section is only appended when `iteration > 0`.
+
+#### Mode: `once`
+
+Single-shot execution. Only uses system prompt and user prompt (no continuation).
+
+```yaml
+mode: once
+```
+
+#### Mode: `resume`
+
+Resume a prior Claude session. Requires `session_from` config.
+
+```yaml
+mode: resume
+session_from: parent  # Use parent step's session_id
+```
+
+### Completion Check Types
+
+| Check Type | Declaration | Behavior |
+|------------|-------------|----------|
+| `result_tag` (default) | `completion_check: result_tag` | Looks for `<result>VALUE</result>` in logs |
+| `status_file` | `completion_check: status_file:path` | Checks for `- [ ]` items in specified file |
+| `file_exists` | `completion_check: file_exists:{{output_path}}` | Checks output file exists and non-empty |
+
+### Output Declaration for Chaining
+
+Agents declare what outputs they provide for downstream steps:
+
+```yaml
+outputs:
+  - session_id      # For resume-mode consumers
+  - report_file     # For report consumers
+  - plan_file       # Custom output
+```
+
+The pipeline runner reads these from the agent result and makes them available as environment variables for downstream steps.
+
+### Example: Security Audit Agent
+
+```markdown
+---
+type: engineering.security-audit
+description: Security vulnerability scanner that audits codebase for security issues
+required_paths: [workspace]
+valid_results: [PASS, FIX, FAIL]
+mode: ralph_loop
+readonly: true
+report_tag: report
+outputs: [session_id, report_file]
+---
+
+<WIGGUM_SYSTEM_PROMPT>
+SECURITY AUDITOR:
+
+You scan code for security vulnerabilities. Your job is to find REAL issues, not theoretical ones.
+
+WORKSPACE: {{workspace}}
+
+## Audit Philosophy
+
+* HIGH CONFIDENCE ONLY - Only report issues you're confident are real vulnerabilities
+* VERIFY BEFORE REPORTING - Check context; what looks dangerous might be safe
+* EVIDENCE REQUIRED - Every finding needs concrete evidence (file, line, code snippet)
+
+{{git_restrictions}}
+</WIGGUM_SYSTEM_PROMPT>
+
+<WIGGUM_USER_PROMPT>
+{{context_section}}
+
+SECURITY AUDIT TASK:
+
+Scan the codebase for security vulnerabilities...
+
+## Output Format
+
+<report>
+...
+</report>
+
+<result>PASS</result>
+OR
+<result>FIX</result>
+OR
+<result>FAIL</result>
+</WIGGUM_USER_PROMPT>
+
+<WIGGUM_CONTINUATION_PROMPT>
+CONTINUATION CONTEXT (Iteration {{iteration}}):
+
+Your previous audit work is summarized in @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt.
+
+Please continue your audit and provide the final <report> and <result> tags when complete.
+</WIGGUM_CONTINUATION_PROMPT>
+```
+
+### Example: Task Summarizer (Resume Mode)
+
+```markdown
+---
+type: system.task-summarizer
+description: Generate final summary by resuming executor session
+required_paths: [workspace]
+valid_results: [PASS, SKIP]
+mode: resume
+session_from: parent
+output_path: summaries/summary.txt
+outputs: [summary_file]
+---
+
+<WIGGUM_USER_PROMPT>
+FINAL COMPREHENSIVE SUMMARY REQUEST:
+
+Please provide a comprehensive summary of all the work completed in this session.
+Write the summary to {{output_path}}.
+</WIGGUM_USER_PROMPT>
+```
+
+### When to Use Shell vs Markdown Agents
+
+**Use Markdown Agents for:**
+- Standard audit/review agents (security-audit, validation-review, test-coverage)
+- Documentation generation (documentation-writer)
+- Plan generation (plan-mode)
+- Any agent with straightforward prompt-based logic
+
+**Keep as Shell Agents:**
+- Orchestrators that manage sub-agents (task-worker)
+- Agents with complex state management (resume-decide)
+- Agents with custom pre/post processing (git-conflict-resolver)
+- Agents that need dynamic pipeline loading
+
+### Migration Guide
+
+To convert an existing shell agent to markdown:
+
+1. **Extract frontmatter** from the agent metadata comments:
+   ```yaml
+   type: engineering.my-agent
+   description: <from AGENT_DESCRIPTION>
+   required_paths: <from agent_required_paths()>
+   valid_results: <from agent_extract_and_write_result call>
+   mode: ralph_loop  # or once/resume
+   ```
+
+2. **Move prompts** from `_get_system_prompt()` and `_get_user_prompt()` functions into XML sections
+
+3. **Replace hardcoded paths** with variables:
+   - `$workspace` → `{{workspace}}`
+   - `$worker_dir` → `{{worker_dir}}`
+
+4. **Extract continuation logic** to `<WIGGUM_CONTINUATION_PROMPT>` section
+
+5. **Remove boilerplate** - the interpreter handles:
+   - `agent_setup_context()`
+   - `run_ralph_loop()` invocation
+   - `agent_extract_and_write_result()`
+   - Completion checking
+
+---
+
+## Shell Script Agents (Legacy)
+
+Shell agents provide full control over agent behavior but require more boilerplate code.
 
 ## Agent Lifecycle
 
@@ -336,7 +681,7 @@ my_result_path=$(agent_get_result_path "$worker_dir")
 
 # Unified extraction from log files (extracts both report and gate_result)
 # Args: worker_dir, agent_name, log_prefix, report_tag, valid_values
-agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|STOP"
+agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|FAIL"
 ```
 
 ### Result JSON Schema

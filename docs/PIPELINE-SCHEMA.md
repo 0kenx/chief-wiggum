@@ -308,7 +308,7 @@ The previous schema fields map to this model:
 
 | Legacy Field | Equivalent |
 |-------------|------------|
-| `"blocking": true` | `"on_result": { "FAIL": {"jump":"abort"}, "STOP": {"jump":"abort"} }` |
+| `"blocking": true` | `"on_result": { "FAIL": {"jump":"abort"} }` |
 | `"blocking": false` | (default — no on_result for FAIL) |
 | `"fix": {...}` | `"on_result": { "FIX": { <inline-agent> } }` |
 | `"depends_on": "X"` | Step X has `"on_result": { "FAIL": {"jump":"<skip-past-dependents>"} }` |
@@ -353,8 +353,7 @@ The previous schema fields map to this model:
           "agent": "engineering.security-fix",
           "max": 2,
           "commit_after": true
-        },
-        "STOP": { "jump": "abort" }
+        }
       }
     },
     {

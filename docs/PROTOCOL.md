@@ -132,7 +132,7 @@ All gate agents produce a `gate_result` field. Default values include PASS, FIX,
 | Agent | gate_result Values |
 |-------|-------------------|
 | engineering.validation-review | PASS, FAIL |
-| engineering.security-audit | PASS, FIX, STOP |
+| engineering.security-audit | PASS, FIX, FAIL |
 | engineering.code-review | PASS, FAIL, FIX |
 | engineering.test-coverage | PASS, FAIL, SKIP |
 | product.documentation-writer | PASS, SKIP |
