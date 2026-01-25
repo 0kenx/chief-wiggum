@@ -227,14 +227,21 @@ agent_run() {
     user_prompt=$(_build_user_prompt "$worker_dir")
 
     # Run Claude with tool access so it can read the files itself
-    # JSON stream output goes to logs/resume-decide.log
+    # Create run-namespaced log directory (unified agent interface)
+    local step_id="${WIGGUM_STEP_ID:-resume-decide}"
+    local run_epoch
+    run_epoch=$(date +%s)
+    local run_id="${step_id}-${run_epoch}"
+    mkdir -p "$worker_dir/logs/$run_id"
+    local log_file="$worker_dir/logs/$run_id/${step_id}-0-${run_epoch}.log"
+
     local workspace="$worker_dir"
     [ -d "$worker_dir/workspace" ] && workspace="$worker_dir/workspace"
 
     run_agent_once "$workspace" \
         "$(_get_system_prompt "$worker_dir")" \
         "$user_prompt" \
-        "$worker_dir/logs/resume-decide.log" \
+        "$log_file" \
         "$max_turns"
 
     local agent_exit=$?
@@ -582,10 +589,14 @@ EOF
 # Uses shared agent-base.sh utilities (same pattern as security-audit, test-coverage, etc.)
 _extract_decision() {
     local worker_dir="$1"
-    local log_file="$worker_dir/logs/resume-decide.log"
+    local step_id="${WIGGUM_STEP_ID:-resume-decide}"
 
-    if [ ! -f "$log_file" ]; then
-        log_error "No resume-decide log file found at $log_file"
+    # Find the latest log file matching the step pattern (unified agent interface)
+    local log_file
+    log_file=$(find "$worker_dir/logs" -name "${step_id}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+
+    if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
+        log_error "No resume-decide log file found in $worker_dir/logs"
         echo "ABORT" > "$worker_dir/resume-step.txt"
         echo "No decision log produced." > "$worker_dir/reports/resume-instructions.md"
         return 1

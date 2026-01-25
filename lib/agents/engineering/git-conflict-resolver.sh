@@ -53,8 +53,9 @@ agent_run() {
     agent_create_directories "$worker_dir"
 
     # Clean up old resolution files before re-running
+    local step_id="${WIGGUM_STEP_ID:-resolve}"
     rm -f "$worker_dir/reports/resolution-summary.md"
-    find "$worker_dir/logs" -name "resolve-*.log" -delete 2>/dev/null || true
+    find "$worker_dir/logs" -name "${step_id}-*.log" -delete 2>/dev/null || true
     rm -f "$worker_dir/summaries/resolve-"*.txt
 
     # Check for conflicts
@@ -249,8 +250,9 @@ _extract_resolution_summary() {
     local worker_dir="$1"
 
     # Find the latest resolve log (excluding summary logs)
+    local step_id="${WIGGUM_STEP_ID:-resolve}"
     local log_file
-    log_file=$(find "$worker_dir/logs" -name "resolve-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    log_file=$(find "$worker_dir/logs" -name "${step_id}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     local report_content=""
 

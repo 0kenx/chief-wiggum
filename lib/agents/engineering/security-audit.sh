@@ -112,8 +112,9 @@ _audit_completion_check() {
     # Check if any audit log contains a result tag
     local worker_dir
     worker_dir=$(agent_get_worker_dir)
+    local step_id="${WIGGUM_STEP_ID:-audit}"
     local latest_log
-    latest_log=$(find "$worker_dir/logs" -name "audit-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    latest_log=$(find "$worker_dir/logs" -name "${step_id}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
         if grep -qP '<result>(PASS|FIX|STOP)</result>' "$latest_log" 2>/dev/null; then
@@ -307,9 +308,10 @@ EOF
 # Extract audit result from log files
 _extract_audit_result() {
     local worker_dir="$1"
+    local step_id="${WIGGUM_STEP_ID:-audit}"
 
     # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
-    agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|FIX|STOP"
+    agent_extract_and_write_result "$worker_dir" "SECURITY" "$step_id" "report" "PASS|FIX|STOP"
 }
 
 # Check security result from a worker directory (utility for callers)

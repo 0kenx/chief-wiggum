@@ -60,8 +60,13 @@ agent_run() {
     system_prompt=$(_get_system_prompt "$workspace")
     user_prompt=$(_get_user_prompt)
 
-    local log_file
-    log_file="$worker_dir/logs/docs-$(date +%Y%m%d-%H%M%S).log"
+    # Create run-namespaced log directory (unified agent interface)
+    local step_id="${WIGGUM_STEP_ID:-docs}"
+    local run_epoch
+    run_epoch=$(date +%s)
+    local run_id="${step_id}-${run_epoch}"
+    mkdir -p "$worker_dir/logs/$run_id"
+    local log_file="$worker_dir/logs/$run_id/${step_id}-0-${run_epoch}.log"
 
     # Run once with high max_turns (no iteration loop needed for docs)
     run_agent_once "$workspace" "$system_prompt" "$user_prompt" "$log_file" "$max_turns"
@@ -268,9 +273,10 @@ EOF
 # Extract docs result from log files
 _extract_docs_result() {
     local worker_dir="$1"
+    local step_id="${WIGGUM_STEP_ID:-docs}"
 
     # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
-    agent_extract_and_write_result "$worker_dir" "DOCS" "docs" "report" "PASS|SKIP"
+    agent_extract_and_write_result "$worker_dir" "DOCS" "$step_id" "report" "PASS|SKIP"
 }
 
 # Check docs result from a worker directory (utility for callers)

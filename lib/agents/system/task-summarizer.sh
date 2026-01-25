@@ -105,9 +105,13 @@ agent_run() {
 
     log "Generating final summary by resuming session: $session_id"
 
-    # Use step ID from pipeline for log file naming
-    local step_prefix="${WIGGUM_STEP_ID:-summary}"
-    local log_file="$worker_dir/logs/${step_prefix}.log"
+    # Create run-namespaced log directory (unified agent interface)
+    local step_id="${WIGGUM_STEP_ID:-summary}"
+    local run_epoch
+    run_epoch=$(date +%s)
+    local run_id="${step_id}-${run_epoch}"
+    mkdir -p "$worker_dir/logs/$run_id"
+    local log_file="$worker_dir/logs/$run_id/${step_id}-0-${run_epoch}.log"
 
     # Resume the executor's session with summary prompt
     run_agent_resume "$session_id" \

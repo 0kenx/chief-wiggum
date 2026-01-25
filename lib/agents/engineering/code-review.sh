@@ -117,8 +117,9 @@ _review_completion_check() {
     # Check if any review log contains a result tag
     local worker_dir
     worker_dir=$(agent_get_worker_dir)
+    local step_id="${WIGGUM_STEP_ID:-review}"
     local latest_log
-    latest_log=$(find "$worker_dir/logs" -name "review-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    latest_log=$(find "$worker_dir/logs" -name "${step_id}-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
         if grep -qP '<result>(PASS|FAIL|FIX)</result>' "$latest_log" 2>/dev/null; then
@@ -293,9 +294,10 @@ EOF
 # Extract review result from log files
 _extract_review_result() {
     local worker_dir="$1"
+    local step_id="${WIGGUM_STEP_ID:-review}"
 
     # Use unified extraction function (5-arg: worker_dir, name, log_prefix, report_tag, valid_values)
-    agent_extract_and_write_result "$worker_dir" "REVIEW" "review" "review" "PASS|FAIL|FIX"
+    agent_extract_and_write_result "$worker_dir" "REVIEW" "$step_id" "review" "PASS|FAIL|FIX"
     REVIEW_RESULT="$REVIEW_RESULT"
 }
 
