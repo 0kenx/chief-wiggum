@@ -13,6 +13,18 @@ run_agent_once() {
     local output_file="$4"
     local max_turns="${5:-3}"
     local session_id="${6:-}"
+    local _run_once_completed_normally=false
+
+    # Exit handler for detecting unexpected exits
+    # shellcheck disable=SC2329
+    _run_once_exit_handler() {
+        local exit_code=$?
+        if [ "$_run_once_completed_normally" != true ]; then
+            log_error "Unexpected exit from run_agent_once (exit_code=$exit_code, workspace=$workspace)"
+        fi
+        trap - EXIT
+    }
+    trap _run_once_exit_handler EXIT
 
     # Validate required parameters
     if [ -z "$workspace" ] || [ -z "$system_prompt" ] || [ -z "$user_prompt" ]; then
@@ -61,11 +73,13 @@ run_agent_once() {
         local exit_code=0
         "$CLAUDE" "${cmd_args[@]}" > "$output_file" 2>&1 || exit_code=$?
         log_debug "Agent completed (exit_code: $exit_code, output: $output_file)"
+        _run_once_completed_normally=true
         return $exit_code
     else
         # No WIGGUM_LOG_DIR set - output goes to stdout only (not recommended)
         local exit_code=0
         "$CLAUDE" "${cmd_args[@]}" 2>&1 || exit_code=$?
+        _run_once_completed_normally=true
         return $exit_code
     fi
 }

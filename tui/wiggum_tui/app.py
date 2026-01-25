@@ -77,7 +77,7 @@ class WiggumApp(App):
 
     def compose(self) -> ComposeResult:
         yield WiggumHeader(self.ralph_dir)
-        with TabbedContent(initial="workers"):
+        with TabbedContent(initial="kanban"):
             with TabPane("Kanban", id="kanban"):
                 yield KanbanPanel(self.ralph_dir)
             with TabPane("Workers", id="workers"):

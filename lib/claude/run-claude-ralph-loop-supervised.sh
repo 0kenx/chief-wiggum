@@ -183,6 +183,7 @@ run_ralph_loop_supervised() {
     local shutdown_requested=false
     local last_session_id=""
     local supervisor_feedback=""
+    local _ralph_supervised_completed_normally=false
 
     # Signal handler for graceful shutdown
     # shellcheck disable=SC2329  # Function is used via trap
@@ -190,6 +191,17 @@ run_ralph_loop_supervised() {
         log "Supervised ralph loop received shutdown signal"
         shutdown_requested=true
     }
+
+    # Exit handler for detecting unexpected exits
+    # shellcheck disable=SC2329
+    _ralph_supervised_exit_handler() {
+        local exit_code=$?
+        if [ "$_ralph_supervised_completed_normally" != true ]; then
+            log_error "Unexpected exit from supervised ralph loop (exit_code=$exit_code, iteration=$iteration, workspace=$workspace)"
+        fi
+        trap - EXIT
+    }
+    trap _ralph_supervised_exit_handler EXIT
     trap _ralph_supervised_signal_handler INT TERM
 
     # Record start time
@@ -485,6 +497,7 @@ Please provide your summary based on the conversation so far, following this str
                     echo "[$(date -Iseconds)] INFO: LOOP_STOPPED_BY_SUPERVISOR end_time=$end_time duration_sec=$duration iterations=$iteration" >> "$output_dir/worker.log" 2>/dev/null || true
 
                     export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+                    _ralph_supervised_completed_normally=true
                     return 0
                     ;;
 
@@ -501,6 +514,7 @@ Please provide your summary based on the conversation so far, following this str
 
                         log "Supervised loop stopped due to restart limit (duration: ${duration}s)"
                         export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+                        _ralph_supervised_completed_normally=true
                         return 1
                     fi
 
@@ -539,6 +553,7 @@ Please provide your summary based on the conversation so far, following this str
     if [ $iteration -ge "$max_iterations" ]; then
         log_error "Supervised ralph loop reached max iterations ($max_iterations) without completing"
         echo "[$(date -Iseconds)] WARN: LOOP_INCOMPLETE end_time=$end_time duration_sec=$duration iterations=$iteration restarts=$restart_count" >> "$output_dir/worker.log" 2>/dev/null || true
+        _ralph_supervised_completed_normally=true
         return 1
     fi
 
@@ -548,5 +563,6 @@ Please provide your summary based on the conversation so far, following this str
     # Export last session ID for potential follow-up
     export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
 
+    _ralph_supervised_completed_normally=true
     return 0
 }

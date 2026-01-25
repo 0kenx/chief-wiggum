@@ -22,9 +22,22 @@ run_agent_resume() {
     local prompt="$2"
     local output_file="$3"
     local max_turns="${4:-3}"
+    local _run_resume_completed_normally=false
+
+    # Exit handler for detecting unexpected exits
+    # shellcheck disable=SC2329
+    _run_resume_exit_handler() {
+        local exit_code=$?
+        if [ "$_run_resume_completed_normally" != true ]; then
+            log_error "Unexpected exit from run_agent_resume (exit_code=$exit_code, session_id=$session_id)"
+        fi
+        trap - EXIT
+    }
+    trap _run_resume_exit_handler EXIT
 
     if [ -z "$session_id" ] || [ -z "$prompt" ]; then
         log_error "run_agent_resume: session_id and prompt are required"
+        _run_resume_completed_normally=true
         return 1
     fi
 
@@ -46,6 +59,7 @@ run_agent_resume() {
             --dangerously-skip-permissions \
             -p "$prompt" > "$output_file" 2>&1 || exit_code=$?
         log_debug "Resume completed (exit_code: $exit_code, output: $output_file)"
+        _run_resume_completed_normally=true
         return $exit_code
     else
         # No WIGGUM_LOG_DIR set - output goes to stdout only (not recommended)
@@ -54,6 +68,7 @@ run_agent_resume() {
             --max-turns "$max_turns" \
             --dangerously-skip-permissions \
             -p "$prompt" 2>&1 || exit_code=$?
+        _run_resume_completed_normally=true
         return $exit_code
     fi
 }

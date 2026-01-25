@@ -198,10 +198,10 @@ class TaskCard(Static):
     TaskCard {
         background: #181825;
         border: solid #45475a;
-        margin: 0 0 1 0;
+        margin: 0;
         padding: 0 0;
         height: auto;
-        min-height: 4;
+        min-height: 3;
     }
 
     TaskCard:hover {

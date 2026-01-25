@@ -72,6 +72,7 @@ run_ralph_loop() {
     local iteration=0
     local shutdown_requested=false
     local last_session_id=""
+    local _ralph_loop_completed_normally=false
 
     # Signal handler for graceful shutdown (invoked by trap)
     # shellcheck disable=SC2329
@@ -79,6 +80,18 @@ run_ralph_loop() {
         log "Ralph loop received shutdown signal"
         shutdown_requested=true
     }
+
+    # Exit handler for detecting unexpected exits
+    # shellcheck disable=SC2329
+    _ralph_loop_exit_handler() {
+        local exit_code=$?
+        if [ "$_ralph_loop_completed_normally" != true ]; then
+            log_error "Unexpected exit from ralph loop (exit_code=$exit_code, iteration=$iteration, workspace=$workspace)"
+        fi
+        # Reset trap to avoid recursion
+        trap - EXIT
+    }
+    trap _ralph_loop_exit_handler EXIT
     trap _ralph_loop_signal_handler INT TERM
 
     # Record start time
@@ -303,6 +316,7 @@ Please provide your summary based on the conversation so far, following this str
     if [ $iteration -ge "$max_iterations" ]; then
         log_error "Ralph loop reached max iterations ($max_iterations) without completing"
         echo "[$(date -Iseconds)] WARN: LOOP_INCOMPLETE end_time=$end_time duration_sec=$duration iterations=$iteration max_iterations=$max_iterations" >> "$output_dir/worker.log" 2>/dev/null || true
+        _ralph_loop_completed_normally=true
         return 1
     fi
 
@@ -312,5 +326,6 @@ Please provide your summary based on the conversation so far, following this str
     # Export last session ID for potential follow-up (e.g., final summary generation)
     export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
 
+    _ralph_loop_completed_normally=true
     return 0
 }

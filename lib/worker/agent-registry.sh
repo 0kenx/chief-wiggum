@@ -37,6 +37,7 @@ _LOADED_AGENT=""
 _AGENT_REGISTRY_IS_TOP_LEVEL=false
 _AGENT_REGISTRY_PROJECT_DIR=""
 _AGENT_REGISTRY_WORKER_DIR=""
+_AGENT_REGISTRY_COMPLETED_NORMALLY=false
 
 # Load an agent by type
 #
@@ -307,16 +308,23 @@ run_agent() {
 
     activity_log "agent.completed" "$_a_worker_id" "${WIGGUM_TASK_ID:-}" "agent=$agent_type" "exit_code=$exit_code"
     log "Agent $agent_type completed with exit code: $exit_code"
+    _AGENT_REGISTRY_COMPLETED_NORMALLY=true
     return $exit_code
 }
 
 # Internal cleanup function called on exit
 _agent_registry_cleanup() {
+    local exit_code=$?
     if [ "$_AGENT_REGISTRY_IS_TOP_LEVEL" = true ]; then
+        # Log error if agent didn't complete normally
+        if [ "$_AGENT_REGISTRY_COMPLETED_NORMALLY" != true ]; then
+            log_error "Unexpected exit from agent (exit_code=$exit_code, worker=$_AGENT_REGISTRY_WORKER_DIR)"
+        fi
         agent_runner_cleanup
         _AGENT_REGISTRY_IS_TOP_LEVEL=false
         _AGENT_REGISTRY_PROJECT_DIR=""
         _AGENT_REGISTRY_WORKER_DIR=""
+        _AGENT_REGISTRY_COMPLETED_NORMALLY=false
         unset WIGGUM_CURRENT_AGENT_TYPE
     fi
 }
