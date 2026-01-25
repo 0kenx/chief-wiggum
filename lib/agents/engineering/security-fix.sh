@@ -5,9 +5,12 @@ set -euo pipefail
 # =============================================================================
 # AGENT_TYPE: security-fix
 # AGENT_DESCRIPTION: Security fix agent that addresses vulnerabilities found by
-#   security-audit. Uses ralph loop pattern to iteratively fix security issues.
-#   Reads findings from security-report.md, makes code changes, and tracks
+#   a security audit. Uses ralph loop pattern to iteratively fix security issues.
+#   Reads findings from a security report, makes code changes, and tracks
 #   progress in fix-status.md. Prioritizes CRITICAL > HIGH > MEDIUM fixes.
+#   The report source is configurable via step-config.json (report_from key,
+#   which should be a step ID). If not specified, scans all reports for one
+#   containing security severity sections.
 # REQUIRED_PATHS:
 #   - reports/security-report.md : Security audit report containing findings to fix
 #   - workspace                  : Directory containing the code to modify
@@ -30,13 +33,48 @@ agent_on_ready() {
     local worker_dir="$1"
     # Try to find upstream report, but don't fail if missing.
     # The pipeline handles dependencies via depends_on in config, not hardcoded here.
-    _SECURITY_REPORT_FILE=$(agent_find_latest_report "$worker_dir" "security-audit")
+    #
+    # Check step-config.json for optional "report_from" key (should be a step ID).
+    # If not specified, scan all reports looking for one with security findings.
+    local step_config report_from_step
+    step_config=$(agent_read_step_config "$worker_dir")
+    report_from_step=$(echo "$step_config" | jq -r '.report_from // ""')
+
+    if [ -n "$report_from_step" ]; then
+        # Use the specified step ID to find the report
+        _SECURITY_REPORT_FILE=$(agent_find_latest_report "$worker_dir" "$report_from_step")
+    else
+        # No specific step configured - find any report with security findings
+        _SECURITY_REPORT_FILE=$(_find_security_audit_report "$worker_dir")
+    fi
     return 0
 }
 
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
+
+# Find a security audit report file
+# Scans all reports in reverse chronological order (most recent first)
+# Returns: path to report file with security findings, or empty string
+_find_security_audit_report() {
+    local worker_dir="$1"
+    local reports_dir="$worker_dir/reports"
+
+    [ -d "$reports_dir" ] || return 0
+
+    # Sort by modification time (newest first) and check each for security findings
+    while IFS= read -r report_file; do
+        [ -f "$report_file" ] || continue
+        # Check if this looks like a security audit report (has severity sections)
+        if grep -qE '^### (CRITICAL|HIGH|MEDIUM|LOW|INFO)' "$report_file" 2>/dev/null; then
+            echo "$report_file"
+            return 0
+        fi
+    done < <(ls -t "$reports_dir"/*-report.md 2>/dev/null)
+
+    return 0
+}
 
 # Global for result tracking
 FIX_RESULT="UNKNOWN"

@@ -7,8 +7,9 @@ set -euo pipefail
 # AGENT_DESCRIPTION: Generates final task summary by resuming a prior agent's
 #   Claude session. Produces a comprehensive summary for changelogs and PRs
 #   by extracting structured content from the resumed session output.
-#   The session source is configurable via step-config.json (resume_from key),
-#   defaulting to task-executor for backwards compatibility.
+#   The session source is configurable via step-config.json (resume_from key,
+#   which should be a step ID). If not specified, scans all results for one
+#   containing a session_id output.
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code (for context)
 # OUTPUT_FILES:
@@ -28,6 +29,29 @@ agent_required_paths() {
 agent_source_core
 agent_source_resume
 
+# Find a result file containing session_id
+# Scans all results in reverse chronological order (most recent first)
+# Returns: path to result file with session_id, or empty string
+_find_result_with_session_id() {
+    local worker_dir="$1"
+    local results_dir="$worker_dir/results"
+
+    [ -d "$results_dir" ] || return 0
+
+    # Sort by modification time (newest first) and check each for session_id
+    while IFS= read -r result_file; do
+        [ -f "$result_file" ] || continue
+        local sid
+        sid=$(jq -r '.outputs.session_id // ""' "$result_file" 2>/dev/null)
+        if [ -n "$sid" ]; then
+            echo "$result_file"
+            return 0
+        fi
+    done < <(ls -t "$results_dir"/*-result.json 2>/dev/null)
+
+    return 0
+}
+
 # Main entry point
 agent_run() {
     local worker_dir="$1"
@@ -38,35 +62,48 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # Determine which agent to read session_id from.
-    # Check step-config.json for optional "resume_from" key, default to task-executor.
-    local step_config resume_from_agent
+    # Determine which step to read session_id from.
+    # Check step-config.json for optional "resume_from" key (should be a step ID).
+    # If not specified, scan all results for one containing session_id.
+    local step_config resume_from_step
     step_config=$(agent_read_step_config "$worker_dir")
-    resume_from_agent=$(echo "$step_config" | jq -r '.resume_from // "task-executor"')
+    resume_from_step=$(echo "$step_config" | jq -r '.resume_from // ""')
 
-    # Find session_id from the configured agent's result
+    # Find session_id from either the configured step or any result with session_id
     local source_result_file session_id
-    source_result_file=$(agent_find_latest_result "$worker_dir" "$resume_from_agent")
-
-    if [ -z "$source_result_file" ] || [ ! -f "$source_result_file" ]; then
-        log_warn "No $resume_from_agent result found - skipping summary generation"
-        local outputs_json
-        outputs_json=$(jq -n '{gate_result: "SKIP", summary_file: ""}')
-        agent_write_result "$worker_dir" "success" 0 "$outputs_json"
-        return 0
+    if [ -n "$resume_from_step" ]; then
+        # Use the specified step ID to find the result
+        source_result_file=$(agent_find_latest_result "$worker_dir" "$resume_from_step")
+        if [ -z "$source_result_file" ] || [ ! -f "$source_result_file" ]; then
+            log_warn "No result found for step '$resume_from_step' - skipping summary generation"
+            local outputs_json
+            outputs_json=$(jq -n '{gate_result: "SKIP", summary_file: ""}')
+            agent_write_result "$worker_dir" "success" 0 "$outputs_json"
+            return 0
+        fi
+        session_id=$(jq -r '.outputs.session_id // ""' "$source_result_file")
+    else
+        # No specific step configured - find any result with session_id
+        source_result_file=$(_find_result_with_session_id "$worker_dir")
+        if [ -z "$source_result_file" ] || [ ! -f "$source_result_file" ]; then
+            log_warn "No result with session_id found - skipping summary generation"
+            local outputs_json
+            outputs_json=$(jq -n '{gate_result: "SKIP", summary_file: ""}')
+            agent_write_result "$worker_dir" "success" 0 "$outputs_json"
+            return 0
+        fi
+        session_id=$(jq -r '.outputs.session_id // ""' "$source_result_file")
     fi
-
-    session_id=$(jq -r '.outputs.session_id // ""' "$source_result_file")
 
     if [ -z "$session_id" ]; then
-        log_warn "No session_id in $resume_from_agent result - skipping summary generation"
+        log_warn "No session_id found in result - skipping summary generation"
         local outputs_json
         outputs_json=$(jq -n '{gate_result: "SKIP", summary_file: ""}')
         agent_write_result "$worker_dir" "success" 0 "$outputs_json"
         return 0
     fi
 
-    log "Generating final summary by resuming $resume_from_agent session: $session_id"
+    log "Generating final summary by resuming session: $session_id"
 
     # Use step ID from pipeline for log file naming
     local step_prefix="${WIGGUM_STEP_ID:-summary}"
