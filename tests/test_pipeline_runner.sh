@@ -611,13 +611,14 @@ test_pipeline_start_from_step() {
 }
 
 # =============================================================================
-# Test: Step config is written to worker dir
+# Test: Pipeline config is written to worker dir with all steps
 # =============================================================================
-test_pipeline_writes_step_config() {
+test_pipeline_writes_pipeline_config() {
     _create_pipeline "$TEST_DIR/pipeline.json" '{
         "name": "test-config",
         "steps": [
-            {"id": "configured", "agent": "agent-x", "config": {"max_turns": 10, "custom_key": "val"}}
+            {"id": "step-a", "agent": "agent-a", "config": {"max_turns": 10}},
+            {"id": "step-b", "agent": "agent-b", "config": {"custom_key": "val"}}
         ]
     }'
 
@@ -627,11 +628,96 @@ test_pipeline_writes_step_config() {
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
 
-    assert_file_exists "$TEST_DIR/worker/step-config.json" "Step config should be written"
+    assert_file_exists "$TEST_DIR/worker/pipeline-config.json" "Pipeline config should be written"
 
+    # Check structure
+    local pipeline_name
+    pipeline_name=$(jq -r '.pipeline.name' "$TEST_DIR/worker/pipeline-config.json")
+    assert_equals "test-config" "$pipeline_name" "Pipeline name should be in config"
+
+    # Check that all steps are present
+    local step_count
+    step_count=$(jq '.steps | keys | length' "$TEST_DIR/worker/pipeline-config.json")
+    assert_equals "2" "$step_count" "Pipeline config should contain 2 steps"
+
+    # Check step config values
     local max_turns
-    max_turns=$(jq -r '.max_turns' "$TEST_DIR/worker/step-config.json")
-    assert_equals "10" "$max_turns" "Step config should contain max_turns"
+    max_turns=$(jq -r '.steps["step-a"].config.max_turns' "$TEST_DIR/worker/pipeline-config.json")
+    assert_equals "10" "$max_turns" "Step A config should contain max_turns=10"
+
+    local custom_key
+    custom_key=$(jq -r '.steps["step-b"].config.custom_key' "$TEST_DIR/worker/pipeline-config.json")
+    assert_equals "val" "$custom_key" "Step B config should contain custom_key=val"
+}
+
+# =============================================================================
+# Test: Pipeline config updates current step as pipeline progresses
+# =============================================================================
+test_pipeline_config_updates_current_step() {
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-current",
+        "steps": [
+            {"id": "first", "agent": "agent-first"},
+            {"id": "second", "agent": "agent-second"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
+
+    # After pipeline completes, current should point to last step
+    local current_step_id current_step_idx
+    current_step_id=$(jq -r '.current.step_id' "$TEST_DIR/worker/pipeline-config.json")
+    current_step_idx=$(jq -r '.current.step_idx' "$TEST_DIR/worker/pipeline-config.json")
+
+    assert_equals "second" "$current_step_id" "Current step ID should be 'second' after pipeline"
+    assert_equals "1" "$current_step_idx" "Current step index should be 1 after pipeline"
+}
+
+# =============================================================================
+# Test: Pipeline config includes inline handler steps
+# =============================================================================
+test_pipeline_config_includes_inline_handlers() {
+    _create_mock_agent "main-agent" "FIX"
+    _create_mock_agent "inline-fix" "PASS"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-inline",
+        "steps": [
+            {
+                "id": "main",
+                "agent": "main-agent",
+                "max": 1,
+                "on_max": "next",
+                "on_result": {
+                    "FIX": {
+                        "id": "main-fix",
+                        "agent": "inline-fix",
+                        "max": 1,
+                        "config": {"report_from": "main"}
+                    }
+                }
+            }
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
+
+    # Check that inline handler is included in steps map
+    local inline_agent
+    inline_agent=$(jq -r '.steps["main-fix"].agent' "$TEST_DIR/worker/pipeline-config.json")
+    assert_equals "inline-fix" "$inline_agent" "Inline handler should be in steps map"
+
+    local inline_config
+    inline_config=$(jq -r '.steps["main-fix"].config.report_from' "$TEST_DIR/worker/pipeline-config.json")
+    assert_equals "main" "$inline_config" "Inline handler config should be preserved"
 }
 
 # =============================================================================
@@ -696,7 +782,9 @@ run_test test_pipeline_jump_prev
 run_test test_pipeline_stop_aborts
 run_test test_pipeline_on_max_loop_detection
 run_test test_pipeline_start_from_step
-run_test test_pipeline_writes_step_config
+run_test test_pipeline_writes_pipeline_config
+run_test test_pipeline_config_updates_current_step
+run_test test_pipeline_config_includes_inline_handlers
 run_test test_pipeline_aborts_on_missing_workspace
 run_test test_pipeline_emits_activity_events
 

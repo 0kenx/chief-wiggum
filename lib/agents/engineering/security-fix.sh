@@ -26,10 +26,10 @@ agent_on_ready() {
     local worker_dir="$1"
 
     # Try to find upstream report
-    # Check step-config.json for optional "report_from" key (should be a step ID)
+    # Check pipeline-config.json for optional "report_from" key (should be a step ID)
     # If not specified, scan all reports looking for one with security findings
     local step_config report_from_step
-    step_config=$(agent_read_step_config "$worker_dir")
+    step_config=$(agent_get_step_config "$worker_dir")
     report_from_step=$(echo "$step_config" | jq -r '.report_from // ""')
 
     if [ -n "$report_from_step" ]; then

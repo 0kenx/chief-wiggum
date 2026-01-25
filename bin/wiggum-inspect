@@ -123,19 +123,21 @@ cmd_worker() {
         echo -e "${BOLD}Gate Result:${NC} ${color}${result}${NC}"
     fi
 
-    # Current step
-    local step_file="$worker_dir/step-config.json"
-    if [ -f "$step_file" ]; then
+    # Current step (from pipeline-config.json)
+    local config_file="$worker_dir/pipeline-config.json"
+    if [ -f "$config_file" ]; then
         local step_id agent
-        step_id=$(jq -r '.step_id // "unknown"' "$step_file" 2>/dev/null)
-        agent=$(jq -r '.agent // "unknown"' "$step_file" 2>/dev/null)
-        echo -e "${BOLD}Current Step:${NC} $step_id (${CYAN}$agent${NC})"
+        step_id=$(jq -r '.current.step_id // "unknown"' "$config_file" 2>/dev/null)
+        if [ -n "$step_id" ] && [ "$step_id" != "unknown" ] && [ "$step_id" != "" ]; then
+            agent=$(jq -r --arg id "$step_id" '.steps[$id].agent // "unknown"' "$config_file" 2>/dev/null)
+            echo -e "${BOLD}Current Step:${NC} $step_id (${CYAN}$agent${NC})"
+        fi
     fi
     echo ""
 
     # Files
     echo -e "${BOLD}Files:${NC}"
-    local files=("prd.md" "gate_result" "step-config.json" "activity.jsonl" "agent.pid")
+    local files=("prd.md" "gate_result" "pipeline-config.json" "activity.jsonl" "agent.pid")
     for f in "${files[@]}"; do
         if [ -f "$worker_dir/$f" ]; then
             local size
@@ -324,19 +326,32 @@ cmd_step() {
     local worker_dir
     worker_dir=$(find_worker "$pattern") || exit 1
 
-    local step_file="$worker_dir/step-config.json"
-    if [ ! -f "$step_file" ]; then
-        echo "No step config found for worker" >&2
+    local config_file="$worker_dir/pipeline-config.json"
+    if [ ! -f "$config_file" ]; then
+        echo "No pipeline config found for worker" >&2
         exit 1
     fi
 
     echo -e "${BOLD}Current Step:${NC} $(basename "$worker_dir")"
     echo ""
 
+    local step_id step_idx
+    step_id=$(jq -r '.current.step_id // ""' "$config_file" 2>/dev/null)
+    step_idx=$(jq -r '.current.step_idx // 0' "$config_file" 2>/dev/null)
+
     if [ "$JSON_OUTPUT" = true ]; then
-        cat "$step_file"
+        # Show current step info as JSON
+        jq --arg id "$step_id" '.current + {config: .steps[$id].config, agent: .steps[$id].agent}' "$config_file"
     else
-        jq -r 'to_entries[] | "  \(.key): \(.value)"' "$step_file"
+        echo -e "  ${BOLD}step_id:${NC} $step_id"
+        echo -e "  ${BOLD}step_idx:${NC} $step_idx"
+        if [ -n "$step_id" ]; then
+            local agent
+            agent=$(jq -r --arg id "$step_id" '.steps[$id].agent // "unknown"' "$config_file" 2>/dev/null)
+            echo -e "  ${BOLD}agent:${NC} $agent"
+            echo -e "  ${BOLD}config:${NC}"
+            jq -r --arg id "$step_id" '.steps[$id].config // {} | to_entries[] | "    \(.key): \(.value)"' "$config_file" 2>/dev/null || true
+        fi
     fi
 
     # Show gate result if exists

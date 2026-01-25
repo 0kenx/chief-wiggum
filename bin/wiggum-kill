@@ -2,7 +2,7 @@
 # wiggum kill - Force kill workers (SIGKILL)
 #
 # Usage:
-#   wiggum kill                 Force kill all workers
+#   wiggum kill all             Force kill all workers
 #   wiggum kill <id>            Force kill specific worker by ID/pattern
 
 set -euo pipefail
@@ -20,7 +20,7 @@ show_help() {
 wiggum kill - Force kill workers (SIGKILL)
 
 Usage:
-  wiggum kill                 Force kill all workers
+  wiggum kill all             Force kill all workers
   wiggum kill <id>            Force kill specific worker by ID/pattern
 
 Worker ID Resolution:
@@ -34,7 +34,7 @@ Options:
   -h, --help    Show this help message
 
 Examples:
-  wiggum kill                 # Force kill all workers
+  wiggum kill all             # Force kill all workers
   wiggum kill TASK-030        # Force kill worker for TASK-030
   wiggum kill 1891712         # Force kill worker by timestamp
 
@@ -124,14 +124,20 @@ main() {
         exit $EXIT_OK
     fi
 
-    # No arguments = kill all workers
+    # No arguments = error
     if [ $# -eq 0 ]; then
-        kill_all_workers
-        exit $EXIT_OK
+        echo "Error: Missing argument. Use 'wiggum kill all' or 'wiggum kill <id>'" >&2
+        exit $EXIT_INVALID_ARGS
     fi
 
     local target="$1"
     shift
+
+    # "all" = kill all workers
+    if [[ "$target" == "all" ]]; then
+        kill_all_workers
+        exit $EXIT_OK
+    fi
 
     # Treat as worker ID pattern
     local worker_dir

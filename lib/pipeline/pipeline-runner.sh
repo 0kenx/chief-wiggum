@@ -342,6 +342,9 @@ pipeline_run_all() {
     local step_count
     step_count=$(pipeline_step_count)
 
+    # Write pipeline-config.json once at pipeline start
+    _write_pipeline_config "$worker_dir"
+
     # Initialize visit counters (global for entire workflow)
     # Use declare -gA to ensure associative array type is set (required for set -u compatibility)
     declare -gA _PIPELINE_VISITS=()
@@ -479,13 +482,8 @@ _pipeline_run_step() {
     # Export parent/next step context for markdown agents
     _export_step_context "$idx" "$worker_dir"
 
-    # Write step config
-    _write_step_config "$worker_dir" "$idx"
-
-    # Special handling for system.task-executor: write executor-config.json
-    if [ "$step_agent" = "system.task-executor" ]; then
-        _prepare_executor_config "$worker_dir" "$idx"
-    fi
+    # Update current step pointer in pipeline-config.json
+    _update_current_step "$worker_dir" "$idx" "$step_id"
 
     # Run pre-hooks
     _run_step_hooks "pre" "$idx" "$worker_dir" "$project_dir" "$workspace"
@@ -595,53 +593,135 @@ _run_step_hooks() {
     done
 }
 
-# Write step-config.json for the current step
+# =============================================================================
+# PIPELINE CONFIG MANAGEMENT
+# =============================================================================
+
+# Write pipeline-config.json once at pipeline start
+#
+# This file contains all step configurations and runtime context in a single file.
+# It replaces both step-config.json and executor-config.json.
+#
+# Structure:
+# {
+#   "pipeline": { "name": "...", "source": "..." },
+#   "runtime": { "plan_file": "...", "resume_instructions": "..." },
+#   "current": { "step_idx": 0, "step_id": "planning" },
+#   "steps": {
+#     "step-id": { "agent": "...", "config": {...} },
+#     ...
+#   }
+# }
 #
 # Args:
-#   worker_dir - Worker directory
-#   idx        - Step index
-_write_step_config() {
+#   worker_dir - Worker directory path
+_write_pipeline_config() {
     local worker_dir="$1"
-    local idx="$2"
+    local step_count
+    step_count=$(pipeline_step_count)
 
-    local config_json
-    config_json=$(pipeline_get_json "$idx" ".config")
-    echo "$config_json" > "$worker_dir/step-config.json"
-}
+    # Build steps map - iterate through all steps including inline handlers
+    local steps_json="{}"
+    local idx=0
+    while [ "$idx" -lt "$step_count" ]; do
+        local step_id step_agent step_config_json
+        step_id=$(pipeline_get "$idx" ".id")
+        step_agent=$(pipeline_get "$idx" ".agent")
+        step_config_json=$(pipeline_get_json "$idx" ".config" "{}")
 
-# Special case: prepare executor-config.json for system.task-executor
-# Merges step config with PIPELINE_PLAN_FILE and PIPELINE_RESUME_INSTRUCTIONS
-#
-# Args:
-#   worker_dir - Worker directory
-#   idx        - Step index
-_prepare_executor_config() {
-    local worker_dir="$1"
-    local idx="$2"
+        # Add step to map
+        steps_json=$(echo "$steps_json" | jq \
+            --arg id "$step_id" \
+            --arg agent "$step_agent" \
+            --argjson config "$step_config_json" \
+            '.[$id] = {"agent": $agent, "config": $config}')
 
-    local config_json
-    config_json=$(pipeline_get_json "$idx" ".config")
+        # Check for inline handlers in on_result and add them too
+        local on_result_json
+        on_result_json=$(pipeline_get_json "$idx" ".on_result" "null")
+        if [ "$on_result_json" != "null" ]; then
+            # Extract inline handler IDs and their configs
+            local inline_handlers
+            inline_handlers=$(echo "$on_result_json" | jq -r '
+                to_entries[] |
+                select(.value.agent != null) |
+                [.value.id // "inline", .value.agent, (.value.config // {} | tojson)] |
+                @tsv
+            ' 2>/dev/null || true)
 
-    # Extract values from step config with defaults
-    local max_iterations max_turns supervisor_interval
-    max_iterations=$(echo "$config_json" | jq -r '.max_iterations // 20')
-    max_turns=$(echo "$config_json" | jq -r '.max_turns // 50')
-    supervisor_interval=$(echo "$config_json" | jq -r '.supervisor_interval // 2')
+            if [ -n "$inline_handlers" ]; then
+                while IFS=$'\t' read -r handler_id handler_agent handler_config; do
+                    [ -z "$handler_id" ] && continue
+                    steps_json=$(echo "$steps_json" | jq \
+                        --arg id "$handler_id" \
+                        --arg agent "$handler_agent" \
+                        --argjson config "$handler_config" \
+                        '.[$id] = {"agent": $agent, "config": $config}')
+                done <<< "$inline_handlers"
+            fi
+        fi
 
+        ((++idx))
+    done
+
+    # Get pipeline source path
+    local pipeline_source=""
+    if [ -n "${_PIPELINE_JSON_FILE:-}" ]; then
+        pipeline_source="$_PIPELINE_JSON_FILE"
+    fi
+
+    # Build runtime context
     local plan_file="${PIPELINE_PLAN_FILE:-}"
     local resume_instructions="${PIPELINE_RESUME_INSTRUCTIONS:-}"
 
+    # Write the full config
     jq -n \
-        --argjson max_iterations "$max_iterations" \
-        --argjson max_turns "$max_turns" \
-        --argjson supervisor_interval "$supervisor_interval" \
+        --arg name "${PIPELINE_NAME:-unnamed}" \
+        --arg source "$pipeline_source" \
         --arg plan_file "$plan_file" \
         --arg resume_instructions "$resume_instructions" \
+        --argjson steps "$steps_json" \
         '{
-            max_iterations: $max_iterations,
-            max_turns: $max_turns,
-            supervisor_interval: $supervisor_interval,
-            plan_file: $plan_file,
-            resume_instructions: $resume_instructions
-        }' > "$worker_dir/executor-config.json"
+            pipeline: {
+                name: $name,
+                source: $source
+            },
+            runtime: {
+                plan_file: $plan_file,
+                resume_instructions: $resume_instructions
+            },
+            current: {
+                step_idx: 0,
+                step_id: ""
+            },
+            steps: $steps
+        }' > "$worker_dir/pipeline-config.json"
+
+    log_debug "Wrote pipeline-config.json with $(echo "$steps_json" | jq 'keys | length') steps"
 }
+
+# Update current step in pipeline-config.json (atomic jq update)
+#
+# Args:
+#   worker_dir - Worker directory path
+#   idx        - Current step index
+#   step_id    - Current step ID
+_update_current_step() {
+    local worker_dir="$1"
+    local idx="$2"
+    local step_id="$3"
+    local config_file="$worker_dir/pipeline-config.json"
+
+    if [ ! -f "$config_file" ]; then
+        log_warn "pipeline-config.json not found, cannot update current step"
+        return 0
+    fi
+
+    # Atomic update using temp file
+    local tmp_file
+    tmp_file=$(mktemp)
+    jq --argjson idx "$idx" --arg id "$step_id" \
+        '.current = {step_idx: $idx, step_id: $id}' \
+        "$config_file" > "$tmp_file" && mv "$tmp_file" "$config_file"
+}
+

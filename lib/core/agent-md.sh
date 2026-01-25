@@ -645,18 +645,32 @@ md_agent_run() {
     # Call agent_on_ready hook if defined (allows shell extensions to initialize state)
     if declare -f agent_on_ready &>/dev/null; then
         log_debug "Calling agent_on_ready hook"
-        agent_on_ready "$worker_dir"
+        set +e
+        agent_on_ready "$worker_dir" "$project_dir"
+        local ready_exit=$?
+        set -e
+        if [ "$ready_exit" -ne 0 ]; then
+            log_error "agent_on_ready hook failed with exit code: $ready_exit"
+            return "$ready_exit"
+        fi
+        log_debug "agent_on_ready hook completed successfully"
     fi
 
+    log_debug "md_agent_run: about to execute mode handler"
+
     # Execute based on mode
+    log_debug "md_agent_run: entering case statement with mode=$_MD_MODE"
     case "$_MD_MODE" in
         ralph_loop)
+            log_debug "md_agent_run: matched ralph_loop, calling _md_run_ralph_loop"
             _md_run_ralph_loop "$worker_dir"
             ;;
         once)
+            log_debug "md_agent_run: matched once, calling _md_run_once"
             _md_run_once "$worker_dir"
             ;;
         resume)
+            log_debug "md_agent_run: matched resume, calling _md_run_resume"
             _md_run_resume "$worker_dir"
             ;;
         *)
@@ -666,6 +680,7 @@ md_agent_run() {
     esac
 
     local exit_code=$?
+    log_debug "md_agent_run: case statement completed with exit_code=$exit_code"
 
     # Extract and write result
     _md_extract_and_write_result "$worker_dir"

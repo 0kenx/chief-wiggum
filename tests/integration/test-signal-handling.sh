@@ -188,7 +188,7 @@ test_exit_trap_fires() {
 
     # Run a subshell that sets an EXIT trap then receives SIGTERM
     (
-        trap "touch '$marker_file'" EXIT
+        trap 'touch "$marker_file"' EXIT
         sleep 300
     ) &
     local subshell_pid=$!

@@ -260,7 +260,7 @@ agent_on_init() {
 agent_on_ready() {
     local worker_dir="$1"
     # shellcheck disable=SC2034  # project_dir is available for agent overrides
-    local project_dir="$2"
+    local project_dir="${2:-}"
     # Default: no-op
     return 0
 }
@@ -1004,16 +1004,94 @@ agent_read_step_result() {
     echo "$result"
 }
 
-# Read step-config.json from the worker directory
+# =============================================================================
+# PIPELINE CONFIG ACCESS
+# =============================================================================
+
+# Read the full pipeline-config.json from worker directory
 #
 # Args:
 #   worker_dir - Worker directory path
 #
-# Returns: JSON content of step-config.json, or "{}" if not found
+# Returns: Full JSON content of pipeline-config.json, or "{}" if not found
+agent_read_pipeline_config() {
+    local worker_dir="$1"
+    local config_file="$worker_dir/pipeline-config.json"
+
+    if [ -f "$config_file" ]; then
+        cat "$config_file"
+    else
+        echo "{}"
+    fi
+}
+
+# Get config for the current step from pipeline-config.json
+#
+# Args:
+#   worker_dir - Worker directory path
+#   step_id    - Optional step ID (defaults to WIGGUM_STEP_ID)
+#
+# Returns: JSON config object for the step, or "{}" if not found
+agent_get_step_config() {
+    local worker_dir="$1"
+    local step_id="${2:-${WIGGUM_STEP_ID:-}}"
+
+    if [ -z "$step_id" ]; then
+        echo "{}"
+        return 0
+    fi
+
+    local config_file="$worker_dir/pipeline-config.json"
+    if [ -f "$config_file" ]; then
+        jq -r --arg id "$step_id" '.steps[$id].config // {}' "$config_file" 2>/dev/null || echo "{}"
+    else
+        echo "{}"
+    fi
+}
+
+# Get runtime context from pipeline-config.json
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: JSON runtime object containing plan_file, resume_instructions, etc.
+agent_get_runtime_config() {
+    local worker_dir="$1"
+    local config_file="$worker_dir/pipeline-config.json"
+
+    if [ -f "$config_file" ]; then
+        jq -r '.runtime // {}' "$config_file" 2>/dev/null || echo "{}"
+    else
+        echo "{}"
+    fi
+}
+
+# Read step-config.json from the worker directory
+# DEPRECATED: Use agent_get_step_config instead
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: JSON content of step config, or "{}" if not found
 agent_read_step_config() {
     local worker_dir="$1"
-    local config_file="$worker_dir/step-config.json"
 
+    # First try pipeline-config.json (new format)
+    local step_id="${WIGGUM_STEP_ID:-}"
+    if [ -n "$step_id" ]; then
+        local pipeline_config="$worker_dir/pipeline-config.json"
+        if [ -f "$pipeline_config" ]; then
+            local config
+            config=$(jq -r --arg id "$step_id" '.steps[$id].config // null' "$pipeline_config" 2>/dev/null)
+            if [ -n "$config" ] && [ "$config" != "null" ]; then
+                echo "$config"
+                return 0
+            fi
+        fi
+    fi
+
+    # Fallback to legacy step-config.json
+    local config_file="$worker_dir/step-config.json"
     if [ -f "$config_file" ]; then
         cat "$config_file"
     else

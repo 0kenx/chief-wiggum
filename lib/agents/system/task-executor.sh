@@ -6,7 +6,7 @@ set -euo pipefail
 # AGENT_TYPE: task-executor
 # AGENT_DESCRIPTION: Executes task implementation via supervised ralph loop.
 #   Encapsulates the main code-writing agent interaction, reading configuration
-#   from executor-config.json and running the supervised ralph loop with PRD
+#   from pipeline-config.json and running the supervised ralph loop with PRD
 #   task completion checks.
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code to work on
@@ -50,23 +50,22 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # Read configuration from executor-config.json
-    local config_file="$worker_dir/executor-config.json"
-    local max_iterations max_turns supervisor_interval plan_file resume_instructions
+    # Read configuration from pipeline-config.json
+    local step_config runtime_config
+    step_config=$(agent_get_step_config "$worker_dir")
+    runtime_config=$(agent_get_runtime_config "$worker_dir")
 
-    if [ -f "$config_file" ]; then
-        max_iterations=$(jq -r '.max_iterations // 20' "$config_file")
-        max_turns=$(jq -r '.max_turns // 50' "$config_file")
-        supervisor_interval=$(jq -r '.supervisor_interval // 2' "$config_file")
-        plan_file=$(jq -r '.plan_file // ""' "$config_file")
-        resume_instructions=$(jq -r '.resume_instructions // ""' "$config_file")
-    else
-        max_iterations="${AGENT_CONFIG_MAX_ITERATIONS:-20}"
-        max_turns="${AGENT_CONFIG_MAX_TURNS:-50}"
-        supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-2}"
-        plan_file=""
-        resume_instructions=""
-    fi
+    local max_iterations max_turns supervisor_interval plan_file resume_instructions
+    max_iterations=$(echo "$step_config" | jq -r '.max_iterations // 20')
+    max_turns=$(echo "$step_config" | jq -r '.max_turns // 50')
+    supervisor_interval=$(echo "$step_config" | jq -r '.supervisor_interval // 2')
+    plan_file=$(echo "$runtime_config" | jq -r '.plan_file // ""')
+    resume_instructions=$(echo "$runtime_config" | jq -r '.resume_instructions // ""')
+
+    # Fallback to agent config or env vars if pipeline config is empty
+    [ "$max_iterations" = "20" ] && max_iterations="${AGENT_CONFIG_MAX_ITERATIONS:-20}"
+    [ "$max_turns" = "50" ] && max_turns="${AGENT_CONFIG_MAX_TURNS:-50}"
+    [ "$supervisor_interval" = "2" ] && supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-2}"
 
     # Set up callback context
     local task_id
