@@ -361,6 +361,106 @@ _md_generate_context_section() {
     echo "$section"
 }
 
+# Check if a prompt already contains result tag instructions
+#
+# Args:
+#   prompt - The prompt text to check
+#
+# Returns: 0 if result tag instructions found, 1 otherwise
+_md_has_result_tag_section() {
+    local prompt="$1"
+    local result_tag="${_MD_RESULT_TAG:-result}"
+
+    # Check for common patterns indicating result tag instructions exist
+    # Pattern 1: <result>VALUE</result>
+    # Pattern 2: The <result> tag MUST be exactly
+    if [[ "$prompt" == *"<${result_tag}>"* ]] || \
+       [[ "$prompt" == *"<${result_tag}> tag"* ]] || \
+       [[ "$prompt" == *"<${result_tag}> MUST"* ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# Generate result tag section from valid_results array
+#
+# Returns: Generated result tag section text
+_md_generate_result_tag_section() {
+    local result_tag="${_MD_RESULT_TAG:-result}"
+    local section=""
+    local values=""
+    local first=true
+
+    # Build the OR-separated list of valid result tags
+    for result in "${_MD_VALID_RESULTS[@]}"; do
+        if [ "$first" = true ]; then
+            section+="<${result_tag}>${result}</${result_tag}>"
+            values="$result"
+            first=false
+        else
+            section+=$'\n'"OR"$'\n'"<${result_tag}>${result}</${result_tag}>"
+            values+=", $result"
+        fi
+    done
+
+    # Add the instruction line
+    section+=$'\n'$'\n'"The <${result_tag}> tag MUST be exactly: ${values}."
+
+    echo "$section"
+}
+
+# Generate result tag reminder for continuation prompts
+#
+# Returns: Generated reminder text
+_md_generate_result_tag_reminder() {
+    local result_tag="${_MD_RESULT_TAG:-result}"
+    local values=""
+    local first=true
+
+    for result in "${_MD_VALID_RESULTS[@]}"; do
+        if [ "$first" = true ]; then
+            values="$result"
+            first=false
+        else
+            values+=", $result"
+        fi
+    done
+
+    echo "Remember: The <${result_tag}> tag must contain exactly ${values}."
+}
+
+# Augment prompts with result tag section if missing
+#
+# This ensures agents always know what valid results to output,
+# even if the prompt author forgot to include the section.
+_md_augment_prompts_with_result_tag() {
+    # Skip if no valid results defined
+    if [ ${#_MD_VALID_RESULTS[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    # Skip if user prompt is empty (let validation catch this)
+    if [ -z "$_MD_USER_PROMPT" ]; then
+        return 0
+    fi
+
+    # Augment user prompt if result tag section is missing
+    if ! _md_has_result_tag_section "$_MD_USER_PROMPT"; then
+        local result_section
+        result_section=$(_md_generate_result_tag_section)
+        _MD_USER_PROMPT="${_MD_USER_PROMPT}"$'\n'$'\n'"## Result (REQUIRED)"$'\n'$'\n'"${result_section}"
+        log_debug "Auto-generated result tag section for user prompt"
+    fi
+
+    # Augment continuation prompt if it exists and lacks reminder
+    if [ -n "$_MD_CONTINUATION_PROMPT" ] && ! _md_has_result_tag_section "$_MD_CONTINUATION_PROMPT"; then
+        local reminder
+        reminder=$(_md_generate_result_tag_reminder)
+        _MD_CONTINUATION_PROMPT="${_MD_CONTINUATION_PROMPT}"$'\n'$'\n'"${reminder}"
+        log_debug "Auto-generated result tag reminder for continuation prompt"
+    fi
+}
+
 # Generate git restrictions block for readonly agents
 #
 # Returns: Markdown block with git command restrictions
@@ -585,6 +685,9 @@ md_agent_load() {
 
     # Parse prompt sections
     _md_parse_sections "$md_file"
+
+    # Augment prompts with result tag section if missing
+    _md_augment_prompts_with_result_tag
 
     if [ -z "$_MD_USER_PROMPT" ]; then
         log_error "Missing <WIGGUM_USER_PROMPT> section in $md_file"

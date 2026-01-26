@@ -117,4 +117,16 @@ IMPORTANT GUIDELINES:
 - Be thorough but concise - every sentence should add value
 
 Please provide your comprehensive summary following this structure.
+
+## Completion Signal (REQUIRED)
+
+When your summary is complete, you MUST output a result tag:
+
+<result>PASS</result>
+OR
+<result>SKIP</result>
+
+Use PASS if you provided a summary. Use SKIP if there's nothing meaningful to summarize.
+
+The <result> tag MUST be exactly: PASS or SKIP.
 </WIGGUM_USER_PROMPT>

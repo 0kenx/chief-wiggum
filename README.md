@@ -14,6 +14,7 @@
 - **Claude Code** (`claude` CLI installed and authenticated)
 - **GitHub CLI** (`gh` installed and authenticated)
 - **jq** (JSON processor)
+- **setsid** (worker process isolation; macOS users: `brew install util-linux`)
 
 ## Installation
 

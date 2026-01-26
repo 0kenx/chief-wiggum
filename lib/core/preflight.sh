@@ -308,6 +308,19 @@ check_uuidgen() {
     return 0
 }
 
+# Check setsid is installed (used for worker process isolation)
+check_setsid() {
+    local name="setsid"
+
+    if ! check_command_exists setsid; then
+        _print_check "fail" "$name" "Not installed. Install: apt install util-linux / brew install util-linux (macOS)"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "Available"
+    return 0
+}
+
 # Check uv (Python package manager, needed for TUI)
 check_uv() {
     local name="uv (Python package manager)"
@@ -387,7 +400,7 @@ check_hooks() {
     fi
 
     local count
-    count=$(find "$hooks_dir" -maxdepth 1 -name "*.sh" -executable | wc -l)
+    count=$(find "$hooks_dir" -maxdepth 1 -name "*.sh" -perm +111 | wc -l)
     _print_check "pass" "$name" "$count hook scripts executable"
     return 0
 }
@@ -428,6 +441,7 @@ run_preflight_checks() {
     check_jq
     check_curl
     check_uuidgen
+    check_setsid
     check_timeout
     check_gh_cli
     check_claude_cli

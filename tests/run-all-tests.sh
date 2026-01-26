@@ -176,7 +176,7 @@ run_shellcheck() {
         if ! shellcheck --severity=warning "$script" 2>/dev/null; then
             ((++errors))
         fi
-    done < <(find "$PROJECT_ROOT/bin" -type f -executable -print0 2>/dev/null)
+    done < <(find "$PROJECT_ROOT/bin" -type f -perm +111 -print0 2>/dev/null)
 
     while IFS= read -r -d '' script; do
         ((++checked))
