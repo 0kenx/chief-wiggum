@@ -984,7 +984,7 @@ main() {
 
             # Remove from ready-since tracking (task is no longer waiting)
             if [ -f "$ready_since_file" ]; then
-                sed -i "/^${task_id}|/d" "$ready_since_file"
+                sed_inplace "/^${task_id}|/d" "$ready_since_file"
             fi
 
             # Log task assignment to audit log

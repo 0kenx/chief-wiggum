@@ -37,6 +37,17 @@ run_claude() {
     fi
 }
 
+# Portable sed in-place edit (works on both GNU sed and BSD sed on macOS)
+# Usage: sed_inplace <sed_expression> <file>
+# Example: sed_inplace 's/foo/bar/' myfile.txt
+sed_inplace() {
+    if [[ "$OSTYPE" == darwin* ]]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
 # Logging configuration
 # Map WIGGUM_LOG_LEVEL to LOG_LEVEL for logger.sh
 if [ -n "${WIGGUM_LOG_LEVEL:-}" ]; then

@@ -58,10 +58,11 @@ update_kanban_status() {
     # Match any status and replace with new status
     # Security: Use umask 077 to ensure sed -i temp files have restricted permissions
     # Pass variables via environment to avoid shell injection through quotes
+    # Note: Inline OS check for portable sed -i (GNU vs BSD)
     _SED_ESCAPED_TASK_ID="$escaped_task_id" \
     _SED_NEW_STATUS="$new_status" \
     with_file_lock "$kanban_file" 5 \
-        bash -c 'umask 077; sed -i "s/- \[[^\]]*\] \*\*\[$_SED_ESCAPED_TASK_ID\]\*\*/- [$_SED_NEW_STATUS] **[$_SED_ESCAPED_TASK_ID]**/" "$1"' _ "$kanban_file"
+        bash -c 'umask 077; sed_i() { if [[ "$OSTYPE" == darwin* ]]; then sed -i "" "$@"; else sed -i "$@"; fi; }; sed_i "s/- \[[^\]]*\] \*\*\[$_SED_ESCAPED_TASK_ID\]\*\*/- [$_SED_NEW_STATUS] **[$_SED_ESCAPED_TASK_ID]**/" "$1"' _ "$kanban_file"
 }
 
 # Update kanban.md to mark complete with locking (convenience function)
