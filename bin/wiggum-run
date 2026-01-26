@@ -111,8 +111,14 @@ spawn_worker() {
                 log_error "Use 'wiggum stop $task_id' or 'wiggum kill $task_id' first"
                 return 1
             fi
-            # Process not running, safe to clean up stale directory
-            log "Cleaning up stale worker directory for $task_id: $(basename "$existing_dir")"
+            # Process not running - check if it's resumable
+            if ! _is_terminal_failure "$existing_dir"; then
+                # Worker is resumable - let resume logic handle it
+                log "Worker for $task_id is resumable, skipping spawn"
+                return 1
+            fi
+            # Terminal failure - clean up and retry fresh
+            log "Cleaning up terminal-failure worker for $task_id: $(basename "$existing_dir")"
             rm -rf "$existing_dir"
             # Retry spawning - reset exit code first
             start_exit_code=0
@@ -283,6 +289,103 @@ _handle_resolve_worker_timeout() {
     local worker_dir="$1"
     local task_id="$2"
     handle_resolve_worker_timeout "$worker_dir" "$task_id" "$RESOLVE_WORKER_TIMEOUT"
+}
+
+# Resume a stopped worker directly (without LLM analysis)
+#
+# Uses the current step from pipeline-config.json to resume execution.
+# This is faster than `wiggum resume` which uses an LLM to analyze logs.
+#
+# Args:
+#   worker_dir   - Worker directory path
+#   task_id      - Task identifier
+#   resume_step  - Step ID to resume from
+_resume_worker_direct() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local resume_step="$3"
+
+    log "Resuming $task_id from step '$resume_step'"
+
+    # Launch system.task-worker from resume step
+    export _WORKER_DIR="$worker_dir"
+    export _WORKER_PROJECT_DIR="$PROJECT_DIR"
+    export _WORKER_MAX_ITERATIONS="$MAX_ITERATIONS"
+    export _WORKER_MAX_TURNS="$MAX_TURNS"
+    export _WORKER_RESUME_STEP="$resume_step"
+    export _WORKER_WIGGUM_HOME="$WIGGUM_HOME"
+
+    # shellcheck disable=SC2016
+    setsid bash -c '
+        set -euo pipefail
+        export WIGGUM_HOME="$_WORKER_WIGGUM_HOME"
+        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+        run_agent "system.task-worker" "$_WORKER_DIR" "$_WORKER_PROJECT_DIR" 30 \
+            "$_WORKER_MAX_ITERATIONS" "$_WORKER_MAX_TURNS" "$_WORKER_RESUME_STEP" ""
+    ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+}
+
+# Schedule resume of stopped workers
+#
+# Called once at startup to resume any stopped workers before starting new
+# tasks. Workers are resumed from their current pipeline step.
+#
+# Skips workers that:
+#   - Are terminal failures (last step + FAIL)
+#   - Are at capacity (MAX_WORKERS)
+#   - Have tasks no longer pending/in-progress
+_schedule_resume_workers() {
+    local resumable
+    resumable=$(get_resumable_workers "$RALPH_DIR")
+    [ -n "$resumable" ] || return 0
+
+    log "Checking for stopped workers to resume..."
+
+    while read -r worker_dir task_id current_step; do
+        [ -n "$worker_dir" ] || continue
+
+        # Check capacity
+        local main_count
+        main_count=$(pool_count "main")
+        if [ "$main_count" -ge "$MAX_WORKERS" ]; then
+            log "At capacity ($main_count/$MAX_WORKERS) - deferring remaining resumes"
+            break
+        fi
+
+        # Check task is still pending or in-progress
+        local task_status
+        task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$task_id")
+        case "$task_status" in
+            " "|"=") ;;
+            *)
+                log "Skipping resume of $task_id - task status is '$task_status'"
+                continue
+                ;;
+        esac
+
+        # Mark as in-progress if pending
+        if [ "$task_status" = " " ]; then
+            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
+                log_error "Failed to mark $task_id as in-progress"
+                continue
+            fi
+        fi
+
+        # Resume the worker
+        _resume_worker_direct "$worker_dir" "$task_id" "$current_step"
+
+        # Track the worker
+        if wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
+            local pid
+            pid=$(cat "$worker_dir/agent.pid")
+            pool_add "$pid" "main" "$task_id"
+            scheduler_mark_event
+            activity_log "worker.resumed" "$(basename "$worker_dir")" "$task_id" "step=$current_step pid=$pid"
+            log "Resumed worker for $task_id (PID: $pid) at step '$current_step'"
+        else
+            log_error "Resume started but PID not created for $task_id"
+        fi
+    done <<< "$resumable"
 }
 
 main() {
@@ -519,6 +622,9 @@ main() {
 
     # Restore active workers from existing worker directories
     scheduler_restore_workers
+
+    # Resume any stopped workers before starting new ones
+    _schedule_resume_workers
 
     local iteration=0
     local sync_counter=0

@@ -368,3 +368,89 @@ scheduler_get_ready_since_file() { echo "$_SCHED_READY_SINCE_FILE"; }
 scheduler_get_aging_factor() { echo "$_SCHED_AGING_FACTOR"; }
 scheduler_get_plan_bonus() { echo "$_SCHED_PLAN_BONUS"; }
 scheduler_get_dep_bonus_per_task() { echo "$_SCHED_DEP_BONUS_PER_TASK"; }
+
+# Check if worker hit terminal failure (last pipeline step + FAIL result)
+#
+# A terminal failure means the worker completed all pipeline steps but the
+# final step resulted in FAIL. These workers should be cleaned up and
+# restarted fresh, not resumed.
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if terminal failure, 1 otherwise
+_is_terminal_failure() {
+    local worker_dir="$1"
+    local config_file="$worker_dir/pipeline-config.json"
+    [ -f "$config_file" ] || return 1
+
+    # Get current step and total count
+    local current_idx step_count
+    current_idx=$(jq -r '.current.step_idx // -1' "$config_file" 2>/dev/null)
+    step_count=$(jq -r '.steps | length' "$config_file" 2>/dev/null)
+
+    [ "$current_idx" -ge 0 ] || return 1
+    [ "$step_count" -gt 0 ] || return 1
+
+    # Not terminal if not at last step
+    [ "$current_idx" -eq $((step_count - 1)) ] || return 1
+
+    # Check result for current step
+    local current_step_id result_file gate_result
+    current_step_id=$(jq -r '.current.step_id // ""' "$config_file" 2>/dev/null)
+    [ -n "$current_step_id" ] || return 1
+
+    result_file=$(find "$worker_dir/results" -name "*-${current_step_id}-result.json" 2>/dev/null | sort -r | head -1)
+    [ -f "$result_file" ] || return 1
+
+    gate_result=$(jq -r '.outputs.gate_result // ""' "$result_file" 2>/dev/null)
+    [ "$gate_result" = "FAIL" ]
+}
+
+# Find workers that can be resumed
+#
+# Scans for stopped workers that are eligible for automatic resume. A worker
+# is resumable if:
+#   - It has a workspace directory (git worktree was set up)
+#   - It has a prd.md file (requirements were generated)
+#   - It's not currently running (no valid agent.pid)
+#   - It's not a terminal failure (last step FAIL)
+#   - It's not a plan-only worker
+#
+# Args:
+#   ralph_dir - Ralph directory path
+#
+# Returns: Lines of "worker_dir task_id current_step" for each resumable worker
+get_resumable_workers() {
+    local ralph_dir="$1"
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Skip plan workers (read-only planning sessions)
+        [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
+
+        # Must have workspace and prd.md (setup was completed)
+        [ -d "$worker_dir/workspace" ] || continue
+        [ -f "$worker_dir/prd.md" ] || continue
+
+        # Skip if still running
+        is_worker_running "$worker_dir" && continue
+
+        # Skip terminal failures (last step + FAIL)
+        _is_terminal_failure "$worker_dir" && continue
+
+        local task_id current_step
+        task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+
+        # Get current step from pipeline config, default to execution
+        if [ -f "$worker_dir/pipeline-config.json" ]; then
+            current_step=$(jq -r '.current.step_id // "execution"' "$worker_dir/pipeline-config.json" 2>/dev/null)
+        else
+            current_step="execution"
+        fi
+
+        echo "$worker_dir $task_id $current_step"
+    done
+}
