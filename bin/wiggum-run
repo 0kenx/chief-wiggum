@@ -726,14 +726,14 @@ main() {
     echo "$$" > "$orchestrator_lock"
     log "Created orchestrator lock (PID: $$)"
 
-    # Track shutdown state
-    local shutdown_requested=false
+    # Track shutdown state (not local - needed by trap handlers)
+    _ORCH_SHUTDOWN_REQUESTED=false
 
     # Setup trap to cleanup lock file on exit
     cleanup_orchestrator() {
-        if [ "$shutdown_requested" = false ]; then
+        if [ "${_ORCH_SHUTDOWN_REQUESTED:-false}" = false ]; then
             log "Cleaning up orchestrator lock"
-            shutdown_requested=true
+            _ORCH_SHUTDOWN_REQUESTED=true
             rm -f "$orchestrator_lock"
         fi
     }
@@ -1211,12 +1211,12 @@ main() {
                 done
             fi
 
-            # Show top 7 ready tasks with priority scores (excluding deferred)
+            # Show top 7 ready tasks with priority scores (excluding in-progress and deferred)
             local ready_count
             ready_count=$(echo "$ready_tasks" | grep -c . 2>/dev/null || true)
             ready_count=${ready_count:-0}
-            # Subtract deferred tasks from count
-            ready_count=$((ready_count - ${#deferred_conflicts[@]}))
+            # Subtract in-progress and deferred tasks from count
+            ready_count=$((ready_count - ${#active_workers[@]} - ${#deferred_conflicts[@]}))
             if [ "$ready_count" -gt 0 ]; then
                 echo "Ready ($ready_count tasks, top 7 by priority):"
                 # Get priority scores for display
@@ -1225,6 +1225,16 @@ main() {
                 local display_count=0
                 for task_id in $ready_tasks; do
                     [ "$display_count" -ge 7 ] && break
+                    # Skip in-progress tasks
+                    local is_active=false
+                    for pid in "${!active_workers[@]}"; do
+                        if [ "$task_id" = "${active_workers[$pid]}" ]; then
+                            is_active=true
+                            break
+                        fi
+                    done
+                    [ "$is_active" = true ] && continue
+
                     # Skip deferred tasks
                     local is_deferred=false
                     for deferred in "${deferred_conflicts[@]}"; do
