@@ -119,6 +119,8 @@ agent_run() {
         if _commit_and_push_fixes "$workspace" "$worker_dir"; then
             push_succeeded="true"
             commit_sha=$(cd "$workspace" && git rev-parse HEAD 2>/dev/null || echo "")
+            # Update task-comments.md with commit information
+            _update_task_comments_with_commit "$comments_file" "$status_file" "$commit_sha"
         fi
     elif [ "$loop_result" -ne 0 ]; then
         log_warn "Fix loop did not complete successfully (exit code: $loop_result)"
@@ -311,6 +313,58 @@ _init_comment_status() {
     fi
 
     log "Initialized status file with $(grep -c '^\- \[ \]' "$status_file" 2>/dev/null || echo 0) comments to address"
+}
+
+# Update task-comments.md with commit information
+_update_task_comments_with_commit() {
+    local comments_file="$1"
+    local status_file="$2"
+    local commit_sha="$3"
+
+    if [ ! -f "$comments_file" ]; then
+        log_warn "Cannot update task-comments.md: file not found"
+        return 1
+    fi
+
+    log "Updating task-comments.md with commit information"
+
+    # Build the commit section
+    local commit_section
+    commit_section=$(cat << EOF
+
+## Commit
+
+**SHA:** ${commit_sha}
+**Date:** $(date -Iseconds)
+
+### Comments Addressed
+
+EOF
+)
+
+    # Extract addressed comments from status file
+    if [ -f "$status_file" ]; then
+        # Get fixed comments [x]
+        while IFS= read -r line; do
+            commit_section+="$line"$'\n'
+        done < <(grep '^\- \[x\]' "$status_file" 2>/dev/null || true)
+
+        # Get skipped comments [*]
+        local skipped_lines
+        skipped_lines=$(grep '^\- \[\*\]' "$status_file" 2>/dev/null || true)
+        if [ -n "$skipped_lines" ]; then
+            commit_section+=$'\n'"### Comments Not Addressed"$'\n\n'
+            while IFS= read -r line; do
+                commit_section+="$line"$'\n'
+            done <<< "$skipped_lines"
+        fi
+    fi
+
+    # Append to task-comments.md
+    echo "$commit_section" >> "$comments_file"
+
+    log "Added ## Commit section to task-comments.md"
+    return 0
 }
 
 # Commit and push fixes after successful completion

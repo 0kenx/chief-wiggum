@@ -51,6 +51,58 @@ _pr_merge_state_file() {
     echo "$1/pr-merge-state.json"
 }
 
+# Check if there are new comments since the last fix commit
+# Compares comment IDs in the main section vs those listed in ## Commit section
+#
+# Args:
+#   task_comments_file - Path to task-comments.md
+#
+# Returns: "true" if new comments exist, "false" otherwise
+_check_for_new_comments_since_commit() {
+    local task_comments_file="$1"
+
+    # Extract comment IDs from the main content (before ## Commit section)
+    # Look for **ID:** patterns
+    local main_content
+    main_content=$(sed -n '1,/^## Commit$/p' "$task_comments_file" 2>/dev/null | head -n -1)
+
+    local current_ids
+    current_ids=$(echo "$main_content" | grep -oE '\*\*ID:\*\* [0-9]+' | grep -oE '[0-9]+' | sort -u)
+
+    if [ -z "$current_ids" ]; then
+        # No comment IDs found in main content
+        echo "false"
+        return
+    fi
+
+    # Extract addressed comment IDs from ## Commit section
+    # Look for "Comment NNNN" patterns in the addressed list
+    local commit_section
+    commit_section=$(sed -n '/^## Commit$/,$ p' "$task_comments_file" 2>/dev/null)
+
+    local addressed_ids
+    addressed_ids=$(echo "$commit_section" | grep -oE 'Comment [0-9]+' | grep -oE '[0-9]+' | sort -u)
+
+    if [ -z "$addressed_ids" ]; then
+        # Commit section exists but no addressed IDs found - assume comments need fixing
+        echo "true"
+        return
+    fi
+
+    # Check if all current comment IDs are in the addressed list
+    local new_comments="false"
+    while IFS= read -r id; do
+        [ -z "$id" ] && continue
+        if ! echo "$addressed_ids" | grep -q "^${id}$"; then
+            # Found a comment ID not in addressed list
+            new_comments="true"
+            break
+        fi
+    done <<< "$current_ids"
+
+    echo "$new_comments"
+}
+
 # Initialize or reset the PR merge state
 #
 # Args:
@@ -205,8 +257,13 @@ _gather_pr_data() {
         comment_count=$(grep -c '^### ' "$worker_dir/task-comments.md" 2>/dev/null | head -1 || echo "0")
         comment_count="${comment_count:-0}"
         if [[ "$comment_count" =~ ^[0-9]+$ ]] && [ "$comment_count" -gt 0 ]; then
-            # Check status file
-            if [ -f "$worker_dir/reports/comment-status.md" ]; then
+            # First check: is there a ## Commit section indicating comments were addressed?
+            if grep -q '^## Commit$' "$worker_dir/task-comments.md" 2>/dev/null; then
+                # Comments were addressed by a previous fix commit
+                # Check if there are NEW comments since the commit (comments not in the addressed list)
+                has_new_comments=$(_check_for_new_comments_since_commit "$worker_dir/task-comments.md")
+            elif [ -f "$worker_dir/reports/comment-status.md" ]; then
+                # Fallback: check status file for pending items
                 local pending
                 pending=$(grep -c '^\- \[ \]' "$worker_dir/reports/comment-status.md" 2>/dev/null | head -1 || echo "0")
                 pending="${pending:-0}"
@@ -218,11 +275,20 @@ _gather_pr_data() {
     fi
 
     # Check for Copilot review
-    local copilot_reviewed="false"
+    # If no reviews file exists, assume PR is ready (don't block on missing review data)
+    # Only block if we have review data showing the PR needs attention
+    local copilot_reviewed="true"
     if [ -f "$worker_dir/pr-reviews.json" ]; then
-        if jq -e '.[] | select(.user.login == "copilot" or .user.login == "github-actions[bot]")' \
-            "$worker_dir/pr-reviews.json" >/dev/null 2>&1; then
-            copilot_reviewed="true"
+        # Check if there's a "changes_requested" review that hasn't been addressed
+        local changes_requested
+        changes_requested=$(jq -r '[.[] | select(.state == "CHANGES_REQUESTED")] | length' "$worker_dir/pr-reviews.json" 2>/dev/null || echo "0")
+        if [ "$changes_requested" -gt 0 ]; then
+            # Check if there's a more recent approval or if comments were addressed
+            local latest_state
+            latest_state=$(jq -r 'sort_by(.submitted_at) | last | .state // "NONE"' "$worker_dir/pr-reviews.json" 2>/dev/null || echo "NONE")
+            if [ "$latest_state" = "CHANGES_REQUESTED" ]; then
+                copilot_reviewed="false"
+            fi
         fi
     fi
 
@@ -1008,11 +1074,11 @@ pr_merge_execute() {
                 continue
             fi
 
-            # Skip if not copilot reviewed
+            # Skip if changes were requested and not yet addressed
             local reviewed
             reviewed=$(jq -r --arg t "$task_id" '.prs[$t].copilot_reviewed' "$state_file")
             if [ "$reviewed" != "true" ]; then
-                log "    $task_id: Skipped (awaiting Copilot review)"
+                log "    $task_id: Skipped (has unaddressed review requests)"
                 continue
             fi
 
@@ -1117,9 +1183,9 @@ pr_merge_handle_remaining() {
             continue
         fi
 
-        # Case 2: Not reviewed yet → waiting
+        # Case 2: Has unaddressed review requests → waiting
         if [ "$reviewed" != "true" ]; then
-            log "  $task_id: waiting (awaiting Copilot review)"
+            log "  $task_id: waiting (has unaddressed review requests)"
             ((++waiting))
             continue
         fi

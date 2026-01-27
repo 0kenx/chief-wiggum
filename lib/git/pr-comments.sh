@@ -397,6 +397,13 @@ sync_pr_comments() {
     mkdir -p "$output_dir"
     local output_file="$output_dir/task-comments.md"
 
+    # Preserve existing ## Commit section(s) if present
+    local preserved_commit_section=""
+    if [ -f "$output_file" ]; then
+        # Extract everything from "## Commit" to end of file (or next major section)
+        preserved_commit_section=$(sed -n '/^## Commit$/,$ p' "$output_file" 2>/dev/null || true)
+    fi
+
     # Write header
     {
         echo "# PR Comments for Tasks: $patterns"
@@ -431,6 +438,13 @@ sync_pr_comments() {
             total_comments=$((total_comments + comment_count))
         fi
     done
+
+    # Restore preserved ## Commit section if it existed
+    if [ -n "$preserved_commit_section" ]; then
+        echo "" >> "$output_file"
+        echo "$preserved_commit_section" >> "$output_file"
+        log "Preserved existing ## Commit section"
+    fi
 
     log "Comments synced to: $output_file"
     echo "$output_file"
