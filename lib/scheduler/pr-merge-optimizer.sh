@@ -1482,6 +1482,6 @@ pr_merge_stats() {
         mergeable: [.prs | to_entries[] | select(.value.mergeable_to_main == true)] | length,
         with_conflicts: [.prs | to_entries[] | select(.value.mergeable_to_main == false)] | length,
         with_comments: [.prs | to_entries[] | select(.value.has_new_comments == true)] | length,
-        conflict_pairs: ([.conflict_graph | to_entries[] | .value | length] | add // 0) / 2
+        conflict_pairs: ([.conflict_graph | to_entries[] | .value | length] | add // 0 | . / 2)
     }' "$state_file"
 }
