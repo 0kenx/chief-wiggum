@@ -229,7 +229,7 @@ test_build_conflict_graph_three_way() {
 }
 
 # =============================================================================
-# _calculate_merge_priority() Tests
+# _calculate_merge_priority() Tests (tiebreaker within MIS)
 # =============================================================================
 
 test_calculate_merge_priority_base_score() {
@@ -247,27 +247,8 @@ test_calculate_merge_priority_base_score() {
     local priority
     priority=$(_calculate_merge_priority "$RALPH_DIR" "TASK-001")
 
-    # Base score is 1000, no conflicts, not mergeable, no files
+    # Base score is 1000, no conflicts, no files
     assert_equals "1000" "$priority" "Base priority should be 1000"
-}
-
-test_calculate_merge_priority_mergeable_bonus() {
-    pr_merge_init "$RALPH_DIR"
-
-    local state_file="$RALPH_DIR/pr-merge-state.json"
-    jq '.prs = {
-        "TASK-001": {
-            "files_modified": [],
-            "mergeable_to_main": true
-        }
-    } | .conflict_graph = {}' "$state_file" > "$state_file.tmp"
-    mv "$state_file.tmp" "$state_file"
-
-    local priority
-    priority=$(_calculate_merge_priority "$RALPH_DIR" "TASK-001")
-
-    # Base 1000 + 500 for mergeable = 1500
-    assert_equals "1500" "$priority" "Mergeable PR should have +500 bonus"
 }
 
 test_calculate_merge_priority_conflict_penalty() {
@@ -285,8 +266,8 @@ test_calculate_merge_priority_conflict_penalty() {
     local priority
     priority=$(_calculate_merge_priority "$RALPH_DIR" "TASK-001")
 
-    # Base 1000 - 200 (2 conflicts * 100) = 800
-    assert_equals "800" "$priority" "PR with 2 conflicts should have -200 penalty"
+    # Base 1000 - 100 (2 conflicts * 50) = 900
+    assert_equals "900" "$priority" "PR with 2 conflicts should have -100 penalty"
 }
 
 test_calculate_merge_priority_file_penalty() {
@@ -309,30 +290,104 @@ test_calculate_merge_priority_file_penalty() {
 }
 
 # =============================================================================
-# pr_merge_find_optimal_order() Tests
+# Maximum Independent Set Tests
 # =============================================================================
 
-test_find_optimal_order_sorts_by_priority() {
+test_mis_no_conflicts() {
     pr_merge_init "$RALPH_DIR"
 
+    # All PRs independent - MIS should include all
     local state_file="$RALPH_DIR/pr-merge-state.json"
     jq '.prs = {
-        "TASK-001": {"files_modified": ["a.ts","b.ts","c.ts","d.ts","e.ts"], "mergeable_to_main": false},
-        "TASK-002": {"files_modified": [], "mergeable_to_main": true},
-        "TASK-003": {"files_modified": ["a.ts"], "mergeable_to_main": false}
+        "TASK-001": {"files_modified": ["a.ts"], "mergeable_to_main": true},
+        "TASK-002": {"files_modified": ["b.ts"], "mergeable_to_main": true},
+        "TASK-003": {"files_modified": ["c.ts"], "mergeable_to_main": true}
     } | .conflict_graph = {}' "$state_file" > "$state_file.tmp"
     mv "$state_file.tmp" "$state_file"
 
     pr_merge_find_optimal_order "$RALPH_DIR" 2>/dev/null
 
-    local first
-    first=$(jq -r '.merge_order[0]' "$state_file")
-
-    # TASK-002 is mergeable (+500) so should be first
-    assert_equals "TASK-002" "$first" "Mergeable PR should be first"
+    local mis_size
+    mis_size=$(jq '.optimal_batch | length' "$state_file")
+    assert_equals "3" "$mis_size" "MIS should include all 3 PRs when no conflicts"
 }
 
-test_find_optimal_order_all_prs_included() {
+test_mis_pairwise_conflict() {
+    pr_merge_init "$RALPH_DIR"
+
+    # Two PRs conflict - MIS should be size 1
+    local state_file="$RALPH_DIR/pr-merge-state.json"
+    jq '.prs = {
+        "TASK-001": {"files_modified": ["a.ts"], "mergeable_to_main": true},
+        "TASK-002": {"files_modified": ["a.ts"], "mergeable_to_main": true}
+    } | .conflict_graph = {"TASK-001": ["TASK-002"], "TASK-002": ["TASK-001"]}' "$state_file" > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+
+    pr_merge_find_optimal_order "$RALPH_DIR" 2>/dev/null
+
+    local mis_size
+    mis_size=$(jq '.optimal_batch | length' "$state_file")
+    assert_equals "1" "$mis_size" "MIS should be size 1 when two PRs conflict"
+}
+
+test_mis_chain_conflict() {
+    pr_merge_init "$RALPH_DIR"
+
+    # Chain: A-B-C (A conflicts with B, B conflicts with C)
+    # MIS should be {A, C} (size 2)
+    local state_file="$RALPH_DIR/pr-merge-state.json"
+    jq '.prs = {
+        "TASK-001": {"files_modified": ["a.ts"], "mergeable_to_main": true},
+        "TASK-002": {"files_modified": ["a.ts", "b.ts"], "mergeable_to_main": true},
+        "TASK-003": {"files_modified": ["b.ts"], "mergeable_to_main": true}
+    } | .conflict_graph = {
+        "TASK-001": ["TASK-002"],
+        "TASK-002": ["TASK-001", "TASK-003"],
+        "TASK-003": ["TASK-002"]
+    }' "$state_file" > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+
+    pr_merge_find_optimal_order "$RALPH_DIR" 2>/dev/null
+
+    local mis_size
+    mis_size=$(jq '.optimal_batch | length' "$state_file")
+    assert_equals "2" "$mis_size" "MIS for chain A-B-C should be size 2 (A and C)"
+
+    # Verify A and C are in MIS, not B
+    local has_task1 has_task2 has_task3
+    has_task1=$(jq '.optimal_batch | index("TASK-001") != null' "$state_file")
+    has_task2=$(jq '.optimal_batch | index("TASK-002") != null' "$state_file")
+    has_task3=$(jq '.optimal_batch | index("TASK-003") != null' "$state_file")
+
+    assert_equals "true" "$has_task1" "TASK-001 should be in MIS"
+    assert_equals "false" "$has_task2" "TASK-002 should NOT be in MIS"
+    assert_equals "true" "$has_task3" "TASK-003 should be in MIS"
+}
+
+test_mis_prefers_mergeable() {
+    pr_merge_init "$RALPH_DIR"
+
+    # Two conflicting PRs: one mergeable, one not
+    # MIS should prefer the mergeable one
+    local state_file="$RALPH_DIR/pr-merge-state.json"
+    jq '.prs = {
+        "TASK-001": {"files_modified": ["a.ts"], "mergeable_to_main": true},
+        "TASK-002": {"files_modified": ["a.ts"], "mergeable_to_main": false}
+    } | .conflict_graph = {"TASK-001": ["TASK-002"], "TASK-002": ["TASK-001"]}' "$state_file" > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+
+    pr_merge_find_optimal_order "$RALPH_DIR" 2>/dev/null
+
+    local mis_task
+    mis_task=$(jq -r '.optimal_batch[0]' "$state_file")
+    assert_equals "TASK-001" "$mis_task" "MIS should prefer mergeable PR"
+}
+
+# =============================================================================
+# pr_merge_find_optimal_order() Tests
+# =============================================================================
+
+test_find_optimal_order_includes_all_prs() {
     pr_merge_init "$RALPH_DIR"
 
     local state_file="$RALPH_DIR/pr-merge-state.json"
@@ -348,6 +403,31 @@ test_find_optimal_order_all_prs_included() {
     local count
     count=$(jq '.merge_order | length' "$state_file")
     assert_equals "3" "$count" "All PRs should be in merge order"
+}
+
+test_find_optimal_order_mis_first() {
+    pr_merge_init "$RALPH_DIR"
+
+    # PRs: A conflicts with B, C is independent
+    # MIS = {A or B, C} - C should definitely be in first batch
+    local state_file="$RALPH_DIR/pr-merge-state.json"
+    jq '.prs = {
+        "TASK-001": {"files_modified": ["a.ts"], "mergeable_to_main": true},
+        "TASK-002": {"files_modified": ["a.ts"], "mergeable_to_main": true},
+        "TASK-003": {"files_modified": ["c.ts"], "mergeable_to_main": true}
+    } | .conflict_graph = {"TASK-001": ["TASK-002"], "TASK-002": ["TASK-001"]}' "$state_file" > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+
+    pr_merge_find_optimal_order "$RALPH_DIR" 2>/dev/null
+
+    # TASK-003 should be in optimal batch (it's independent)
+    local has_task3
+    has_task3=$(jq '.optimal_batch | index("TASK-003") != null' "$state_file")
+    assert_equals "true" "$has_task3" "Independent PR should be in optimal batch"
+
+    local mis_size
+    mis_size=$(jq '.optimal_batch | length' "$state_file")
+    assert_equals "2" "$mis_size" "MIS should have 2 PRs (one of A/B + C)"
 }
 
 # =============================================================================
@@ -494,11 +574,14 @@ run_test test_build_conflict_graph_no_conflicts
 run_test test_build_conflict_graph_with_conflicts
 run_test test_build_conflict_graph_three_way
 run_test test_calculate_merge_priority_base_score
-run_test test_calculate_merge_priority_mergeable_bonus
 run_test test_calculate_merge_priority_conflict_penalty
 run_test test_calculate_merge_priority_file_penalty
-run_test test_find_optimal_order_sorts_by_priority
-run_test test_find_optimal_order_all_prs_included
+run_test test_mis_no_conflicts
+run_test test_mis_pairwise_conflict
+run_test test_mis_chain_conflict
+run_test test_mis_prefers_mergeable
+run_test test_find_optimal_order_includes_all_prs
+run_test test_find_optimal_order_mis_first
 run_test test_pr_merge_stats_empty
 run_test test_pr_merge_stats_with_data
 run_test test_integration_conflict_detection_and_categorization

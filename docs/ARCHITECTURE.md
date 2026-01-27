@@ -522,24 +522,39 @@ Conflict Graph:
 
 #### Phase 3: Optimize
 
-Calculates priority scores and determines optimal merge order:
+Uses **Maximum Independent Set (MIS)** dynamic programming to find the optimal merge batch:
 
 ```bash
 pr_merge_find_optimal_order "$ralph_dir"
 ```
 
-Priority score calculation:
+**Algorithm**: This is the Maximum Independent Set problem on the conflict graph.
+- For n ≤ 18 PRs: Exact bitmask DP solution (O(2^n) subsets)
+- For n > 18 PRs: Greedy approximation (minimum degree heuristic)
+
+**MIS Selection Criteria** (in order of priority):
+1. Maximize count of currently-mergeable PRs in the set
+2. Maximize total PRs in the set
+
+**Example** - Chain conflict A↔B↔C:
+```
+Conflict graph:     A ── B ── C
+
+MIS options:        {A, C} ✓  (size 2, no internal conflicts)
+                    {B}       (size 1)
+                    {A}, {C}  (size 1 each)
+
+Optimal: {A, C} - merge both in one pass
+```
+
+Within the MIS, PRs are ordered by a tiebreaker priority:
 | Factor | Score Impact |
 |--------|--------------|
 | Base score | +1000 |
-| Currently mergeable to main | +500 |
-| Per conflict with other PR | -100 |
+| Per conflict with other PR | -50 |
 | Per file modified | -10 |
 
-Higher scores merge first. This prioritizes:
-1. PRs that can merge right now (no conflicts with main)
-2. PRs with fewer conflicts with other PRs
-3. Simpler PRs (fewer files changed)
+Simpler PRs (fewer files, fewer conflicts) merge first within the batch.
 
 #### Phase 4: Execute
 
@@ -605,11 +620,20 @@ The optimizer maintains state in `.ralph/pr-merge-state.json`:
     "FEAT-001": ["FEAT-003"],
     "FEAT-003": ["FEAT-001"]
   },
-  "merge_order": ["TEST-002", "FEAT-003", "FEAT-001"],
+  "optimal_batch": ["TEST-002", "TEST-003"],
+  "merge_order": ["TEST-002", "TEST-003", "FEAT-003", "FEAT-001"],
   "merged_this_cycle": ["TEST-002"],
   "last_updated": "2024-01-27T12:00:00Z"
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `prs` | Per-PR metadata including files modified and merge status |
+| `conflict_graph` | Adjacency list of PR conflicts (bidirectional) |
+| `optimal_batch` | Maximum Independent Set - PRs that can merge without conflicts |
+| `merge_order` | Full ordering: MIS first, then remaining PRs |
+| `merged_this_cycle` | PRs successfully merged in this optimization run |
 
 ### Integration
 

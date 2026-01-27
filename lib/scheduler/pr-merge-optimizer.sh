@@ -452,22 +452,283 @@ pr_merge_build_conflict_graph() {
 }
 
 # =============================================================================
-# PHASE 3: OPTIMIZE - Find optimal merge order
+# PHASE 3: OPTIMIZE - Find optimal merge order using Dynamic Programming
 # =============================================================================
-
-# Calculate priority score for a PR
-# Higher score = should be merged earlier
 #
-# Factors:
-# - PRs blocking more others should merge first
-# - PRs with fewer conflicts are easier to merge
-# - PRs that are already mergeable to main get priority
+# This is the Maximum Independent Set (MIS) problem on the conflict graph.
+# We want to find the largest set of PRs that can be merged without conflicts.
+#
+# Algorithm: Bitmask DP for exact solution (feasible for n < 20 PRs)
+# - State: dp[mask] = 1 if subset represented by mask has no internal conflicts
+# - Find maximum |mask| where dp[mask] = 1 AND all PRs in mask are mergeable
+#
+# For larger n, we fall back to a greedy approximation.
+
+# Build adjacency matrix for conflict graph
+#
+# Args:
+#   ralph_dir - Ralph directory path
+#   task_ids  - Array of task IDs (passed by name)
+#
+# Sets global: _CONFLICT_MATRIX[i*n+j] = 1 if tasks i and j conflict
+_build_conflict_matrix() {
+    local ralph_dir="$1"
+    local -n _task_array="$2"
+
+    local state_file
+    state_file=$(_pr_merge_state_file "$ralph_dir")
+
+    local n=${#_task_array[@]}
+    _CONFLICT_MATRIX=()
+
+    # Initialize matrix to 0
+    local i j
+    for ((i=0; i<n; i++)); do
+        for ((j=0; j<n; j++)); do
+            _CONFLICT_MATRIX[i*n+j]=0
+        done
+    done
+
+    # Fill in conflicts
+    for ((i=0; i<n; i++)); do
+        local task_i="${_task_array[$i]}"
+        local conflicts
+        conflicts=$(jq -r --arg t "$task_i" '.conflict_graph[$t] // [] | .[]' "$state_file")
+
+        while IFS= read -r conflict_task; do
+            [ -n "$conflict_task" ] || continue
+            # Find index of conflict_task
+            for ((j=0; j<n; j++)); do
+                if [ "${_task_array[$j]}" = "$conflict_task" ]; then
+                    _CONFLICT_MATRIX[i*n+j]=1
+                    _CONFLICT_MATRIX[j*n+i]=1
+                    break
+                fi
+            done
+        done <<< "$conflicts"
+    done
+}
+
+# Check if a subset (bitmask) is an independent set (no internal conflicts)
+#
+# Args:
+#   mask - Bitmask representing subset
+#   n    - Number of tasks
+#
+# Returns: 0 if independent set, 1 otherwise
+_is_independent_set() {
+    local mask="$1"
+    local n="$2"
+
+    local i j
+    for ((i=0; i<n; i++)); do
+        # Skip if i not in mask
+        (( (mask >> i) & 1 )) || continue
+
+        for ((j=i+1; j<n; j++)); do
+            # Skip if j not in mask
+            (( (mask >> j) & 1 )) || continue
+
+            # Check if i and j conflict
+            if [ "${_CONFLICT_MATRIX[i*n+j]}" = "1" ]; then
+                return 1  # Not independent
+            fi
+        done
+    done
+
+    return 0  # Is independent
+}
+
+# Count bits set in a number (population count)
+_popcount() {
+    local n="$1"
+    local count=0
+    while [ "$n" -gt 0 ]; do
+        ((count += n & 1))
+        ((n >>= 1))
+    done
+    echo "$count"
+}
+
+# Find Maximum Independent Set using bitmask DP
+#
+# Args:
+#   ralph_dir    - Ralph directory path
+#   task_ids     - Array of task IDs (passed by name)
+#   mergeable    - Array of 0/1 indicating if task is currently mergeable (passed by name)
+#
+# Returns: JSON array of task IDs in the maximum independent set
+_find_maximum_independent_set() {
+    local ralph_dir="$1"
+    local -n _tasks="$2"
+    local -n _mergeable="$3"
+
+    local n=${#_tasks[@]}
+
+    # For n > 20, use greedy fallback (2^20 = 1M iterations is borderline)
+    if [ "$n" -gt 18 ]; then
+        log "  Using greedy approximation (n=$n > 18)"
+        _find_mis_greedy "$ralph_dir" _tasks _mergeable
+        return
+    fi
+
+    # Build conflict matrix
+    _build_conflict_matrix "$ralph_dir" _tasks
+
+    local max_mask=0
+    local max_mergeable_count=0
+    local max_total_count=0
+
+    # Iterate through all subsets
+    local total=$((1 << n))
+    local mask
+
+    for ((mask=1; mask<total; mask++)); do
+        # Quick filter: skip if this mask has fewer mergeable than current best
+        local mergeable_count=0
+        local total_count=0
+        local i
+
+        for ((i=0; i<n; i++)); do
+            if (( (mask >> i) & 1 )); then
+                ((++total_count))
+                if [ "${_mergeable[$i]}" = "1" ]; then
+                    ((++mergeable_count))
+                fi
+            fi
+        done
+
+        # Skip if can't beat current best
+        # Primary: maximize mergeable count
+        # Secondary: maximize total count
+        if [ "$mergeable_count" -lt "$max_mergeable_count" ]; then
+            continue
+        fi
+        if [ "$mergeable_count" -eq "$max_mergeable_count" ] && [ "$total_count" -le "$max_total_count" ]; then
+            continue
+        fi
+
+        # Check if this is a valid independent set
+        if _is_independent_set "$mask" "$n"; then
+            max_mask=$mask
+            max_mergeable_count=$mergeable_count
+            max_total_count=$total_count
+        fi
+    done
+
+    # Convert mask to task IDs
+    local result="[]"
+    for ((i=0; i<n; i++)); do
+        if (( (max_mask >> i) & 1 )); then
+            result=$(echo "$result" | jq --arg t "${_tasks[$i]}" '. + [$t]')
+        fi
+    done
+
+    echo "$result"
+}
+
+# Greedy approximation for Maximum Independent Set (for large n)
+#
+# Strategy: Repeatedly pick the vertex with minimum degree, add to set, remove neighbors
+#
+# Args:
+#   ralph_dir    - Ralph directory path
+#   task_ids     - Array of task IDs (passed by name)
+#   mergeable    - Array of 0/1 indicating if task is currently mergeable (passed by name)
+#
+# Returns: JSON array of task IDs in the independent set
+_find_mis_greedy() {
+    local ralph_dir="$1"
+    local -n _tasks_g="$2"
+    local -n _mergeable_g="$3"
+
+    local state_file
+    state_file=$(_pr_merge_state_file "$ralph_dir")
+
+    local n=${#_tasks_g[@]}
+    local -a removed=()
+    local -a in_set=()
+
+    # Initialize
+    for ((i=0; i<n; i++)); do
+        removed[$i]=0
+        in_set[$i]=0
+    done
+
+    # Build conflict matrix if not already built
+    _build_conflict_matrix "$ralph_dir" _tasks_g
+
+    # Greedy: prioritize mergeable PRs, then minimum degree
+    while true; do
+        local best_idx=-1
+        local best_degree=999999
+        local best_mergeable=0
+
+        for ((i=0; i<n; i++)); do
+            [ "${removed[$i]}" = "1" ] && continue
+
+            # Calculate current degree (conflicts with non-removed nodes)
+            local degree=0
+            for ((j=0; j<n; j++)); do
+                [ "${removed[$j]}" = "1" ] && continue
+                [ "$i" = "$j" ] && continue
+                if [ "${_CONFLICT_MATRIX[i*n+j]}" = "1" ]; then
+                    ((++degree))
+                fi
+            done
+
+            local is_mergeable="${_mergeable_g[$i]}"
+
+            # Prefer: mergeable > non-mergeable, then lower degree
+            if [ "$best_idx" = "-1" ]; then
+                best_idx=$i
+                best_degree=$degree
+                best_mergeable=$is_mergeable
+            elif [ "$is_mergeable" = "1" ] && [ "$best_mergeable" = "0" ]; then
+                best_idx=$i
+                best_degree=$degree
+                best_mergeable=$is_mergeable
+            elif [ "$is_mergeable" = "$best_mergeable" ] && [ "$degree" -lt "$best_degree" ]; then
+                best_idx=$i
+                best_degree=$degree
+                best_mergeable=$is_mergeable
+            fi
+        done
+
+        # No more nodes to add
+        [ "$best_idx" = "-1" ] && break
+
+        # Add best to set
+        in_set[$best_idx]=1
+        removed[$best_idx]=1
+
+        # Remove all neighbors
+        for ((j=0; j<n; j++)); do
+            if [ "${_CONFLICT_MATRIX[best_idx*n+j]}" = "1" ]; then
+                removed[$j]=1
+            fi
+        done
+    done
+
+    # Convert to JSON
+    local result="[]"
+    for ((i=0; i<n; i++)); do
+        if [ "${in_set[$i]}" = "1" ]; then
+            result=$(echo "$result" | jq --arg t "${_tasks_g[$i]}" '. + [$t]')
+        fi
+    done
+
+    echo "$result"
+}
+
+# Calculate priority score for tiebreaking within independent set
+# Used to order PRs within a merge batch
 #
 # Args:
 #   ralph_dir - Ralph directory path
 #   task_id   - Task identifier
 #
-# Returns: Integer priority score
+# Returns: Integer priority score (higher = merge first)
 _calculate_merge_priority() {
     local ralph_dir="$1"
     local task_id="$2"
@@ -475,37 +736,28 @@ _calculate_merge_priority() {
     local state_file
     state_file=$(_pr_merge_state_file "$ralph_dir")
 
-    # Get conflict count (fewer is better)
-    local conflict_count
-    conflict_count=$(jq -r --arg t "$task_id" '.conflict_graph[$t] // [] | length' "$state_file")
-
-    # Get mergeable status (mergeable is better)
-    local mergeable
-    mergeable=$(jq -r --arg t "$task_id" '.prs[$t].mergeable_to_main' "$state_file")
-
-    # Get files modified count (fewer is simpler)
+    # Fewer files = simpler PR = merge first
     local files_count
     files_count=$(jq -r --arg t "$task_id" '.prs[$t].files_modified | length' "$state_file")
 
-    # Calculate score (higher = merge first)
-    # Base score 1000
-    # -100 per conflict
-    # +500 if currently mergeable
-    # -10 per file modified
+    # Fewer conflicts = less likely to cause issues
+    local conflict_count
+    conflict_count=$(jq -r --arg t "$task_id" '.conflict_graph[$t] // [] | length' "$state_file")
+
+    # Score: higher = merge first
     local score=1000
-    ((score -= conflict_count * 100)) || true
-    [ "$mergeable" = "true" ] && ((score += 500)) || true
     ((score -= files_count * 10)) || true
+    ((score -= conflict_count * 50)) || true
 
     echo "$score"
 }
 
-# Find optimal merge order using greedy algorithm
+# Find optimal merge order using Maximum Independent Set DP
 #
 # Strategy:
-# 1. Start with PRs that are already mergeable to main
-# 2. Among those, prioritize PRs with fewer conflicts
-# 3. Then add remaining PRs in order of priority
+# 1. Find MIS among currently-mergeable PRs (maximize merge batch)
+# 2. Order batch by tiebreaker priority (simpler PRs first)
+# 3. Remaining PRs ordered by conflict count (for future passes)
 #
 # Args:
 #   ralph_dir - Ralph directory path
@@ -515,34 +767,89 @@ pr_merge_find_optimal_order() {
     local state_file
     state_file=$(_pr_merge_state_file "$ralph_dir")
 
-    log "Phase 3: Finding optimal merge order..."
+    log "Phase 3: Finding optimal merge order (Maximum Independent Set DP)..."
 
-    # Get all task IDs
+    # Get all task IDs and build arrays
+    local -a task_array=()
+    local -a mergeable_array=()
+
     local task_ids
     task_ids=$(jq -r '.prs | keys[]' "$state_file")
 
-    # Calculate priority for each PR
+    while IFS= read -r task_id; do
+        [ -n "$task_id" ] || continue
+        task_array+=("$task_id")
+
+        local is_mergeable
+        is_mergeable=$(jq -r --arg t "$task_id" '.prs[$t].mergeable_to_main' "$state_file")
+        if [ "$is_mergeable" = "true" ]; then
+            mergeable_array+=(1)
+        else
+            mergeable_array+=(0)
+        fi
+    done <<< "$task_ids"
+
+    local n=${#task_array[@]}
+
+    if [ "$n" -eq 0 ]; then
+        jq '.merge_order = []' "$state_file" > "$state_file.tmp"
+        mv "$state_file.tmp" "$state_file"
+        log "  No PRs to order"
+        return
+    fi
+
+    log "  Processing $n PRs..."
+
+    # Find Maximum Independent Set
+    local mis_json
+    mis_json=$(_find_maximum_independent_set "$ralph_dir" task_array mergeable_array)
+
+    local mis_count
+    mis_count=$(echo "$mis_json" | jq 'length')
+    log "  Maximum Independent Set size: $mis_count"
+
+    # Sort MIS by priority for merge order
     local -A priorities
     local task_id
     while IFS= read -r task_id; do
         [ -n "$task_id" ] || continue
         priorities[$task_id]=$(_calculate_merge_priority "$ralph_dir" "$task_id")
-    done <<< "$task_ids"
+    done < <(echo "$mis_json" | jq -r '.[]')
 
-    # Sort by priority (descending)
-    local sorted_tasks=()
+    local sorted_mis=()
     for task_id in "${!priorities[@]}"; do
-        sorted_tasks+=("${priorities[$task_id]}|$task_id")
+        sorted_mis+=("${priorities[$task_id]}|$task_id")
     done
 
-    # Sort and extract task IDs
     local merge_order=()
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         local tid
         tid=$(echo "$entry" | cut -d'|' -f2)
         merge_order+=("$tid")
-    done < <(printf '%s\n' "${sorted_tasks[@]}" | sort -t'|' -k1 -rn)
+    done < <(printf '%s\n' "${sorted_mis[@]}" | sort -t'|' -k1 -rn)
+
+    # Add remaining PRs (not in MIS) ordered by conflict count
+    local -A remaining_priorities
+    for task_id in "${task_array[@]}"; do
+        # Skip if in MIS
+        if echo "$mis_json" | jq -e --arg t "$task_id" 'index($t)' >/dev/null 2>&1; then
+            continue
+        fi
+        remaining_priorities[$task_id]=$(_calculate_merge_priority "$ralph_dir" "$task_id")
+    done
+
+    local sorted_remaining=()
+    for task_id in "${!remaining_priorities[@]}"; do
+        sorted_remaining+=("${remaining_priorities[$task_id]}|$task_id")
+    done
+
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        local tid
+        tid=$(echo "$entry" | cut -d'|' -f2)
+        merge_order+=("$tid")
+    done < <(printf '%s\n' "${sorted_remaining[@]}" | sort -t'|' -k1 -rn)
 
     # Build JSON array
     local order_json="[]"
@@ -550,11 +857,15 @@ pr_merge_find_optimal_order() {
         order_json=$(echo "$order_json" | jq --arg t "$task_id" '. + [$t]')
     done
 
-    # Save to state
-    jq --argjson order "$order_json" '.merge_order = $order' "$state_file" > "$state_file.tmp"
+    # Save to state with MIS info
+    jq --argjson order "$order_json" --argjson mis "$mis_json" '
+        .merge_order = $order |
+        .optimal_batch = $mis
+    ' "$state_file" > "$state_file.tmp"
     mv "$state_file.tmp" "$state_file"
 
-    log "  Merge order: $(echo "$order_json" | jq -r 'join(" → ")')"
+    log "  Optimal batch (MIS): $(echo "$mis_json" | jq -r 'join(", ")')"
+    log "  Full merge order: $(echo "$order_json" | jq -r 'join(" → ")')"
 }
 
 # =============================================================================
