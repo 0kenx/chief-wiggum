@@ -6,17 +6,18 @@
 # with full audit trail of state transitions.
 #
 # States:
-#   needs_fix      - New PR comments detected, needs fix worker
-#   fixing         - Fix worker is running
-#   fix_completed  - Fix completed, push succeeded
-#   needs_merge    - Ready for merge attempt
-#   merging        - Merge in progress
-#   merge_conflict - Merge failed due to conflict
-#   needs_resolve  - Conflict resolver required
-#   resolving      - Resolver is running
-#   resolved       - Conflicts resolved, ready for retry
-#   merged         - PR merged successfully
-#   failed         - Unrecoverable error
+#   needs_fix         - New PR comments detected, needs fix worker
+#   fixing            - Fix worker is running
+#   fix_completed     - Fix completed, push succeeded
+#   needs_merge       - Ready for merge attempt
+#   merging           - Merge in progress
+#   merge_conflict    - Merge failed due to conflict
+#   needs_resolve     - Single-PR conflict resolver required
+#   needs_multi_resolve - Multi-PR conflict (same files in multiple PRs)
+#   resolving         - Resolver is running
+#   resolved          - Conflicts resolved, ready for retry
+#   merged            - PR merged successfully
+#   failed            - Unrecoverable error
 set -euo pipefail
 
 [ -n "${_GIT_STATE_LOADED:-}" ] && return 0
@@ -253,6 +254,38 @@ git_state_transitions() {
 
     [ -f "$state_file" ] || { echo "[]"; return 0; }
     jq '.transitions // []' "$state_file"
+}
+
+# Set last push timestamp
+#
+# Args:
+#   worker_dir - Worker directory path
+#   timestamp  - ISO timestamp (optional, defaults to now)
+#
+# Returns: 1 if state file doesn't exist
+git_state_set_last_push() {
+    local worker_dir="$1"
+    local timestamp="${2:-$(date -Iseconds)}"
+    local state_file="$worker_dir/git-state.json"
+
+    [ -f "$state_file" ] || return 1
+
+    jq --arg t "$timestamp" '.last_push_at = $t' "$state_file" > "$state_file.tmp" \
+        && mv "$state_file.tmp" "$state_file"
+}
+
+# Get last push timestamp
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: ISO timestamp or "null" if not set
+git_state_get_last_push() {
+    local worker_dir="$1"
+    local state_file="$worker_dir/git-state.json"
+
+    [ -f "$state_file" ] || { echo "null"; return 0; }
+    jq -r '.last_push_at // "null"' "$state_file"
 }
 
 # Clear/reset state file (for testing or recovery)

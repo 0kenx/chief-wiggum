@@ -27,6 +27,7 @@ source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
 # Source scheduler module (unified worker management)
 source "$WIGGUM_HOME/lib/scheduler/scheduler.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
+source "$WIGGUM_HOME/lib/scheduler/conflict-registry.sh"
 
 # Default configuration
 MAX_WORKERS=4
@@ -81,6 +82,11 @@ Behavior:
   - Chief waits until all tasks are complete [x]
   - New workers spawn as old ones finish (up to max)
   - Circular dependencies are detected and reported at startup
+
+Task resumption:
+  - WIP tasks [=] with stopped workers are auto-resumed (if no worker is running)
+  - Failed tasks [*] wait for manual intervention (use 'wiggum resume/retry')
+  - Pending tasks [ ] with existing PRs go through fix pipeline (sync→fix→push→merge)
 
 EOF
 }
@@ -384,44 +390,11 @@ _check_and_spawn_multi_pr_planner() {
     fi
 }
 
-# Resume a stopped worker directly (without LLM analysis)
-#
-# Uses the current step from pipeline-config.json to resume execution.
-# This is faster than `wiggum resume` which uses an LLM to analyze logs.
-#
-# Args:
-#   worker_dir   - Worker directory path
-#   task_id      - Task identifier
-#   resume_step  - Step ID to resume from
-_resume_worker_direct() {
-    local worker_dir="$1"
-    local task_id="$2"
-    local resume_step="$3"
-
-    log "Resuming $task_id from step '$resume_step'"
-
-    # Launch system.task-worker from resume step
-    export _WORKER_DIR="$worker_dir"
-    export _WORKER_PROJECT_DIR="$PROJECT_DIR"
-    export _WORKER_MAX_ITERATIONS="$MAX_ITERATIONS"
-    export _WORKER_MAX_TURNS="$MAX_TURNS"
-    export _WORKER_RESUME_STEP="$resume_step"
-    export _WORKER_WIGGUM_HOME="$WIGGUM_HOME"
-
-    # shellcheck disable=SC2016
-    setsid bash -c '
-        set -euo pipefail
-        export WIGGUM_HOME="$_WORKER_WIGGUM_HOME"
-        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
-        run_agent "system.task-worker" "$_WORKER_DIR" "$_WORKER_PROJECT_DIR" 30 \
-            "$_WORKER_MAX_ITERATIONS" "$_WORKER_MAX_TURNS" "$_WORKER_RESUME_STEP" ""
-    ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
-}
-
 # Schedule resume of stopped workers
 #
 # Called once at startup to resume any stopped workers before starting new
-# tasks. Workers are resumed from their current pipeline step.
+# tasks. Delegates to `wiggum resume` which handles the logic of determining
+# whether to use LLM analysis (step completed) or direct resume (interrupted).
 #
 # Skips workers that:
 #   - Are terminal failures (last step + FAIL)
@@ -464,8 +437,20 @@ _schedule_resume_workers() {
             fi
         fi
 
-        # Resume the worker
-        _resume_worker_direct "$worker_dir" "$task_id" "$current_step"
+        # Resume the worker via wiggum resume (handles interrupted vs completed logic)
+        log "Resuming $task_id from step '$current_step'"
+        local worker_id
+        worker_id=$(basename "$worker_dir")
+
+        # Run wiggum resume in background, passing through config
+        # --quiet suppresses interactive output
+        (
+            cd "$PROJECT_DIR" && \
+            "$WIGGUM_HOME/bin/wiggum-resume" "$worker_id" --quiet \
+                --max-iters "$MAX_ITERATIONS" \
+                --max-turns "$MAX_TURNS" \
+                ${WIGGUM_PIPELINE:+--pipeline "$WIGGUM_PIPELINE"}
+        ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
         # Track the worker
         if wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
@@ -479,6 +464,283 @@ _schedule_resume_workers() {
             log_error "Resume started but PID not created for $task_id"
         fi
     done <<< "$resumable"
+}
+
+# Check if copilot has reviewed a PR
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if copilot has reviewed, 1 otherwise
+_has_copilot_review() {
+    local worker_dir="$1"
+    local task_id
+    task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+    local comments_file="$worker_dir/task-comments.md"
+
+    [ -f "$comments_file" ] || return 1
+
+    # Check for Copilot author (case insensitive)
+    grep -qi '^\*\*Author:\*\* Copilot' "$comments_file"
+}
+
+# Check if there are NEW comments after the last push
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if new comments exist, 1 otherwise
+# Outputs: Count of new comments if any exist
+_has_new_comments() {
+    local worker_dir="$1"
+    local comments_file="$worker_dir/task-comments.md"
+
+    [ -f "$comments_file" ] || return 1
+
+    local last_push
+    last_push=$(git_state_get_last_push "$worker_dir")
+
+    # If no last push recorded, all comments are "new"
+    if [ "$last_push" = "null" ] || [ -z "$last_push" ]; then
+        # Check if any comments exist at all
+        if grep -q '^\*\*Date:\*\*' "$comments_file"; then
+            local count
+            count=$(grep -c '^\*\*Date:\*\*' "$comments_file" || true)
+            echo "$count"
+            return 0
+        fi
+        return 1
+    fi
+
+    # Convert last_push to comparable timestamp (seconds since epoch)
+    local last_push_epoch
+    last_push_epoch=$(date -d "$last_push" +%s 2>/dev/null || echo "0")
+
+    # Extract comment dates and compare
+    local new_count=0
+    while IFS= read -r date_line; do
+        # Extract timestamp from "**Date:** 2026-01-27T03:10:28Z"
+        local comment_date
+        comment_date=$(echo "$date_line" | sed 's/\*\*Date:\*\* //')
+        local comment_epoch
+        comment_epoch=$(date -d "$comment_date" +%s 2>/dev/null || echo "0")
+
+        if [ "$comment_epoch" -gt "$last_push_epoch" ]; then
+            ((++new_count))
+        fi
+    done < <(grep '^\*\*Date:\*\*' "$comments_file" 2>/dev/null || true)
+
+    if [ "$new_count" -gt 0 ]; then
+        echo "$new_count"
+        return 0
+    fi
+    return 1
+}
+
+# Check if PR has merge conflicts with main
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if conflicts exist, 1 otherwise
+# Outputs: Newline-separated list of conflicting files
+_check_merge_conflicts() {
+    local worker_dir="$1"
+    local workspace="$worker_dir/workspace"
+
+    [ -d "$workspace" ] || return 1
+
+    # Fetch latest from origin
+    git -C "$workspace" fetch origin main 2>/dev/null || true
+
+    # Try a dry-run merge to detect conflicts
+    local merge_output
+    if ! merge_output=$(git -C "$workspace" merge-tree "$(git -C "$workspace" merge-base HEAD origin/main)" HEAD origin/main 2>&1); then
+        # merge-tree failed, try alternative method
+        :
+    fi
+
+    # Check for conflict markers in merge-tree output
+    if echo "$merge_output" | grep -q '^<<<<<<<'; then
+        # Extract conflicting files
+        echo "$merge_output" | grep -E '^\+\+\+|^changed in' | sed 's/^+++ //' | sed 's/^changed in .* //'
+        return 0
+    fi
+
+    # Alternative: try actual merge with abort
+    (
+        cd "$workspace" || exit 1
+        git stash -q 2>/dev/null || true
+        if ! git merge --no-commit --no-ff origin/main 2>/dev/null; then
+            # Get list of unmerged files
+            git diff --name-only --diff-filter=U 2>/dev/null
+            git merge --abort 2>/dev/null || true
+            git stash pop -q 2>/dev/null || true
+            exit 0
+        fi
+        git merge --abort 2>/dev/null || true
+        git stash pop -q 2>/dev/null || true
+        exit 1
+    )
+}
+
+# Attempt to merge a PR immediately
+#
+# Args:
+#   task_id   - Task identifier
+#   pr_number - PR number
+#
+# Returns: 0 on success, 1 on failure
+_try_merge_pr() {
+    local task_id="$1"
+    local pr_number="$2"
+
+    log "  Attempting merge for $task_id (PR #$pr_number)..."
+
+    if gh pr merge "$pr_number" --squash --auto 2>/dev/null; then
+        log "  ✓ Merge initiated for $task_id"
+        return 0
+    else
+        log "  ✗ Merge failed for $task_id"
+        return 1
+    fi
+}
+
+# Schedule fix pipeline for pending tasks with existing PRs
+#
+# Called at startup to handle pending tasks [ ] that have existing workers
+# with PRs. Implements the following routing logic:
+#
+#   Pending task with existing PR
+#       │
+#       ├─→ Sync PR (get latest comments)
+#       │
+#       ├─→ Has NEW comments (after last push)?
+#       │   ├─ YES → Fix pipeline
+#       │   └─ NO ─┐
+#       │          │
+#       │          ├─→ Has any review feedback yet (Copilot)?
+#       │          │   ├─ NO → Wait (review in progress)
+#       │          │   └─ YES ─┐
+#       │          │           │
+#       │          │           ├─→ Has merge conflicts?
+#       │          │           │   ├─ NO → Merge immediately
+#       │          │           │   └─ YES ─┐
+#       │          │           │           │
+#       │          │           │           ├─→ Check conflict registry
+#       │          │           │           │   ├─ File(s) conflict in THIS PR only → Simple resolve
+#       │          │           │           │   └─ File(s) conflict in MULTIPLE PRs → Multi-PR resolve
+#
+# Skips workers that:
+#   - Are already running
+#   - Don't have a PR number recorded
+#   - Are terminal failures
+_schedule_pending_pr_fixes() {
+    [ -d "$RALPH_DIR/workers" ] || return 0
+
+    local pending_with_pr=()
+
+    # Find pending tasks with existing workers that have PRs
+    for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Skip plan workers
+        [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
+
+        # Must have workspace
+        [ -d "$worker_dir/workspace" ] || continue
+
+        # Skip if running
+        is_worker_running "$worker_dir" && continue
+
+        # Skip terminal failures
+        _is_terminal_failure "$worker_dir" && continue
+
+        local task_id
+        task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+
+        # Check if task is pending
+        local task_status
+        task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$task_id")
+        [ "$task_status" = " " ] || continue
+
+        # Check if worker has a PR recorded
+        local pr_number
+        pr_number=$(git_state_get_pr "$worker_dir" 2>/dev/null)
+        [ -n "$pr_number" ] && [ "$pr_number" != "null" ] || continue
+
+        pending_with_pr+=("$worker_dir|$task_id|$pr_number")
+    done
+
+    [ ${#pending_with_pr[@]} -gt 0 ] || return 0
+
+    log "Found ${#pending_with_pr[@]} pending task(s) with existing PRs - routing..."
+    echo ""
+
+    # Initialize conflict registry
+    conflict_registry_init "$RALPH_DIR"
+
+    for entry in "${pending_with_pr[@]}"; do
+        local worker_dir task_id pr_number
+        IFS='|' read -r worker_dir task_id pr_number <<< "$entry"
+
+        echo "  $task_id (PR #$pr_number):"
+
+        # Step 1: Sync PR to get latest comments
+        "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" sync 2>/dev/null || true
+
+        # Step 2: Check for NEW comments
+        local new_comment_count
+        if new_comment_count=$(_has_new_comments "$worker_dir"); then
+            echo "    → Has $new_comment_count new comment(s) - queueing for fix pipeline"
+            git_state_set "$worker_dir" "needs_fix" "wiggum-run._schedule_pending_pr_fixes" "$new_comment_count new comment(s) need addressing"
+            echo "$task_id" >> "$RALPH_DIR/.tasks-needing-fix.txt"
+            continue
+        fi
+
+        # Step 3: Check if copilot has reviewed
+        if ! _has_copilot_review "$worker_dir"; then
+            echo "    → No Copilot review yet - waiting (review in progress)"
+            continue
+        fi
+
+        # Step 4: All comments addressed, check for merge conflicts
+        local conflict_files
+        if conflict_files=$(_check_merge_conflicts "$worker_dir"); then
+            echo "    → Merge conflicts detected"
+
+            # Add to conflict registry
+            conflict_registry_add "$RALPH_DIR" "$task_id" "$pr_number" "$conflict_files"
+
+            # Check if multi-PR conflict (same files conflicting in other PRs)
+            local multi_conflict_files
+            if multi_conflict_files=$(conflict_registry_has_multi_pr_conflict "$RALPH_DIR" "$task_id"); then
+                echo "    → Multi-PR conflict in: $(echo "$multi_conflict_files" | tr '\n' ' ')"
+                echo "    → Queueing for multi-PR resolve pipeline"
+                # Add to conflict queue for multi-PR planner
+                local files_json
+                files_json=$(echo "$conflict_files" | jq -R -s 'split("\n") | map(select(length > 0))')
+                conflict_queue_add "$RALPH_DIR" "$task_id" "$worker_dir" "$pr_number" "$files_json"
+                git_state_set "$worker_dir" "needs_multi_resolve" "wiggum-run._schedule_pending_pr_fixes" "Multi-PR conflict detected"
+            else
+                echo "    → Single-PR conflict - queueing for simple resolve"
+                git_state_set "$worker_dir" "needs_resolve" "wiggum-run._schedule_pending_pr_fixes" "Merge conflict detected"
+            fi
+            continue
+        fi
+
+        # Step 5: No conflicts - attempt immediate merge
+        echo "    → No conflicts, all comments addressed - attempting merge"
+        if _try_merge_pr "$task_id" "$pr_number"; then
+            # Remove from conflict registry if it was there
+            conflict_registry_remove "$RALPH_DIR" "$task_id"
+            # Update kanban to pending approval
+            update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "P" || true
+        else
+            echo "    → Merge failed - will retry on next sync"
+        fi
+    done
+    echo ""
 }
 
 main() {
@@ -727,8 +989,11 @@ main() {
     # Restore active workers from existing worker directories
     scheduler_restore_workers
 
-    # Resume any stopped workers before starting new ones
+    # Resume any stopped WIP workers before starting new ones
     _schedule_resume_workers
+
+    # Queue pending tasks with existing PRs for fix pipeline (sync→fix→push→merge)
+    _schedule_pending_pr_fixes
 
     local iteration=0
     local sync_counter=0

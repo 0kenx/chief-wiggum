@@ -27,6 +27,47 @@ source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
 # Default configuration
 MAX_ITERATIONS=20
 MAX_TURNS=50
+QUIET_MODE=false
+
+# Check if a step completed (has a result file) vs was interrupted (no result)
+#
+# A step that completed (even with FAIL) needs LLM analysis via resume-decide.
+# A step that was interrupted mid-execution can be directly resumed.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   step_id    - Step ID to check
+#
+# Returns: 0 if step completed (has result), 1 if interrupted (no result)
+_step_has_result() {
+    local worker_dir="$1"
+    local step_id="$2"
+
+    [ -d "$worker_dir/results" ] || return 1
+
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-${step_id}-result.json" 2>/dev/null | sort -r | head -1)
+    [ -f "$result_file" ]
+}
+
+# Get current step from pipeline config
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Echoes: step ID or empty string
+_get_current_step() {
+    local worker_dir="$1"
+    local config_file="$worker_dir/pipeline-config.json"
+
+    [ -f "$config_file" ] || return 0
+    jq -r '.current.step_id // ""' "$config_file" 2>/dev/null
+}
+
+# Output message respecting quiet mode
+_msg() {
+    [ "$QUIET_MODE" = "true" ] || echo "$@"
+}
 
 show_help() {
     cat << EOF
@@ -61,7 +102,14 @@ Options:
   --pipeline NAME Pipeline config to use (from config/pipelines/ or config/)
   -f              Force resume, clearing any workspace violation status.
                   Use this after manually resolving violations.
+  -q, --quiet     Suppress output (for use by orchestrator)
   -h, --help      Show this help message
+
+Resume Logic:
+  - If the current step has a result file (step completed), the resume-decide
+    agent analyzes logs to determine the correct resume point
+  - If the current step has no result file (step was interrupted mid-execution),
+    resumes directly from that step without LLM analysis
 
 Examples:
   wiggum resume TASK-030            # Resume worker for TASK-030
@@ -151,54 +199,71 @@ do_resume() {
         exit $EXIT_ERROR
     fi
 
-    echo "Resuming worker $worker_id for task $task_id"
-    echo ""
+    _msg "Resuming worker $worker_id for task $task_id"
+    _msg ""
 
-    # === STEP 1: Convert logs to conversations ===
-    echo "Converting logs to readable conversations..."
-    if [ -d "$worker_dir/logs" ]; then
-        "$WIGGUM_HOME/lib/utils/log-converter.sh" --dir "$worker_dir"
+    # === STEP 1: Check if step completed vs was interrupted ===
+    local current_step resume_step needs_resume_decide=true
+    current_step=$(_get_current_step "$worker_dir")
+
+    if [ -n "$current_step" ] && ! _step_has_result "$worker_dir" "$current_step"; then
+        # Step was interrupted mid-execution (no result file)
+        # Direct resume is appropriate - no need for LLM analysis
+        needs_resume_decide=false
+        resume_step="$current_step"
+        _msg "Step '$current_step' was interrupted (no result file) - resuming directly"
     else
-        echo "  No logs directory found — starting fresh"
-        mkdir -p "$worker_dir/conversations"
-        # Create a minimal worker.log so system.resume-decide has something to read
-        if [ ! -f "$worker_dir/worker.log" ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Worker was interrupted before producing logs" > "$worker_dir/worker.log"
+        # Step completed (has result file) or no current step recorded
+        # Need LLM to analyze what happened and decide resume point
+        _msg "Step '${current_step:-unknown}' completed - running resume-decide agent"
+    fi
+
+    # === STEP 2: Convert logs to conversations (if needed for resume-decide) ===
+    if [ "$needs_resume_decide" = "true" ]; then
+        _msg "Converting logs to readable conversations..."
+        if [ -d "$worker_dir/logs" ]; then
+            "$WIGGUM_HOME/lib/utils/log-converter.sh" --dir "$worker_dir"
+        else
+            _msg "  No logs directory found — starting fresh"
+            mkdir -p "$worker_dir/conversations"
+            # Create a minimal worker.log so system.resume-decide has something to read
+            if [ ! -f "$worker_dir/worker.log" ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Worker was interrupted before producing logs" > "$worker_dir/worker.log"
+            fi
+        fi
+
+        # === STEP 3: Run system.resume-decide agent ===
+        _msg "Analyzing previous run to decide resume step..."
+        run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1 25
+
+        # === STEP 4: Read decision ===
+        resume_step=$(cat "$worker_dir/resume-step.txt" 2>/dev/null || echo "ABORT")
+        resume_step=$(echo "$resume_step" | tr -d '[:space:]')
+
+        if [ "$resume_step" = "ABORT" ]; then
+            _msg ""
+            _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            _msg "RESUME ABORTED"
+            _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            _msg ""
+            local abort_report
+            abort_report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
+            if [ -n "$abort_report" ] && [ -f "$abort_report" ]; then
+                _msg "Reason:"
+                [ "$QUIET_MODE" = "true" ] || cat "$abort_report"
+            fi
+            _msg ""
+            exit $EXIT_ERROR
         fi
     fi
 
-    # === STEP 2: Run system.resume-decide agent ===
-    echo "Analyzing previous run to decide resume step..."
-    run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1 25
-
-    # === STEP 3: Read decision ===
-    local resume_step
-    resume_step=$(cat "$worker_dir/resume-step.txt" 2>/dev/null || echo "ABORT")
-    resume_step=$(echo "$resume_step" | tr -d '[:space:]')
-
-    if [ "$resume_step" = "ABORT" ]; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "RESUME ABORTED"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        local abort_report
-        abort_report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
-        if [ -n "$abort_report" ] && [ -f "$abort_report" ]; then
-            echo "Reason:"
-            cat "$abort_report"
-        fi
-        echo ""
-        exit $EXIT_ERROR
-    fi
-
-    # === STEP 3b: Load pipeline config ===
+    # === STEP 5: Load pipeline config ===
     # Load the pipeline to validate the resume step against actual step IDs
     local pipeline_file
     pipeline_file=$(pipeline_resolve "$PROJECT_DIR" "$task_id" "${WIGGUM_PIPELINE:-}")
     if [ -n "$pipeline_file" ]; then
         pipeline_load "$pipeline_file" || {
-            echo "Error: Failed to load pipeline config: $pipeline_file"
+            _msg "Error: Failed to load pipeline config: $pipeline_file"
             exit $EXIT_ERROR
         }
     else
@@ -222,15 +287,15 @@ do_resume() {
                 valid_steps="$sid"
             fi
         done
-        echo "Error: Invalid resume step '$resume_step'"
-        echo "Valid steps from pipeline '$PIPELINE_NAME': $valid_steps"
+        _msg "Error: Invalid resume step '$resume_step'"
+        _msg "Valid steps from pipeline '$PIPELINE_NAME': $valid_steps"
         exit $EXIT_ERROR
     fi
 
-    echo "Resume decision: start from '$resume_step' step (index $step_idx)"
-    echo ""
+    _msg "Resume decision: start from '$resume_step' step (index $step_idx)"
+    _msg ""
 
-    # === STEP 4: Check rate limit before launching ===
+    # === STEP 6: Check rate limit before launching ===
     # Update usage data and check rate limit (orchestrator may not be running)
     usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
     if rate_limit_check "$RALPH_DIR"; then
@@ -239,9 +304,9 @@ do_resume() {
         usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
     fi
 
-    # === STEP 5: Launch system.task-worker ===
+    # === STEP 7: Launch system.task-worker ===
     # Always use normal system.task-worker (not plan-mode) — it picks up existing plan files
-    echo "Launching system.task-worker from step: $resume_step"
+    _msg "Launching system.task-worker from step: $resume_step"
 
     mkdir -p "$RALPH_DIR/logs"
 
@@ -301,11 +366,11 @@ do_resume() {
     if [ -f "$worker_dir/agent.pid" ]; then
         local worker_pid
         worker_pid=$(cat "$worker_dir/agent.pid")
-        echo "Worker running (PID: $worker_pid)"
+        _msg "Worker running (PID: $worker_pid)"
     else
-        echo "Worker started (PID file pending)"
+        _msg "Worker started (PID file pending)"
     fi
-    echo "Use 'wiggum monitor' to follow progress"
+    _msg "Use 'wiggum monitor' to follow progress"
 }
 
 # Main
@@ -322,6 +387,10 @@ main() {
                 ;;
             -f)
                 force_mode=true
+                shift
+                ;;
+            -q|--quiet)
+                QUIET_MODE=true
                 shift
                 ;;
             --max-iters)
