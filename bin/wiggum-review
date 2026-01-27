@@ -150,7 +150,9 @@ merge_pr() {
             ;;
     esac
 
-    if gh pr merge "$pr_number" $merge_flag --delete-branch; then
+    # Don't use --delete-branch: worktrees conflict with local branch deletion
+    # Use 'wiggum review cleanup' to delete merged branches
+    if gh pr merge "$pr_number" $merge_flag; then
         log "✓ Merged PR #$pr_number"
         return 0
     else
