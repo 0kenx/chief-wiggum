@@ -1317,6 +1317,16 @@ pr_merge_handle_remaining() {
         done < <(echo "$conflicts_with_prs" | jq -r '.[]')
 
         if [ "$has_multi_conflict" = "true" ]; then
+            # Check if this worker is already part of a planned batch
+            # If so, don't override the state (planner may have already transitioned to needs_resolve)
+            if [ -f "$worker_dir/batch-context.json" ]; then
+                local current_git_state
+                current_git_state=$(git_state_get "$worker_dir")
+                log "  $task_id: already in batch (state=$current_git_state) - skipping"
+                ((++needs_multi_resolve))
+                continue
+            fi
+
             log "  $task_id: needs_multi_resolve (conflicts with other PRs)"
 
             # Add to conflict registry and queue
