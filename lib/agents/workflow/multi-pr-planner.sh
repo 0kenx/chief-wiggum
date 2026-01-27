@@ -370,8 +370,14 @@ _setup_batch_coordination() {
     local task_count task_order_list=""
     task_count=$(jq -r '.tasks | length' "$batch_file")
 
-    # If we have merge order from plans, use it; otherwise use batch file order
-    if [ ${#task_positions[@]} -gt 0 ]; then
+    # Priority 1: Use merge_order from batch file if present (computed by Phase 3 MIS algorithm)
+    local batch_merge_order
+    batch_merge_order=$(jq -r '.merge_order // empty | join(",")' "$batch_file" 2>/dev/null || echo "")
+    if [ -n "$batch_merge_order" ]; then
+        log "Using merge_order from batch file (Phase 3 MIS algorithm)"
+        task_order_list="$batch_merge_order"
+    # Priority 2: Use merge order extracted from LLM plans
+    elif [ ${#task_positions[@]} -gt 0 ]; then
         # Sort tasks by their position
         local -a sorted_tasks=()
         for task in "${!task_positions[@]}"; do

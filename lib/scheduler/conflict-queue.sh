@@ -449,16 +449,18 @@ conflict_queue_build_batch_file() {
         fi
     done < <(echo "$task_ids" | jq -r '.[]')
 
-    # Write batch file
+    # Write batch file with explicit merge_order for the planner to use
     jq -n \
         --arg batch_id "$batch_id" \
         --arg created_at "$(date -Iseconds)" \
         --argjson common_files "$common_files" \
         --argjson tasks "$tasks" \
+        --argjson merge_order "$task_ids" \
         '{
             batch_id: $batch_id,
             created_at: $created_at,
             common_files: $common_files,
+            merge_order: $merge_order,
             tasks: $tasks
         }' > "$output_file"
 

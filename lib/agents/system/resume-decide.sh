@@ -50,7 +50,7 @@ _load_pipeline_config() {
 
     # Try to resolve and load pipeline config
     local pipeline_path
-    pipeline_path=$(pipeline_resolve "$project_dir" "" "")
+    pipeline_path=$(pipeline_resolve "$project_dir" "" "${WIGGUM_PIPELINE:-}")
 
     if [ -n "$pipeline_path" ] && [ -f "$pipeline_path" ]; then
         pipeline_load "$pipeline_path" 2>/dev/null || pipeline_load_builtin_defaults
