@@ -130,10 +130,16 @@ Before writing code:
    - Handle errors appropriately (don't swallow them)
    - Keep functions focused and readable
 
-7. **Write Tests**
-   - Add tests that verify your implementation works
-   - Follow the project's existing test patterns
+7. **Write Unit Tests**
+   - Write UNIT tests to verify your implementation works correctly
+   - Unit tests are YOUR sanity checks - verify code does what you think it does
+   - Test individual functions/methods in isolation
    - Test the happy path and key edge cases
+   - Use mocks/stubs for external dependencies (databases, APIs, etc.)
+   - Follow the project's existing test patterns
+
+   **Scope**: Unit tests only. Integration and E2E tests are written separately
+   by the test-coverage agent to independently verify spec compliance.
 
 8. **Security Considerations**
    - Validate inputs from untrusted sources
@@ -143,8 +149,8 @@ Before writing code:
 ## Phase 4: Verify and Complete (CRITICAL)
 
 9. **Verify Build** - Run the project's build command BEFORE marking complete
-10. **Run Tests (MANDATORY)** - You MUST run the test suite before marking any task complete
-11. **Final Verification** - All tests pass, no regressions
+10. **Run Tests (MANDATORY)** - Run unit tests AND existing integration tests (if any)
+11. **Verify Integration** - Feature must be reachable from app entry points (not just library code)
 12. **Update the PRD** - `- [ ]` -> `- [x]` ONLY if build passes AND tests pass
 
 ## Phase 4.5: Complete Task Finishing
@@ -171,15 +177,15 @@ Before marking complete:
 - [ ] Implementation meets ALL spec requirements (docs/ and PRD)
 - [ ] Changes fit the system's architectural design
 - [ ] Code follows existing patterns (cite examples you followed)
-- [ ] Build passes (ran build command)
-- [ ] Tests pass (ran test command)
 - [ ] Error cases handled with actionable messages
-- [ ] Tests added for new code
+- [ ] Unit tests added for new code
+- [ ] Build passes (ran build command)
+- [ ] All tests pass (unit + integration if exists)
+- [ ] Feature is wired to entry points (not just library code)
 - [ ] Related files updated if needed
 - [ ] Dead code and obsolete comments removed
-- [ ] Comments focus on WHY not WHAT
 
-**DO NOT mark a task [x] complete if build fails or tests fail.**
+**DO NOT mark complete if build fails, tests fail, or feature is unreachable.**
 
 ## Final Result
 

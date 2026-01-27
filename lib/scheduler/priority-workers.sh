@@ -15,6 +15,7 @@ source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 
 # Check for tasks needing fixes and spawn fix workers
 #
@@ -369,6 +370,11 @@ handle_resolve_worker_completion() {
             "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" commit 2>&1 | sed "s/^/  [commit-$task_id] /"
             "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" push 2>&1 | sed "s/^/  [push-$task_id] /"
         )
+
+        # Remove from conflict queue
+        local ralph_dir
+        ralph_dir=$(dirname "$(dirname "$worker_dir")")
+        conflict_queue_remove "$ralph_dir" "$task_id"
 
         # Ready for another merge attempt
         git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_resolve_worker_completion" "Ready for merge retry"

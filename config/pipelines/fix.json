@@ -1,0 +1,44 @@
+{
+  "name": "fix",
+  "description": "Fix pipeline: PR comment fix -> sync main -> resolve conflicts -> push -> merge",
+  "steps": [
+    {
+      "id": "pr-fix",
+      "agent": "engineering.pr-comment-fix",
+      "max": 3,
+      "commit_after": true,
+      "on_result": {
+        "SKIP": { "jump": "sync-main" }
+      }
+    },
+    {
+      "id": "sync-main",
+      "agent": "workflow.git-sync-main",
+      "max": 3,
+      "on_result": {
+        "FAIL": {
+          "id": "resolve",
+          "agent": "workflow.git-conflict-resolver",
+          "max": 3,
+          "on_result": {
+            "PASS": { "jump": "commit-push" },
+            "FAIL": { "jump": "abort" }
+          }
+        }
+      }
+    },
+    {
+      "id": "commit-push",
+      "agent": "workflow.git-commit-push",
+      "max": 2
+    },
+    {
+      "id": "merge",
+      "agent": "workflow.pr-merge",
+      "max": 2,
+      "on_result": {
+        "FAIL": { "jump": "sync-main" }
+      }
+    }
+  ]
+}

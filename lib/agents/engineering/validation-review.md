@@ -59,6 +59,8 @@ Watch for these red flags:
 * **Broken functionality** - Feature doesn't work as specified
 * **Incomplete wiring** - New code not integrated into the application
 * **Security vulnerabilities** - Obvious holes in new code
+* **Missing integration tests** - Specs define integration points but no integration tests verify them
+* **Wrong test scope** - Only unit tests exist when specs require behavior verification across components
 
 ## What Does NOT Cause FAIL
 
@@ -89,6 +91,25 @@ Check implementation didn't miss:
 - Integration points (API routes, CLI commands, UI elements)
 - Error handling for documented conditions
 - Configuration or environment requirements
+
+## Test Scope Verification
+
+Verify the right TYPES of tests exist:
+
+**Unit Tests** (from software engineer):
+- Test individual functions/methods
+- Verify implementation works as coded
+
+**Integration/E2E Tests** (from test-coverage agent):
+- Test components working together
+- Verify implementation conforms to SPECS in docs/
+- Exercise actual entry points (APIs, commands, exports)
+
+**Check for test scope issues:**
+- Only unit tests exist when specs require integration testing → FAIL
+- Tests verify code behavior but not spec conformance → FAIL
+- Integration points from specs have no integration tests → FAIL
+- Tests don't exercise actual entry points defined in specs → FAIL
 
 {{git_restrictions}}
 </WIGGUM_SYSTEM_PROMPT>
@@ -159,6 +180,24 @@ For each new feature, trace the path:
 - New code is properly imported?
 - Dependencies are satisfied?
 
+## Step 6: Verify Test Scope
+
+Check that the right types of tests exist:
+
+1. **Identify spec-defined integration points**
+   - Read docs/ to find defined APIs, commands, data flows
+   - These require integration tests, not just unit tests
+
+2. **Check for integration/E2E tests**
+   - Do tests exercise actual entry points?
+   - Do tests verify component interactions?
+   - Do tests check spec-defined behavior (not just code paths)?
+
+3. **Flag test scope issues**
+   - Only unit tests for data structures → missing integration tests
+   - Tests don't exercise spec-defined entry points → wrong scope
+   - Tests verify code runs but not that it conforms to spec → insufficient
+
 ## FAIL Criteria
 
 | Finding | Verdict |
@@ -169,6 +208,8 @@ For each new feature, trace the path:
 | Feature doesn't work as PRD specified | FAIL |
 | Critical bug prevents functionality | FAIL |
 | Security vulnerability in new code | FAIL |
+| Specs define integration points but no integration tests exist | FAIL |
+| Only unit tests exist when specs require cross-component verification | FAIL |
 
 ## PASS Criteria
 
@@ -177,6 +218,7 @@ All of the following must be true:
 - All PRD requirements have corresponding code changes in git diff
 - Working implementation that matches spec
 - Proper integration into the application
+- Integration/E2E tests exist for spec-defined integration points (when applicable)
 
 ## Output Format
 
@@ -187,10 +229,10 @@ All of the following must be true:
 
 ## Evidence Check
 
-| PRD Requirement | Found in Diff? | Files Changed | Integrated? |
-|-----------------|----------------|---------------|-------------|
-| [requirement 1] | YES/NO | [files] | YES/NO |
-| [requirement 2] | YES/NO | [files] | YES/NO |
+| PRD Requirement | Found in Diff? | Files Changed | Integrated? | Integration Tests? |
+|-----------------|----------------|---------------|-------------|-------------------|
+| [requirement 1] | YES/NO | [files] | YES/NO | YES/NO/N/A |
+| [requirement 2] | YES/NO | [files] | YES/NO | YES/NO/N/A |
 
 ## Verification Details
 [For each requirement, explain what you checked and what you found]

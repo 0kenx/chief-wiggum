@@ -6,6 +6,7 @@
 #   - Detecting conflicts
 #   - Transitioning state for retry/resolution
 #   - Updating kanban status on success
+#   - Queueing conflicts for multi-PR coordination
 set -euo pipefail
 
 [ -n "${_MERGE_MANAGER_LOADED:-}" ] && return 0
@@ -16,6 +17,7 @@ source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
+source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 
 # Attempt to merge a PR for a worker
 #
@@ -79,6 +81,21 @@ attempt_pr_merge() {
     if echo "$merge_output" | grep -qiE "(conflict|cannot be merged|out of date)"; then
         git_state_set_error "$worker_dir" "Merge conflict: $merge_output"
         git_state_set "$worker_dir" "merge_conflict" "merge-manager.attempt_pr_merge" "Merge failed due to conflict"
+
+        # Get affected files for multi-PR tracking
+        local affected_files='[]'
+        local workspace="$worker_dir/workspace"
+        if [ -d "$workspace" ]; then
+            # Get list of files changed in this branch vs main
+            local changed_files
+            changed_files=$(git -C "$workspace" diff --name-only origin/main 2>/dev/null | head -50 || true)
+            if [ -n "$changed_files" ]; then
+                affected_files=$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(length > 0))')
+            fi
+        fi
+
+        # Add to conflict queue for multi-PR coordination
+        conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$affected_files"
 
         if [ "$merge_attempts" -lt "$MAX_MERGE_ATTEMPTS" ]; then
             git_state_set "$worker_dir" "needs_resolve" "merge-manager.attempt_pr_merge" "Conflict resolver required"

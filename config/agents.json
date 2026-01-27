@@ -150,6 +150,52 @@
         "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
         "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
       }
+    },
+    "workflow.git-sync-main": {
+      "max_iterations": 1,
+      "max_turns": 5,
+      "timeout_seconds": 120,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "workflow.git-commit-push": {
+      "max_iterations": 1,
+      "max_turns": 5,
+      "timeout_seconds": 120,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
+    },
+    "workflow.pr-merge": {
+      "max_iterations": 1,
+      "max_turns": 5,
+      "timeout_seconds": 120,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "workflow.git-conflict-resolver": {
+      "max_iterations": 10,
+      "max_turns": 40,
+      "timeout_seconds": 1800,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "workflow.multi-pr-planner": {
+      "max_iterations": 3,
+      "max_turns": 50,
+      "timeout_seconds": 900,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     }
   },
   "defaults": {

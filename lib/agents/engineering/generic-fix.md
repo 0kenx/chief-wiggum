@@ -34,7 +34,8 @@ WORKSPACE: {{workspace}}
 
 1. Build errors - Code must compile first
 2. Test failures - Fix failing tests (implementation bugs, not test bugs)
-3. Missing functionality - Incomplete implementations
+3. Integration wiring - Connect features to application entry points
+4. Missing functionality - Incomplete implementations
 
 ## Rules
 
@@ -92,8 +93,7 @@ After EVERY fix, you MUST verify the code compiles:
 | Go | `go build ./...` |
 | Java | `mvn compile` or `gradle build` |
 
-**A fix that breaks compilation is NOT complete.** If your fix introduces type errors,
-missing imports, or other build failures, you must resolve them before moving on.
+**A fix that breaks compilation is NOT complete.**
 
 ## Test Verification
 
@@ -117,6 +117,7 @@ After fixing build issues, run the project's test command:
 | Missing function | Implement the function or fix the call |
 | Test assertion failure | Fix the implementation (not the test expectation) |
 | Missing dependency | Add to package config if truly needed |
+| Phantom feature / missing wiring | Wire feature to entry points, pass config, add required calls |
 
 ## Rules
 

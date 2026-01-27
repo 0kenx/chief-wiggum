@@ -38,6 +38,7 @@ Commands:
   status                    Show integration status
   task <patterns> sync      Sync PR comments for tasks matching patterns
   task <patterns> fix       Fix PR comments using ralph loop
+  task <patterns> fix --pipeline  Full fix workflow: fix -> sync -> resolve -> push -> merge
   task <pattern> resolve    Sync with main and resolve merge conflicts
   task <pattern> commit     Create commit in worker workspace
   task <pattern> push       Push worker branch to remote
@@ -434,12 +435,14 @@ cmd_task_sync() {
 }
 
 # Fix PR comments for a task (async launch)
+# Supports --pipeline flag to use fix pipeline for full workflow
 cmd_task_fix() {
     local pattern="$1"
+    local use_pipeline="${2:-false}"
 
     if [ -z "$pattern" ]; then
         error "Task pattern required"
-        echo "Usage: wiggum review task <pattern> fix"
+        echo "Usage: wiggum review task <pattern> fix [--pipeline]"
         return 1
     fi
 
@@ -481,7 +484,16 @@ cmd_task_fix() {
     # Ensure log directory exists
     mkdir -p "$RALPH_DIR/logs"
 
-    log "Launching fix agent for $(basename "$worker_dir")"
+    # Determine which agent/pipeline to use
+    local agent_type="engineering.pr-comment-fix"
+    local pipeline_export=""
+    if [ "$use_pipeline" = "true" ]; then
+        agent_type="system.task-worker"
+        pipeline_export='export WIGGUM_PIPELINE="fix"'
+        log "Launching fix pipeline for $(basename "$worker_dir")"
+    else
+        log "Launching fix agent for $(basename "$worker_dir")"
+    fi
 
     # Launch agent in background via setsid (new session, won't receive parent signals)
     # shellcheck disable=SC2016
@@ -493,14 +505,15 @@ cmd_task_fix() {
         _log_ts "INFO: worker_dir='"$worker_dir"'"
 
         export WIGGUM_HOME="'"$WIGGUM_HOME"'"
+        '"$pipeline_export"'
 
         if ! source "$WIGGUM_HOME/lib/worker/agent-registry.sh" 2>&1; then
             _log_ts "ERROR: Failed to source agent-registry.sh"
             exit 1
         fi
 
-        _log_ts "INFO: Running agent engineering.pr-comment-fix"
-        run_agent "engineering.pr-comment-fix" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
+        _log_ts "INFO: Running agent '"$agent_type"'"
+        run_agent "'"$agent_type"'" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
         local _exit_code=$?
         if [ $_exit_code -ne 0 ]; then
             _log_ts "ERROR: run_agent failed with exit code $_exit_code"
@@ -872,12 +885,20 @@ case "$COMMAND" in
             exit $EXIT_USAGE
         fi
 
+        # Check for --pipeline flag in remaining args
+        USE_FIX_PIPELINE=false
+        for arg in "${ARGS[@]:2}"; do
+            if [ "$arg" = "--pipeline" ]; then
+                USE_FIX_PIPELINE=true
+            fi
+        done
+
         case "${TASK_ACTION:-sync}" in
             sync)
                 cmd_task_sync "$TASK_PATTERNS"
                 ;;
             fix)
-                cmd_task_fix "$TASK_PATTERNS"
+                cmd_task_fix "$TASK_PATTERNS" "$USE_FIX_PIPELINE"
                 ;;
             resolve)
                 cmd_task_resolve "$TASK_PATTERNS" "$NO_FETCH"

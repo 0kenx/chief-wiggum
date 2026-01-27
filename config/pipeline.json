@@ -55,7 +55,16 @@
     {
       "id": "validation",
       "agent": "engineering.validation-review",
-      "readonly": true
+      "max": 2,
+      "readonly": true,
+      "on_result": {
+        "FAIL": {
+          "id": "validation-fix",
+          "agent": "engineering.generic-fix",
+          "max": 2,
+          "commit_after": true
+        }
+      }
     }
   ]
 }

@@ -26,6 +26,7 @@ source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
 
 # Source scheduler module (unified worker management)
 source "$WIGGUM_HOME/lib/scheduler/scheduler.sh"
+source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 
 # Default configuration
 MAX_WORKERS=4
@@ -291,6 +292,96 @@ _handle_resolve_worker_timeout() {
     local worker_dir="$1"
     local task_id="$2"
     handle_resolve_worker_timeout "$worker_dir" "$task_id" "$RESOLVE_WORKER_TIMEOUT"
+}
+
+# Check for conflict batches and spawn multi-PR planner if needed
+_check_and_spawn_multi_pr_planner() {
+    # Initialize conflict queue if needed
+    conflict_queue_init "$RALPH_DIR"
+
+    # Check if any batches need planning
+    if ! conflict_queue_batch_ready "$RALPH_DIR"; then
+        return 0
+    fi
+
+    # Get groups of related conflicts
+    local groups
+    groups=$(conflict_queue_group_related "$RALPH_DIR")
+
+    local group_count
+    group_count=$(echo "$groups" | jq 'length')
+
+    if [ "$group_count" -eq 0 ]; then
+        return 0
+    fi
+
+    log "Found $group_count conflict group(s) ready for coordinated planning"
+
+    # Process first ready group
+    local first_group task_ids
+    first_group=$(echo "$groups" | jq '.[0]')
+    task_ids=$(echo "$first_group" | jq '.task_ids')
+
+    # Create batch
+    local batch_id
+    batch_id=$(conflict_queue_create_batch "$RALPH_DIR" "$task_ids")
+
+    # Create planner worker directory
+    local planner_worker_dir="$RALPH_DIR/workers/planner-$batch_id"
+    mkdir -p "$planner_worker_dir/logs" "$planner_worker_dir/results"
+
+    # Build batch file
+    conflict_queue_build_batch_file "$RALPH_DIR" "$batch_id" "$planner_worker_dir/conflict-batch.json"
+
+    # Update batch status
+    conflict_queue_update_batch_status "$RALPH_DIR" "$batch_id" "planning"
+
+    log "Spawning multi-PR planner for batch $batch_id"
+
+    # Launch planner agent
+    (
+        export WIGGUM_HOME
+        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+        run_agent "workflow.multi-pr-planner" "$planner_worker_dir" "$PROJECT_DIR" 0
+    ) >> "$RALPH_DIR/logs/planner.log" 2>&1 &
+
+    local planner_pid=$!
+
+    # Wait briefly for completion (planner is typically fast)
+    local wait_count=0
+    while kill -0 "$planner_pid" 2>/dev/null && [ $wait_count -lt 60 ]; do
+        sleep 1
+        ((wait_count++)) || true
+    done
+
+    # Check result
+    local result_file
+    result_file=$(find "$planner_worker_dir/results" -name "*-result.json" 2>/dev/null | head -1)
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result // "FAIL"' "$result_file")
+
+        if [ "$gate_result" = "PASS" ]; then
+            conflict_queue_update_batch_status "$RALPH_DIR" "$batch_id" "planned"
+            log "Multi-PR planning completed for batch $batch_id"
+
+            # Mark individual workers as ready for resolution with plan
+            while read -r task_id; do
+                local worker_dir
+                worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$task_id" 2>/dev/null)
+                if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+                    git_state_set "$worker_dir" "needs_resolve" "wiggum-run._check_and_spawn_multi_pr_planner" "Resolution plan ready"
+                fi
+            done < <(echo "$task_ids" | jq -r '.[]')
+        else
+            conflict_queue_update_batch_status "$RALPH_DIR" "$batch_id" "failed"
+            log_error "Multi-PR planning failed for batch $batch_id"
+        fi
+    else
+        log_warn "Multi-PR planner did not produce result file"
+        conflict_queue_update_batch_status "$RALPH_DIR" "$batch_id" "failed"
+    fi
 }
 
 # Resume a stopped worker directly (without LLM analysis)
@@ -663,6 +754,9 @@ main() {
 
             # Check for and spawn fix workers after sync
             spawn_fix_workers "$RALPH_DIR" "$PROJECT_DIR" "$FIX_WORKER_LIMIT"
+
+            # Check for conflict batches and spawn multi-PR planner if needed
+            _check_and_spawn_multi_pr_planner
         fi
 
         # Tick scheduler to update task lists
