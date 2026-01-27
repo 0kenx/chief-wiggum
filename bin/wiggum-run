@@ -697,16 +697,16 @@ main() {
 
     echo ""
 
-    # Check for failed tasks and reset them to pending for retry
+    # Note: Failed tasks [*] are not auto-retried - they wait for manual intervention.
+    # Use 'wiggum resume TASK-ID' or 'wiggum retry TASK-ID' to restart failed tasks.
     local failed_tasks
     failed_tasks=$(get_failed_tasks "$RALPH_DIR/kanban.md")
     if [ -n "$failed_tasks" ]; then
-        log "Found failed tasks - resetting for retry:"
+        local failed_count
+        failed_count=$(echo "$failed_tasks" | wc -w)
+        log "Found $failed_count failed task(s) - waiting (use 'wiggum resume/retry' to restart):"
         for task_id in $failed_tasks; do
-            echo "  → Retrying $task_id"
-            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" " "; then
-                log_error "Failed to reset $task_id to pending"
-            fi
+            echo "  ⏸ $task_id"
         done
         echo ""
     fi

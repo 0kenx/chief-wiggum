@@ -2,7 +2,7 @@
 type: engineering.validation-review
 description: Code review and validation agent that reviews completed work against PRD requirements
 required_paths: [prd.md, workspace]
-valid_results: [PASS, FAIL]
+valid_results: [PASS, FIX, FAIL]
 mode: ralph_loop
 readonly: true
 report_tag: review
@@ -198,18 +198,23 @@ Check that the right types of tests exist:
    - Tests don't exercise spec-defined entry points → wrong scope
    - Tests verify code runs but not that it conforms to spec → insufficient
 
-## FAIL Criteria
+## FIX Criteria (fixable issues)
 
 | Finding | Verdict |
 |---------|---------|
-| Code doesn't compile (build errors) | FAIL |
-| PRD requirement has no matching code changes | FAIL |
-| Code exists but isn't called/integrated | FAIL |
-| Feature doesn't work as PRD specified | FAIL |
-| Critical bug prevents functionality | FAIL |
+| Code doesn't compile (build errors) | FIX |
+| Code exists but isn't called/integrated | FIX |
+| Feature doesn't work as PRD specified | FIX |
+| Critical bug prevents functionality | FIX |
+| Missing integration tests | FIX |
+
+## FAIL Criteria (unfixable issues)
+
+| Finding | Verdict |
+|---------|---------|
+| PRD requirement has no matching code changes (nothing implemented) | FAIL |
 | Security vulnerability in new code | FAIL |
-| Specs define integration points but no integration tests exist | FAIL |
-| Only unit tests exist when specs require cross-component verification | FAIL |
+| Fundamental design incompatible with requirements | FAIL |
 
 ## PASS Criteria
 
@@ -252,9 +257,11 @@ All of the following must be true:
 
 <result>PASS</result>
 OR
+<result>FIX</result>
+OR
 <result>FAIL</result>
 
-The <result> tag MUST be exactly: PASS or FAIL.
+The <result> tag MUST be exactly: PASS, FIX, or FAIL.
 </WIGGUM_USER_PROMPT>
 
 <WIGGUM_CONTINUATION_PROMPT>
@@ -267,5 +274,5 @@ Please continue your review:
 2. If you found issues that need deeper investigation, investigate them now
 3. When your review is complete, provide the final <review> and <result> tags
 
-Remember: The <result> tag must contain exactly PASS or FAIL.
+Remember: The <result> tag must contain exactly PASS, FIX, or FAIL.
 </WIGGUM_CONTINUATION_PROMPT>

@@ -58,7 +58,7 @@
       "max": 2,
       "readonly": true,
       "on_result": {
-        "FAIL": {
+        "FIX": {
           "id": "validation-fix",
           "agent": "engineering.generic-fix",
           "max": 2,
