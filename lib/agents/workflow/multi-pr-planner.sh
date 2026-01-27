@@ -27,6 +27,9 @@ agent_required_paths() {
 agent_source_core
 agent_source_once
 
+# Source batch coordination for multi-PR workflow
+source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
+
 # Main entry point
 agent_run() {
     local worker_dir="$1"
@@ -156,6 +159,12 @@ ${diff_output}
     local result_value="PASS"
     if [ "$plans_failed" -gt 0 ] && [ "$plans_created" -eq 0 ]; then
         result_value="FAIL"
+    fi
+
+    # If plans were created successfully, set up batch coordination
+    if [ "$plans_created" -gt 0 ]; then
+        log "Setting up batch coordination for $plans_created tasks..."
+        _setup_batch_coordination "$batch_file" "$log_file" "$project_dir"
     fi
 
     agent_write_result "$worker_dir" "$result_value" \
@@ -313,4 +322,119 @@ _extract_plan_for_task() {
             content = content "\n" $0
         }
     '
+}
+
+# Setup batch coordination files after plans are created
+#
+# Creates:
+#   - .ralph/batch-coordination-{batch_id}.json : Shared coordination file
+#   - {worker_dir}/batch-context.json : Per-worker context
+#
+# Args:
+#   batch_file  - Path to conflict-batch.json
+#   log_file    - Path to planner log file (for extracting merge order)
+#   project_dir - Project root directory
+_setup_batch_coordination() {
+    local batch_file="$1"
+    local log_file="$2"
+    local project_dir="$3"
+
+    local batch_id
+    batch_id=$(jq -r '.batch_id' "$batch_file")
+
+    # Extract merge order from planner output
+    # Look for "Merge Order: N of M" patterns in each plan
+    local -A task_positions=()
+
+    # Extract text from log and find merge order
+    local text_content
+    text_content=$(_extract_text_from_stream_json "$log_file") || true
+
+    if [ -n "$text_content" ]; then
+        # Parse merge order from plans - look for "Merge Order: N of M" or "**Merge Order**: N of M"
+        while IFS= read -r line; do
+            # Match patterns like "Merge Order: 1 of 3" or "**Merge Order**: 2 of 3"
+            if [[ "$line" =~ [Mm]erge[[:space:]]*[Oo]rder.*:.*([0-9]+)[[:space:]]*of[[:space:]]*([0-9]+) ]]; then
+                local position="${BASH_REMATCH[1]}"
+                # Get the task_id from the most recent plan tag
+                local recent_task
+                recent_task=$(echo "$text_content" | grep -oP '<plan task_id="\K[^"]+' | tail -1) || true
+                if [ -n "$recent_task" ] && [ -z "${task_positions[$recent_task]:-}" ]; then
+                    task_positions[$recent_task]=$((position - 1))  # 0-indexed
+                fi
+            fi
+        done <<< "$text_content"
+    fi
+
+    # Build task order list from batch file
+    local task_count task_order_list=""
+    task_count=$(jq -r '.tasks | length' "$batch_file")
+
+    # If we have merge order from plans, use it; otherwise use batch file order
+    if [ ${#task_positions[@]} -gt 0 ]; then
+        # Sort tasks by their position
+        local -a sorted_tasks=()
+        for task in "${!task_positions[@]}"; do
+            sorted_tasks+=("${task_positions[$task]}:$task")
+        done
+        # shellcheck disable=SC2207  # mapfile not needed for simple colon-delimited entries
+        IFS=$'\n' sorted_tasks=($(sort -t: -k1 -n <<< "${sorted_tasks[*]}")); unset IFS
+
+        for entry in "${sorted_tasks[@]}"; do
+            local task_id="${entry#*:}"
+            if [ -n "$task_order_list" ]; then
+                task_order_list+=","
+            fi
+            task_order_list+="$task_id"
+        done
+
+        # Add any tasks not in the order (shouldn't happen if planner worked correctly)
+        while read -r task_json; do
+            local task_id
+            task_id=$(echo "$task_json" | jq -r '.task_id')
+            if [ -z "${task_positions[$task_id]:-}" ]; then
+                if [ -n "$task_order_list" ]; then
+                    task_order_list+=","
+                fi
+                task_order_list+="$task_id"
+                log_warn "Task $task_id not in merge order - appending to end"
+            fi
+        done < <(jq -c '.tasks[]' "$batch_file")
+    else
+        # Fall back to batch file order
+        log "No explicit merge order found in plans - using batch file order"
+        while read -r task_json; do
+            local task_id
+            task_id=$(echo "$task_json" | jq -r '.task_id')
+            if [ -n "$task_order_list" ]; then
+                task_order_list+=","
+            fi
+            task_order_list+="$task_id"
+        done < <(jq -c '.tasks[]' "$batch_file")
+    fi
+
+    log "Batch task order: $task_order_list"
+
+    # Initialize coordination file
+    batch_coord_init "$batch_id" "$task_order_list" "$project_dir"
+    log "Created coordination file for batch $batch_id"
+
+    # Create batch-context.json in each worker directory
+    local position=0
+    for task_id in ${task_order_list//,/ }; do
+        # Find this task's worker directory from batch file
+        local task_worker_dir
+        task_worker_dir=$(jq -r --arg tid "$task_id" '.tasks[] | select(.task_id == $tid) | .worker_dir' "$batch_file")
+
+        if [ -n "$task_worker_dir" ]; then
+            # Resolve relative path if needed
+            if [[ ! "$task_worker_dir" = /* ]]; then
+                task_worker_dir="$project_dir/$task_worker_dir"
+            fi
+
+            batch_coord_write_worker_context "$task_worker_dir" "$batch_id" "$task_id" "$position" "$task_count"
+            log "Created batch context for $task_id (position $((position + 1)))"
+        fi
+        ((++position)) || true
+    done
 }

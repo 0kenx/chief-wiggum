@@ -196,6 +196,36 @@
         "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
         "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
       }
+    },
+    "workflow.batch-wait-turn": {
+      "max_iterations": 1,
+      "max_turns": 1,
+      "timeout_seconds": 1800,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "workflow.batch-signal-done": {
+      "max_iterations": 1,
+      "max_turns": 1,
+      "timeout_seconds": 60,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "workflow.batch-signal-failed": {
+      "max_iterations": 1,
+      "max_turns": 1,
+      "timeout_seconds": 60,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
     }
   },
   "defaults": {

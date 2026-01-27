@@ -240,9 +240,9 @@ test_multi_pr_planner_missing_batch_file_fails() {
     assert_equals "1" "$result" "Should fail without batch file"
 }
 
-test_multi_pr_planner_doc_exists() {
-    assert_file_exists "$WIGGUM_HOME/lib/agents/workflow/multi-pr-planner.md" "Documentation should exist"
-}
+# Note: multi-pr-planner.md was removed - this agent requires programmatic shell
+# control for batch orchestration (iterating tasks, accessing multiple workspaces)
+# which cannot be expressed in the markdown agent format.
 
 # =============================================================================
 # agents.json Config Tests
@@ -295,7 +295,6 @@ run_test test_git_conflict_resolver_reads_plan_file
 run_test test_multi_pr_planner_agent_exists
 run_test test_multi_pr_planner_agent_sources
 run_test test_multi_pr_planner_missing_batch_file_fails
-run_test test_multi_pr_planner_doc_exists
 run_test test_agents_json_has_workflow_agents
 run_test test_workflow_agents_have_result_mappings
 

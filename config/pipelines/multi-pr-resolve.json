@@ -1,0 +1,56 @@
+{
+  "name": "multi-pr-resolve",
+  "description": "Sequential merge execution for coordinated multi-PR conflict resolution",
+  "steps": [
+    {
+      "id": "wait-turn",
+      "agent": "workflow.batch-wait-turn",
+      "on_result": {
+        "SKIP": "next",
+        "FAIL": "signal-failed"
+      }
+    },
+    {
+      "id": "sync-main",
+      "agent": "workflow.git-sync-main",
+      "on_result": {
+        "FAIL": "resolve"
+      }
+    },
+    {
+      "id": "resolve",
+      "agent": "workflow.git-conflict-resolver",
+      "max": 3,
+      "on_result": {
+        "SKIP": "commit-push",
+        "FAIL": "signal-failed"
+      }
+    },
+    {
+      "id": "commit-push",
+      "agent": "workflow.git-commit-push",
+      "on_result": {
+        "FAIL": "signal-failed"
+      }
+    },
+    {
+      "id": "merge",
+      "agent": "workflow.pr-merge",
+      "on_result": {
+        "FAIL": "signal-failed"
+      }
+    },
+    {
+      "id": "signal-done",
+      "agent": "workflow.batch-signal-done"
+    },
+    {
+      "id": "signal-failed",
+      "agent": "workflow.batch-signal-failed",
+      "on_result": {
+        "PASS": "abort",
+        "SKIP": "abort"
+      }
+    }
+  ]
+}

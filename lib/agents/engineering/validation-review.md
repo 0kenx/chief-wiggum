@@ -61,6 +61,8 @@ Watch for these red flags:
 * **Security vulnerabilities** - Obvious holes in new code
 * **Missing integration tests** - Specs define integration points but no integration tests verify them
 * **Wrong test scope** - Only unit tests exist when specs require behavior verification across components
+* **Unrelated file removal** - Files deleted that have no connection to the PRD requirements
+* **Collateral damage** - Changes to files outside the scope of the task that break existing functionality
 
 ## What Does NOT Cause FAIL
 
