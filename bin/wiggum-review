@@ -478,9 +478,6 @@ cmd_task_fix() {
         rm -f "$worker_dir/agent.pid"
     fi
 
-    # Remove stale result file before launching
-    rm -f "$worker_dir/agent-result.json"
-
     # Ensure log directory exists
     mkdir -p "$RALPH_DIR/logs"
 

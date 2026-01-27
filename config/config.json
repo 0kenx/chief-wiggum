@@ -15,7 +15,7 @@
     "logs_dir": "logs"
   },
   "rate_limit": {
-    "threshold_prompts": 90000,
+    "threshold_prompts": 2400,
     "threshold_boundary": 1769349244
   },
   "review": {

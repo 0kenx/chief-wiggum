@@ -14,6 +14,7 @@ source "$WIGGUM_HOME/lib/scheduler/worker-pool.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/platform.sh"
 
 # Check for tasks needing fixes and spawn fix workers
 #
@@ -304,15 +305,16 @@ handle_fix_worker_completion() {
     local worker_dir="$1"
     local task_id="$2"
 
-    # Read the agent result to check push status
-    local result_file="$worker_dir/agent-result.json"
-    if [ ! -f "$result_file" ]; then
-        log_warn "No agent-result.json for $task_id - cannot verify fix completion"
+    # Read the most recent agent result to check push status
+    local result_file
+    result_file=$(find_newest "$worker_dir/results" -maxdepth 1 -name "*-result.json")
+    if [ -z "$result_file" ] || [ ! -f "$result_file" ]; then
+        log_warn "No result file for $task_id - cannot verify fix completion"
         return 1
     fi
 
     local gate_result push_succeeded
-    gate_result=$(jq -r '.status // "FAIL"' "$result_file" 2>/dev/null)
+    gate_result=$(jq -r '.outputs.gate_result // "FAIL"' "$result_file" 2>/dev/null)
     push_succeeded=$(jq -r '.outputs.push_succeeded // false' "$result_file" 2>/dev/null)
 
     if [ "$gate_result" = "PASS" ] && [ "$push_succeeded" = "true" ]; then
