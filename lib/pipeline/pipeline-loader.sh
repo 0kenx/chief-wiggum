@@ -145,19 +145,25 @@ pipeline_get_max() {
 pipeline_load() {
     local file="$1"
 
+    log "DEBUG pipeline_load: checking file existence: $file"
     if [ ! -f "$file" ]; then
         log_error "Pipeline config not found: $file"
         return 1
     fi
+    log "DEBUG pipeline_load: file exists"
 
     # Validate JSON
+    log "DEBUG pipeline_load: validating JSON..."
     if ! jq empty "$file" 2>/dev/null; then
         log_error "Invalid JSON in pipeline config: $file"
         return 1
     fi
+    log "DEBUG pipeline_load: JSON valid"
 
     # Read pipeline name
+    log "DEBUG pipeline_load: reading pipeline name..."
     PIPELINE_NAME=$(jq -r '.name // "unnamed"' "$file")
+    log "DEBUG pipeline_load: name=$PIPELINE_NAME"
 
     # Get step count
     local step_count

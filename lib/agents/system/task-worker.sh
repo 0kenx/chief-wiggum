@@ -222,11 +222,19 @@ agent_run() {
         log_error "pipeline_resolve failed with exit code $?"
     }
     log "DEBUG: Pipeline resolved to: ${pipeline_file:-builtin}"
+    log "DEBUG: About to load pipeline..."
     if [ -n "$pipeline_file" ]; then
-        pipeline_load "$pipeline_file"
+        pipeline_load "$pipeline_file" || {
+            log_error "pipeline_load failed with exit code $?"
+            return 1
+        }
     else
-        pipeline_load_builtin_defaults
+        pipeline_load_builtin_defaults || {
+            log_error "pipeline_load_builtin_defaults failed with exit code $?"
+            return 1
+        }
     fi
+    log "DEBUG: Pipeline loaded successfully, step count=$(pipeline_step_count)"
 
     # Set context for pipeline steps
     export PIPELINE_PLAN_FILE="${plan_file:-}"
