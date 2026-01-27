@@ -1320,9 +1320,12 @@ pr_merge_handle_remaining() {
             log "  $task_id: needs_multi_resolve (conflicts with other PRs)"
 
             # Add to conflict registry and queue
-            conflict_registry_add "$ralph_dir" "$task_id" "$pr_number" "$(echo "$conflict_files" | jq -r '.[]')"
-            local files_json="$conflict_files"
-            conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$files_json"
+            # Use files_modified (not conflict_files_with_main) for grouping - this is
+            # what determines PR-to-PR conflicts (same as Phase 2 conflict graph)
+            local files_modified
+            files_modified=$(jq -r --arg t "$task_id" '.prs[$t].files_modified' "$state_file")
+            conflict_registry_add "$ralph_dir" "$task_id" "$pr_number" "$(echo "$files_modified" | jq -r '.[]')"
+            conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$files_modified"
 
             git_state_set "$worker_dir" "needs_multi_resolve" "pr-merge-optimizer" "Multi-PR conflict detected"
             ((++needs_multi_resolve))
@@ -1335,6 +1338,67 @@ pr_merge_handle_remaining() {
     done <<< "$task_ids"
 
     log "  Summary: $needs_fix need fixes, $needs_resolve need simple resolve, $needs_multi_resolve need multi-PR resolve, $waiting waiting for review"
+
+    # If we have multi-resolve tasks, create a batch using the merge_order from Phase 3
+    if [ "$needs_multi_resolve" -gt 1 ]; then
+        _create_multi_resolve_batch "$ralph_dir" "$state_file"
+    fi
+}
+
+# Create a batch for multi-resolve tasks using merge_order from Phase 3
+#
+# This ensures we use the optimal order computed by the MIS algorithm rather
+# than the conflict queue's grouping logic.
+#
+# Args:
+#   ralph_dir  - Ralph directory path
+#   state_file - PR merge state file path
+_create_multi_resolve_batch() {
+    local ralph_dir="$1"
+    local state_file="$2"
+
+    local queue_file="$ralph_dir/conflict-queue.json"
+    [ -f "$queue_file" ] || return 0
+
+    # Get unbatched tasks from the conflict queue
+    local unbatched_ids
+    unbatched_ids=$(jq -r '[.queue[] | select(.batch_id == null) | .task_id]' "$queue_file")
+
+    local unbatched_count
+    unbatched_count=$(echo "$unbatched_ids" | jq 'length')
+
+    if [ "$unbatched_count" -lt 2 ]; then
+        return 0
+    fi
+
+    # Get merge_order from Phase 3 and filter to unbatched tasks only
+    local merge_order
+    merge_order=$(jq -r '.merge_order[]' "$state_file" 2>/dev/null || echo "")
+
+    # Build ordered array of unbatched tasks (preserving merge_order sequence)
+    local ordered_task_ids='[]'
+    while IFS= read -r task_id; do
+        [ -n "$task_id" ] || continue
+        # Check if this task is in the unbatched set
+        if echo "$unbatched_ids" | jq -e ". | index(\"$task_id\")" >/dev/null 2>&1; then
+            ordered_task_ids=$(echo "$ordered_task_ids" | jq --arg t "$task_id" '. + [$t]')
+        fi
+    done <<< "$merge_order"
+
+    local ordered_count
+    ordered_count=$(echo "$ordered_task_ids" | jq 'length')
+
+    if [ "$ordered_count" -lt 2 ]; then
+        return 0
+    fi
+
+    log "  Creating batch for $ordered_count multi-resolve tasks (using Phase 3 merge order)"
+
+    # Create batch using conflict_queue_create_batch
+    local batch_id
+    batch_id=$(conflict_queue_create_batch "$ralph_dir" "$ordered_task_ids")
+
+    log "  Created batch $batch_id with order: $(echo "$ordered_task_ids" | jq -r 'join(" → ")')"
 }
 
 # =============================================================================
