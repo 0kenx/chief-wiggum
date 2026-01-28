@@ -137,8 +137,9 @@ _verify_task_merged() {
 
 # Check for tasks needing fixes and spawn fix workers
 #
-# Reads from .tasks-needing-fix.txt (populated by wiggum-review sync),
-# checks git state for needs_fix status, and spawns fix workers up to limit.
+# Collects tasks from two sources:
+# 1. .tasks-needing-fix.txt (populated by wiggum-review sync for fresh comments)
+# 2. Worker directories with needs_fix git state (fallback for stuck tasks)
 #
 # Tasks are sorted by dependency depth (descending) so that tasks which
 # unblock the most downstream work are fixed first.
@@ -161,9 +162,7 @@ spawn_fix_workers() {
     local tasks_needing_fix="$ralph_dir/.tasks-needing-fix.txt"
     local kanban_file="$ralph_dir/kanban.md"
 
-    if [ ! -s "$tasks_needing_fix" ]; then
-        return 0
-    fi
+    [ -d "$ralph_dir/workers" ] || return 0
 
     # Check total priority worker capacity (fix + resolve share the limit)
     local fix_count resolve_count total_priority
@@ -176,28 +175,55 @@ spawn_fix_workers() {
         return 0
     fi
 
+    # Collect tasks from both sources into a deduplicated list
+    # Use associative array for deduplication
+    local -A task_set=()
+
+    # Source 1: tasks-needing-fix.txt (fresh comments from sync)
+    if [ -s "$tasks_needing_fix" ]; then
+        while read -r task_id; do
+            [ -n "$task_id" ] && task_set["$task_id"]=1
+        done < "$tasks_needing_fix"
+    fi
+
+    # Source 2: scan workers for needs_fix state (fallback for stuck tasks)
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+        git_state_is "$worker_dir" "needs_fix" || continue
+
+        local worker_id task_id
+        worker_id=$(basename "$worker_dir")
+        task_id=$(get_task_id_from_worker "$worker_id")
+
+        if [ -n "$task_id" ] && [ -z "${task_set[$task_id]:-}" ]; then
+            task_set["$task_id"]=1
+            log_debug "Found stuck needs_fix task: $task_id"
+        fi
+    done
+
+    # Exit early if no tasks
+    if [ ${#task_set[@]} -eq 0 ]; then
+        return 0
+    fi
+
     log "Checking for tasks needing PR comment fixes..."
 
     # Sort tasks by dependency depth (descending) - tasks that unblock more work go first
     local -a sorted_tasks=()
-    if [ -f "$kanban_file" ]; then
-        local -a task_scores=()
-        while read -r task_id; do
-            [ -z "$task_id" ] && continue
-            local dep_depth
+    local -a task_scores=()
+    for task_id in "${!task_set[@]}"; do
+        local dep_depth=0
+        if [ -f "$kanban_file" ]; then
             dep_depth=$(get_dependency_depth "$kanban_file" "$task_id" 2>/dev/null || echo "0")
-            task_scores+=("$dep_depth|$task_id")
-        done < "$tasks_needing_fix"
+        fi
+        task_scores+=("$dep_depth|$task_id")
+    done
 
-        # Sort by depth descending (higher depth first = unblocks more tasks)
-        while IFS= read -r entry; do
-            [ -n "$entry" ] || continue
-            sorted_tasks+=("${entry#*|}")
-        done < <(printf '%s\n' "${task_scores[@]}" | sort -t'|' -k1 -rn)
-    else
-        # Fallback: use original order if no kanban
-        mapfile -t sorted_tasks < "$tasks_needing_fix"
-    fi
+    # Sort by depth descending (higher depth first = unblocks more tasks)
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        sorted_tasks+=("${entry#*|}")
+    done < <(printf '%s\n' "${task_scores[@]}" | sort -t'|' -k1 -rn)
 
     for task_id in "${sorted_tasks[@]}"; do
         [ -z "$task_id" ] && continue
@@ -217,7 +243,7 @@ spawn_fix_workers() {
             continue
         fi
 
-        # Check for needs_fix state
+        # Verify needs_fix state (may have changed since collection)
         if git_state_is "$worker_dir" "needs_fix"; then
             # Guard: skip if agent is already running for this worker
             if [ -f "$worker_dir/agent.pid" ]; then
