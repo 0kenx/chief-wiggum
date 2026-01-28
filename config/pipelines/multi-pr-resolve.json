@@ -13,6 +13,7 @@
       "id": "resolve",
       "agent": "workflow.git-conflict-resolver",
       "max": 3,
+      "commit_after": true,
       "on_result": {
         "FAIL": {
           "agent": "workflow.batch-signal-failed",

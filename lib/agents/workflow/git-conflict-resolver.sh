@@ -52,6 +52,14 @@ agent_run() {
         return 1
     fi
 
+    # Pre-flight: Commit any uncommitted changes before attempting resolution
+    # This prevents "Your local changes would be overwritten" errors during merge
+    if ! git -C "$workspace" diff --quiet || ! git -C "$workspace" diff --cached --quiet; then
+        log "Working tree has uncommitted changes - committing before conflict resolution"
+        git -C "$workspace" add -A
+        git -C "$workspace" commit -m "chore: auto-commit before conflict resolution" 2>/dev/null || true
+    fi
+
     # Create standard directories
     agent_create_directories "$worker_dir"
 

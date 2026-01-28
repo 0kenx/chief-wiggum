@@ -180,8 +180,29 @@ attempt_pr_merge() {
         return 0
     fi
 
-    # Check if failure is due to merge conflict
-    if echo "$merge_output" | grep -qiE "(conflict|cannot be merged|out of date)"; then
+    # Check failure type - distinguish between conflicts and other issues
+    #
+    # "out of date" / "branch is behind" = needs rebase, NOT a conflict
+    # "local changes would be overwritten" = dirty working tree, NOT a conflict
+    # Only "conflict" or "cannot be merged" with actual conflict markers = real conflict
+
+    # First check for non-conflict failures that should not trigger resolver
+    if echo "$merge_output" | grep -qiE "(out of date|branch.*behind|is not up to date)"; then
+        git_state_set_error "$worker_dir" "Branch out of date: $merge_output"
+        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Branch is out of date - needs rebase (not a conflict)"
+        log_error "Merge failed for $task_id: branch is out of date with base branch"
+        return 2
+    fi
+
+    if echo "$merge_output" | grep -qiE "(local changes.*overwritten|uncommitted changes|working tree.*not clean)"; then
+        git_state_set_error "$worker_dir" "Dirty working tree: $merge_output"
+        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Working tree has uncommitted changes"
+        log_error "Merge failed for $task_id: working tree has uncommitted changes"
+        return 2
+    fi
+
+    # Check if failure is due to actual merge conflict
+    if echo "$merge_output" | grep -qiE "(conflict|cannot be merged)"; then
         git_state_set_error "$worker_dir" "Merge conflict: $merge_output"
         git_state_set "$worker_dir" "merge_conflict" "merge-manager.attempt_pr_merge" "Merge failed due to conflict"
 

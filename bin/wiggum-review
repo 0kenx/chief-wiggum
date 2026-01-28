@@ -607,6 +607,14 @@ cmd_task_resolve() {
         # Set git identity for automated merges
         git_set_identity
 
+        # Commit any uncommitted changes before merge to prevent
+        # "Your local changes would be overwritten" errors
+        if ! git -C "$workspace" diff --quiet || ! git -C "$workspace" diff --cached --quiet; then
+            log "Working tree has uncommitted changes - committing before merge"
+            git -C "$workspace" add -A
+            git -C "$workspace" commit -m "chore: auto-commit before merge with main" || true
+        fi
+
         # Try to merge main - this may create conflicts
         if git -C "$workspace" merge origin/main --no-edit 2>&1; then
             log "Merged origin/main successfully (no conflicts)"
