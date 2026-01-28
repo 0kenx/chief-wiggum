@@ -240,7 +240,7 @@ _advance_batch_past_merged_tasks() {
     local advances=0
 
     while [ $advances -lt $max_advances ]; do
-        local status current_pos total order
+        local status current_pos total
         status=$(jq -r '.status' "$coord_file")
 
         # Stop if batch is already complete or failed

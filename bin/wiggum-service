@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+# wiggum-service - Service management CLI for Chief Wiggum
+#
+# Provides commands to inspect and manage orchestrator services.
+set -euo pipefail
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="${RALPH_DIR:-$PROJECT_DIR/.ralph}"
+
+# Source shared libraries
+source "$WIGGUM_HOME/lib/core/exit-codes.sh"
+source "$WIGGUM_HOME/lib/core/verbose-flags.sh"
+source "$WIGGUM_HOME/lib/core/logger.sh"
+
+# Source service modules
+source "$WIGGUM_HOME/lib/service/service-loader.sh"
+source "$WIGGUM_HOME/lib/service/service-state.sh"
+source "$WIGGUM_HOME/lib/service/service-runner.sh"
+
+show_help() {
+    cat << EOF
+wiggum service - Service management for Chief Wiggum orchestrator
+
+Usage: wiggum service <command> [options]
+
+Commands:
+  list                    List all configured services
+  status [<id>]           Show service status (all or specific)
+  run <id>                Manually trigger a service
+  stop <id>               Stop a running service
+  config [<id>]           Show service configuration
+
+Options:
+  --json                  Output in JSON format
+  -v, --verbose           Verbose output
+  -h, --help              Show this help message
+
+Examples:
+  wiggum service list                    # List all services
+  wiggum service status                  # Show status of all services
+  wiggum service status pr-sync          # Show status of pr-sync service
+  wiggum service run pr-sync             # Manually run pr-sync
+  wiggum service config task-spawner     # Show task-spawner config
+
+Service Types:
+  interval    - Runs at fixed intervals (e.g., every 60 seconds)
+  event       - Runs when triggered by events (e.g., worker.completed)
+  continuous  - Runs continuously, restarting after completion
+
+EOF
+}
+
+# Initialize services configuration
+init_services() {
+    export LOG_FILE="${LOG_FILE:-/dev/null}"
+
+    local config_file="$WIGGUM_HOME/config/services.json"
+    if [ -f "$config_file" ]; then
+        if ! service_load "$config_file" 2>/dev/null; then
+            service_load_builtin_defaults
+        fi
+    else
+        service_load_builtin_defaults
+    fi
+
+    # Load project overrides
+    if [ -f "$RALPH_DIR/services.json" ]; then
+        service_load_override "$RALPH_DIR/services.json" 2>/dev/null || true
+    fi
+
+    # Initialize state
+    service_state_init "$RALPH_DIR"
+    service_state_restore 2>/dev/null || true
+
+    # Initialize runner
+    service_runner_init "$RALPH_DIR" "$PROJECT_DIR"
+}
+
+# List all services
+cmd_list() {
+    local json_output=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_output=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    init_services
+
+    if [ "$json_output" = true ]; then
+        local services_json="[]"
+        for id in $(service_get_enabled); do
+            local svc_json
+            svc_json=$(service_get_by_id "$id")
+            services_json=$(echo "$services_json" | jq --argjson svc "$svc_json" '. + [$svc]')
+        done
+        echo "$services_json" | jq '.'
+    else
+        printf "%-25s %-12s %-10s %s\n" "SERVICE" "TYPE" "INTERVAL" "DESCRIPTION"
+        printf "%-25s %-12s %-10s %s\n" "-------" "----" "--------" "-----------"
+
+        for id in $(service_get_enabled); do
+            local schedule_type interval description
+            schedule_type=$(service_get_field "$id" ".schedule.type" "unknown")
+            interval=$(service_get_interval "$id")
+            description=$(service_get_field "$id" ".description" "")
+
+            local interval_str="-"
+            if [ "$schedule_type" = "interval" ] && [ "$interval" -gt 0 ]; then
+                interval_str="${interval}s"
+            fi
+
+            printf "%-25s %-12s %-10s %s\n" "$id" "$schedule_type" "$interval_str" "$description"
+        done
+    fi
+}
+
+# Show service status
+cmd_status() {
+    local json_output=false
+    local service_id=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_output=true; shift ;;
+            -*) shift ;;
+            *) service_id="$1"; shift ;;
+        esac
+    done
+
+    init_services
+
+    if [ -n "$service_id" ]; then
+        # Show status for specific service
+        if ! service_exists "$service_id"; then
+            echo "Error: Service '$service_id' not found" >&2
+            return 1
+        fi
+
+        local status last_run run_count fail_count interval
+        status=$(service_state_get_status "$service_id")
+        last_run=$(service_state_get_last_run "$service_id")
+        run_count=$(service_state_get_run_count "$service_id")
+        fail_count=$(service_state_get_fail_count "$service_id")
+        interval=$(service_get_interval "$service_id")
+
+        local now
+        now=$(date +%s)
+
+        if [ "$json_output" = true ]; then
+            local next_run_in=""
+            if [ "$interval" -gt 0 ] && [ "$last_run" -gt 0 ]; then
+                next_run_in=$((interval - (now - last_run)))
+                [ "$next_run_in" -lt 0 ] && next_run_in=0
+            fi
+
+            jq -n \
+                --arg id "$service_id" \
+                --arg status "$status" \
+                --argjson last_run "$last_run" \
+                --argjson run_count "$run_count" \
+                --argjson fail_count "$fail_count" \
+                --argjson interval "$interval" \
+                --arg next_run_in "${next_run_in:-null}" \
+                '{
+                    id: $id,
+                    status: $status,
+                    last_run: $last_run,
+                    run_count: $run_count,
+                    fail_count: $fail_count,
+                    interval: $interval,
+                    next_run_in: (if $next_run_in == "null" then null else ($next_run_in | tonumber) end)
+                }'
+        else
+            local last_run_str="never"
+            if [ "$last_run" -gt 0 ]; then
+                last_run_str=$(date -d "@$last_run" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$last_run" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$last_run")
+            fi
+
+            local next_run_str="-"
+            if [ "$interval" -gt 0 ] && [ "$last_run" -gt 0 ]; then
+                local next_run_in=$((interval - (now - last_run)))
+                if [ "$next_run_in" -le 0 ]; then
+                    next_run_str="due now"
+                else
+                    next_run_str="in ${next_run_in}s"
+                fi
+            fi
+
+            echo "Service: $service_id"
+            echo "  Status:     $status"
+            echo "  Last run:   $last_run_str"
+            echo "  Run count:  $run_count"
+            echo "  Failures:   $fail_count"
+            echo "  Interval:   ${interval}s"
+            echo "  Next run:   $next_run_str"
+        fi
+    else
+        # Show status for all services
+        if [ "$json_output" = true ]; then
+            local statuses="[]"
+            for id in $(service_get_enabled); do
+                local status last_run
+                status=$(service_state_get_status "$id")
+                last_run=$(service_state_get_last_run "$id")
+
+                statuses=$(echo "$statuses" | jq \
+                    --arg id "$id" \
+                    --arg status "$status" \
+                    --argjson last_run "$last_run" \
+                    '. + [{id: $id, status: $status, last_run: $last_run}]')
+            done
+            echo "$statuses" | jq '.'
+        else
+            printf "%-25s %-12s %-10s %s\n" "SERVICE" "STATUS" "RUNS" "LAST RUN"
+            printf "%-25s %-12s %-10s %s\n" "-------" "------" "----" "--------"
+
+            local now
+            now=$(date +%s)
+
+            for id in $(service_get_enabled); do
+                local status last_run run_count
+                status=$(service_state_get_status "$id")
+                last_run=$(service_state_get_last_run "$id")
+                run_count=$(service_state_get_run_count "$id")
+
+                local last_run_str="never"
+                if [ "$last_run" -gt 0 ]; then
+                    local ago=$((now - last_run))
+                    if [ "$ago" -lt 60 ]; then
+                        last_run_str="${ago}s ago"
+                    elif [ "$ago" -lt 3600 ]; then
+                        last_run_str="$((ago / 60))m ago"
+                    else
+                        last_run_str="$((ago / 3600))h ago"
+                    fi
+                fi
+
+                printf "%-25s %-12s %-10s %s\n" "$id" "$status" "$run_count" "$last_run_str"
+            done
+        fi
+    fi
+}
+
+# Run a service manually
+cmd_run() {
+    local service_id=""
+    local sync=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --sync) sync=true; shift ;;
+            -*) shift ;;
+            *) service_id="$1"; shift ;;
+        esac
+    done
+
+    if [ -z "$service_id" ]; then
+        echo "Error: Service ID required" >&2
+        echo "Usage: wiggum service run <service-id>" >&2
+        return 1
+    fi
+
+    init_services
+
+    if ! service_exists "$service_id"; then
+        echo "Error: Service '$service_id' not found" >&2
+        return 1
+    fi
+
+    echo "Running service: $service_id"
+
+    if [ "$sync" = true ]; then
+        service_run_sync "$service_id"
+        local rc=$?
+        if [ "$rc" -eq 0 ]; then
+            echo "Service completed successfully"
+        else
+            echo "Service failed (exit code: $rc)"
+        fi
+        return "$rc"
+    else
+        service_run "$service_id"
+        echo "Service started in background"
+        echo "Use 'wiggum service status $service_id' to check progress"
+    fi
+}
+
+# Stop a running service
+cmd_stop() {
+    local service_id=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) shift ;;
+            *) service_id="$1"; shift ;;
+        esac
+    done
+
+    if [ -z "$service_id" ]; then
+        echo "Error: Service ID required" >&2
+        echo "Usage: wiggum service stop <service-id>" >&2
+        return 1
+    fi
+
+    init_services
+
+    if ! service_exists "$service_id"; then
+        echo "Error: Service '$service_id' not found" >&2
+        return 1
+    fi
+
+    if service_stop "$service_id"; then
+        echo "Service '$service_id' stopped"
+    else
+        echo "Service '$service_id' was not running"
+    fi
+}
+
+# Show service configuration
+cmd_config() {
+    local service_id=""
+    local json_output=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_output=true; shift ;;
+            -*) shift ;;
+            *) service_id="$1"; shift ;;
+        esac
+    done
+
+    init_services
+
+    if [ -n "$service_id" ]; then
+        if ! service_exists "$service_id"; then
+            echo "Error: Service '$service_id' not found" >&2
+            return 1
+        fi
+
+        local config
+        config=$(service_get_by_id "$service_id")
+
+        if [ "$json_output" = true ]; then
+            echo "$config" | jq '.'
+        else
+            echo "Configuration for service: $service_id"
+            echo ""
+            echo "$config" | jq '.'
+        fi
+    else
+        # Show all config
+        if [ "$json_output" = true ]; then
+            local all_config="[]"
+            for id in $(service_get_enabled); do
+                local svc
+                svc=$(service_get_by_id "$id")
+                all_config=$(echo "$all_config" | jq --argjson svc "$svc" '. + [$svc]')
+            done
+            echo "$all_config" | jq '.'
+        else
+            for id in $(service_get_enabled); do
+                echo "=== $id ==="
+                service_get_by_id "$id" | jq '.'
+                echo ""
+            done
+        fi
+    fi
+}
+
+main() {
+    # Parse verbose flags first
+    parse_verbose_flags "$@"
+    set -- "${WIGGUM_REMAINING_ARGS[@]}"
+
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit $EXIT_OK
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        list)
+            cmd_list "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        run)
+            cmd_run "$@"
+            ;;
+        stop)
+            cmd_stop "$@"
+            ;;
+        config)
+            cmd_config "$@"
+            ;;
+        -h|--help|help)
+            show_help
+            exit $EXIT_OK
+            ;;
+        *)
+            echo "Unknown command: $command" >&2
+            echo ""
+            show_help
+            exit $EXIT_USAGE
+            ;;
+    esac
+}
+
+main "$@"

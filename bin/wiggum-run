@@ -30,6 +30,15 @@ source "$WIGGUM_HOME/lib/scheduler/scheduler.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-registry.sh"
 source "$WIGGUM_HOME/lib/scheduler/pr-merge-optimizer.sh"
+source "$WIGGUM_HOME/lib/scheduler/orchestrator-functions.sh"
+
+# Service-based scheduler (optional, enabled via WIGGUM_USE_SERVICE_SCHEDULER=true)
+if [ "${WIGGUM_USE_SERVICE_SCHEDULER:-false}" = "true" ]; then
+    source "$WIGGUM_HOME/lib/service/service-loader.sh"
+    source "$WIGGUM_HOME/lib/service/service-state.sh"
+    source "$WIGGUM_HOME/lib/service/service-runner.sh"
+    source "$WIGGUM_HOME/lib/service/service-scheduler.sh"
+fi
 
 # Default configuration
 MAX_WORKERS=4
@@ -765,6 +774,176 @@ _try_merge_pr() {
     fi
 }
 
+# =============================================================================
+# Service-Based Scheduler Loop (enabled via WIGGUM_USE_SERVICE_SCHEDULER=true)
+# =============================================================================
+
+# Initialize and run the service-based main loop
+#
+# This is an alternative to the counter-based main loop that uses declarative
+# service definitions from config/services.json. Each orchestrator responsibility
+# is defined as a "service" with its own interval and execution config.
+#
+# Benefits:
+# - Configurable intervals per service (not hardcoded)
+# - Add new periodic tasks without modifying core loop
+# - Services can be enabled/disabled per-project via .ralph/services.json
+# - Better observability via `wiggum service status`
+_main_loop_service_based() {
+    log "Using service-based scheduler (WIGGUM_USE_SERVICE_SCHEDULER=true)"
+
+    # Load service configuration
+    local config_file="$WIGGUM_HOME/config/services.json"
+    if [ -f "$config_file" ]; then
+        if ! service_load "$config_file" 2>/dev/null; then
+            log_warn "Failed to load services.json, using builtin defaults"
+            service_load_builtin_defaults
+        fi
+    else
+        log_warn "No services.json found, using builtin defaults"
+        service_load_builtin_defaults
+    fi
+
+    # Load project-specific overrides
+    if [ -f "$RALPH_DIR/services.json" ]; then
+        log "Loading project service overrides from .ralph/services.json"
+        service_load_override "$RALPH_DIR/services.json" 2>/dev/null || true
+    fi
+
+    # Initialize service state (persists across restarts)
+    service_state_init "$RALPH_DIR"
+    service_state_restore 2>/dev/null || true
+
+    # Initialize service runner
+    service_runner_init "$RALPH_DIR" "$PROJECT_DIR"
+
+    # Initialize service scheduler
+    service_scheduler_init "$RALPH_DIR" "$PROJECT_DIR"
+
+    log "Loaded $(service_count) services"
+
+    local iteration=0
+
+    # Service-based main loop
+    while true; do
+        ((++iteration))
+
+        # Run scheduler tick - executes any due services
+        # (startup services are run automatically on first tick)
+        service_scheduler_tick
+
+        # Clean up finished workers (still needed - workers are separate from services)
+        pool_cleanup_finished "main" 0 _handle_main_worker_completion ""
+        pool_cleanup_finished "fix" "$FIX_WORKER_TIMEOUT" _handle_fix_worker_completion _handle_fix_worker_timeout
+        pool_cleanup_finished "resolve" "$RESOLVE_WORKER_TIMEOUT" _handle_resolve_worker_completion _handle_resolve_worker_timeout
+
+        # Check if we're done
+        if scheduler_is_complete; then
+            display_final_summary "$RALPH_DIR"
+            break
+        fi
+
+        # Check rate limit before spawning
+        if rate_limit_check "$RALPH_DIR"; then
+            local cycle_prompts
+            cycle_prompts=$(jq -r '.current_5h_cycle.total_prompts // 0' "$RALPH_DIR/claude-usage.json" 2>/dev/null)
+            log "Rate limit threshold reached ($cycle_prompts >= $WIGGUM_RATE_LIMIT_THRESHOLD prompts in 5h cycle)"
+            activity_log "rate_limit.detected" "" "" "prompts=$cycle_prompts threshold=$WIGGUM_RATE_LIMIT_THRESHOLD"
+            rate_limit_wait_for_cycle_reset
+            activity_log "rate_limit.resumed" "" ""
+            usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
+            continue
+        fi
+
+        # Spawn workers for ready tasks (up to MAX_WORKERS limit)
+        # Note: task-spawner service handles the tick, but we still need the spawn logic
+        for task_id in $SCHED_READY_TASKS; do
+            if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
+                case "$SCHED_SKIP_REASON" in
+                    at_capacity) break ;;
+                    file_conflict)
+                        local -A _temp_workers=()
+                        _build_workers() {
+                            local pid="$1" type="$2" tid="$3"
+                            [ "$type" = "main" ] && _temp_workers[$pid]="$tid"
+                        }
+                        pool_foreach "main" _build_workers
+                        local conflicts
+                        conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
+                        log "Deferring $task_id - file conflict: $conflicts"
+                        ;;
+                    *) ;;
+                esac
+                continue
+            fi
+
+            if ! pre_worker_checks; then
+                log_error "Pre-worker checks failed for $task_id - skipping"
+                continue
+            fi
+
+            local task_priority
+            task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
+
+            log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
+            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
+                log_error "Failed to mark $task_id as in-progress"
+                scheduler_increment_skip "$task_id"
+                local skip_count
+                skip_count=$(scheduler_get_skip_count "$task_id")
+                log "Task $task_id skip count: $skip_count/$MAX_SKIP_RETRIES"
+                if [ "$skip_count" -ge "$MAX_SKIP_RETRIES" ]; then
+                    log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive failures"
+                fi
+                continue
+            fi
+
+            if ! spawn_worker "$task_id"; then
+                log_error "Failed to spawn worker for $task_id"
+                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
+                continue
+            fi
+
+            pool_add "$SPAWNED_WORKER_PID" "main" "$task_id"
+            scheduler_mark_event
+            scheduler_remove_from_aging "$task_id"
+            audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
+            log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
+        done
+
+        scheduler_update_aging
+
+        if [ "$SCHED_SCHEDULING_EVENT" = true ]; then
+            local cyclic_ref
+            cyclic_ref=$(scheduler_get_cyclic_tasks_ref)
+            display_orchestrator_status \
+                "$iteration" \
+                "$MAX_WORKERS" \
+                "$SCHED_READY_TASKS" \
+                "$SCHED_BLOCKED_TASKS" \
+                "$cyclic_ref" \
+                "$RALPH_DIR" \
+                "$(scheduler_get_ready_since_file)" \
+                "$AGING_FACTOR" \
+                "$PLAN_BONUS" \
+                "$DEP_BONUS_PER_TASK"
+        fi
+
+        # Persist service state periodically
+        service_state_save 2>/dev/null || true
+
+        # Wait before next iteration (1 second for finer-grained service timing)
+        sleep 1
+    done
+
+    # Final state save
+    service_state_save 2>/dev/null || true
+}
+
+# =============================================================================
+# Legacy Counter-Based Scheduler (default)
+# =============================================================================
+
 # Optimize and execute PR merges for pending-approval tasks
 #
 # Uses the global PR merge optimizer to:
@@ -1090,6 +1269,13 @@ main() {
     # Resume any stopped WIP workers before starting new ones
     _schedule_resume_workers
 
+    # Branch to service-based scheduler if enabled
+    if [ "${WIGGUM_USE_SERVICE_SCHEDULER:-false}" = "true" ]; then
+        _main_loop_service_based
+        return $?
+    fi
+
+    # Legacy counter-based scheduler (default)
     local iteration=0
     local sync_counter=0
     local pr_sync_counter=0

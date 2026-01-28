@@ -1,0 +1,230 @@
+{
+  "version": "1.0",
+  "defaults": {
+    "timeout": 300,
+    "restart_policy": {
+      "on_failure": "skip",
+      "max_retries": 2
+    }
+  },
+  "services": [
+    {
+      "id": "pr-sync",
+      "description": "Sync PR statuses and detect new comments",
+      "schedule": {
+        "type": "interval",
+        "interval": 180,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "command",
+        "command": "wiggum-review sync"
+      }
+    },
+    {
+      "id": "usage-tracker",
+      "description": "Update shared usage data for rate limiting",
+      "schedule": {
+        "type": "interval",
+        "interval": 180,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "usage_tracker_write_shared"
+      }
+    },
+    {
+      "id": "skip-decay",
+      "description": "Decay skip counts to give tasks another chance",
+      "schedule": {
+        "type": "interval",
+        "interval": 180,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "scheduler_decay_skip_counts"
+      }
+    },
+    {
+      "id": "orphan-workspace",
+      "description": "Create workspaces for orphaned PRs",
+      "schedule": {
+        "type": "interval",
+        "interval": 180,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "create_orphan_pr_workspaces"
+      }
+    },
+    {
+      "id": "pr-optimizer",
+      "description": "Optimize and execute PR merges",
+      "schedule": {
+        "type": "interval",
+        "interval": 900
+      },
+      "execution": {
+        "type": "function",
+        "function": "pr_merge_spawn_background"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      }
+    },
+    {
+      "id": "multi-pr-planner",
+      "description": "Check for conflict batches and spawn multi-PR planner",
+      "schedule": {
+        "type": "interval",
+        "interval": 900
+      },
+      "execution": {
+        "type": "function",
+        "function": "_check_and_spawn_multi_pr_planner"
+      }
+    },
+    {
+      "id": "fix-workers",
+      "description": "Spawn fix workers for PR comment issues",
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "spawn_fix_workers"
+      }
+    },
+    {
+      "id": "resolve-workers",
+      "description": "Spawn resolve workers for merge conflicts",
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "spawn_resolve_workers"
+      }
+    },
+    {
+      "id": "scheduler-tick",
+      "description": "Update task lists from kanban",
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "scheduler_tick"
+      }
+    },
+    {
+      "id": "main-worker-cleanup",
+      "description": "Clean up finished main workers",
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "cleanup_main_workers"
+      }
+    },
+    {
+      "id": "orphan-detection",
+      "description": "Detect and re-track orphan workers",
+      "schedule": {
+        "type": "interval",
+        "interval": 60
+      },
+      "execution": {
+        "type": "function",
+        "function": "scheduler_detect_orphan_workers"
+      }
+    },
+    {
+      "id": "fix-worker-cleanup",
+      "description": "Clean up finished/timed-out fix workers",
+      "schedule": {
+        "type": "interval",
+        "interval": 60
+      },
+      "execution": {
+        "type": "function",
+        "function": "cleanup_fix_workers"
+      }
+    },
+    {
+      "id": "resolve-worker-cleanup",
+      "description": "Clean up finished/timed-out resolve workers",
+      "schedule": {
+        "type": "interval",
+        "interval": 60
+      },
+      "execution": {
+        "type": "function",
+        "function": "cleanup_resolve_workers"
+      }
+    },
+    {
+      "id": "pr-optimizer-check",
+      "description": "Check for completed PR optimizer and process results",
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "_check_completed_pr_optimizer"
+      }
+    },
+    {
+      "id": "task-spawner",
+      "description": "Spawn workers for ready tasks",
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "spawn_ready_tasks"
+      }
+    },
+    {
+      "id": "aging-update",
+      "description": "Update aging tracking after scheduling events",
+      "schedule": {
+        "type": "event",
+        "trigger": "scheduling_event"
+      },
+      "execution": {
+        "type": "function",
+        "function": "scheduler_update_aging"
+      }
+    },
+    {
+      "id": "status-display",
+      "description": "Display orchestrator status on scheduling events",
+      "schedule": {
+        "type": "event",
+        "trigger": "scheduling_event"
+      },
+      "execution": {
+        "type": "function",
+        "function": "display_orchestrator_status"
+      }
+    }
+  ]
+}

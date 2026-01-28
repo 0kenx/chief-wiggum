@@ -6,7 +6,7 @@ This document describes the internal architecture of Chief Wiggum for developers
 
 ```
 chief-wiggum/
-├── bin/                    # CLI entry points (16 commands)
+├── bin/                    # CLI entry points (17 commands)
 │   ├── wiggum              # Main dispatcher
 │   ├── wiggum-clean        # Cleanup utility
 │   ├── wiggum-doctor       # Pre-flight health checks
@@ -18,6 +18,7 @@ chief-wiggum/
 │   ├── wiggum-resume       # Resume stopped workers
 │   ├── wiggum-review       # PR/task review management
 │   ├── wiggum-run          # Orchestrator (continuous loop)
+│   ├── wiggum-service      # Service management CLI
 │   ├── wiggum-start        # Single worker spawner
 │   ├── wiggum-status       # Worker status display
 │   ├── wiggum-stop         # Graceful worker stop (SIGTERM)
@@ -35,10 +36,12 @@ chief-wiggum/
 │   ├── tasks/              # Kanban parsing
 │   ├── utils/              # Logging, metrics
 │   ├── worker/             # Worker lifecycle
-│   └── scheduler/          # Task scheduling, PR merge optimization
+│   ├── scheduler/          # Task scheduling, PR merge optimization
+│   └── service/            # Service-based scheduler (systemd-like)
 ├── config/
 │   ├── pipeline.json       # Default pipeline
 │   ├── agents.json         # Agent registry
+│   ├── services.json       # Service definitions
 │   └── schemas/            # JSON schemas
 ├── tests/                  # Test suite
 └── docs/                   # Documentation
@@ -341,6 +344,10 @@ Work on the task: {{task_id}}
 | `lib/scheduler/pr-merge-optimizer.sh` | Global PR merge optimization |
 | `lib/scheduler/conflict-queue.sh` | Multi-PR conflict batching |
 | `lib/scheduler/conflict-registry.sh` | Per-file conflict tracking |
+| `lib/service/service-loader.sh` | Load service JSON configuration |
+| `lib/service/service-scheduler.sh` | Service timing and execution |
+| `lib/service/service-runner.sh` | Execute services by type |
+| `lib/service/service-state.sh` | Persist service state |
 
 ## Exit Codes
 
@@ -658,4 +665,171 @@ jq '.merge_order' .ralph/pr-merge-state.json
 
 # Check which PRs were merged
 jq '.merged_this_cycle' .ralph/pr-merge-state.json
+```
+
+## Service Scheduler (Optional)
+
+The service scheduler (`lib/service/`) provides a systemd-like approach to orchestrator responsibilities. Instead of hardcoded intervals and counter-based scheduling, periodic tasks are defined as declarative "services" with configurable intervals.
+
+### Enabling
+
+Enable via environment variable:
+
+```bash
+WIGGUM_USE_SERVICE_SCHEDULER=true wiggum run
+```
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│              SERVICE SCHEDULER                       │
+│  ┌───────────────────────────────────────────────┐  │
+│  │      config/services.json (declarative)       │  │
+│  └───────────────────────────────────────────────┘  │
+│                        │                            │
+│    ┌───────────┬───────┴───────┬───────────┐       │
+│    ▼           ▼               ▼           ▼       │
+│ pr-sync   pr-optimizer   task-spawner  worker-cleanup │
+│ (180s)      (900s)         (60s)        (60s)      │
+└─────────────────────────────────────────────────────┘
+```
+
+### Modules
+
+| Module | Purpose |
+|--------|---------|
+| `lib/service/service-loader.sh` | Load and validate JSON configs |
+| `lib/service/service-state.sh` | Persist state across restarts |
+| `lib/service/service-scheduler.sh` | Timing and execution coordination |
+| `lib/service/service-runner.sh` | Execute services by type |
+
+### Service Configuration
+
+Services are defined in `config/services.json`:
+
+```json
+{
+  "version": "1.0",
+  "defaults": {
+    "timeout": 300,
+    "concurrency": { "max_instances": 1, "if_running": "skip" }
+  },
+  "services": [
+    {
+      "id": "pr-sync",
+      "description": "Sync PR statuses from GitHub",
+      "schedule": { "type": "interval", "interval": 180, "run_on_startup": true },
+      "execution": { "type": "function", "function": "orch_run_periodic_sync" }
+    },
+    {
+      "id": "task-spawner",
+      "schedule": { "type": "interval", "interval": 60 },
+      "execution": { "type": "function", "function": "orch_spawn_ready_tasks" }
+    }
+  ]
+}
+```
+
+### Schedule Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `interval` | Run at fixed intervals | `{"type": "interval", "interval": 60}` |
+| `event` | Run when triggered | `{"type": "event", "trigger": "worker.completed"}` |
+| `continuous` | Run continuously | `{"type": "continuous", "restart_delay": 5}` |
+
+### Execution Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `function` | Call a bash function | `{"type": "function", "function": "my_func"}` |
+| `command` | Run shell command | `{"type": "command", "command": "wiggum-review sync"}` |
+
+### Project Overrides
+
+Override or add services per-project via `.ralph/services.json`:
+
+```json
+{
+  "version": "1.0",
+  "services": [
+    {
+      "id": "pr-sync",
+      "schedule": { "type": "interval", "interval": 300 }
+    },
+    {
+      "id": "custom-service",
+      "enabled": true,
+      "schedule": { "type": "interval", "interval": 120 },
+      "execution": { "type": "command", "command": "./scripts/my-task.sh" }
+    }
+  ]
+}
+```
+
+### Service CLI
+
+Manage services via `wiggum service`:
+
+```bash
+# List all services
+wiggum service list
+
+# Check service status
+wiggum service status
+wiggum service status pr-sync
+
+# Manually trigger a service
+wiggum service run pr-sync
+wiggum service run pr-sync --sync  # Wait for completion
+
+# Stop a running service
+wiggum service stop pr-sync
+
+# View service configuration
+wiggum service config pr-sync
+```
+
+### State Persistence
+
+Service state is stored in `.ralph/.service-state.json`:
+
+```json
+{
+  "saved_at": "2024-01-27T12:00:00Z",
+  "services": {
+    "pr-sync": {
+      "last_run": 1706356800,
+      "status": "stopped",
+      "run_count": 42,
+      "fail_count": 1
+    }
+  }
+}
+```
+
+State survives orchestrator restarts, allowing services to resume where they left off.
+
+### Comparison
+
+| Aspect | Counter-Based (Default) | Service-Based |
+|--------|------------------------|---------------|
+| Configuration | Hardcoded in wiggum-run | Declarative JSON |
+| Adding tasks | Modify core loop | Add to services.json |
+| Per-project intervals | Environment variables | .ralph/services.json |
+| Observability | Log inspection | `wiggum service status` |
+| State persistence | None | Automatic |
+
+### Debugging
+
+```bash
+# View service state
+cat .ralph/.service-state.json | jq .
+
+# Check which services are due
+wiggum service status --json | jq '.[] | select(.status != "running")'
+
+# View service configuration
+wiggum service config --json | jq '.[] | {id, interval: .schedule.interval}'
 ```

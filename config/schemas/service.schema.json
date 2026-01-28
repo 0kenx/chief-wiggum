@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Service Configuration",
+  "description": "Defines orchestrator services that run at configurable intervals",
+  "type": "object",
+  "required": ["version", "services"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "enum": ["1.0"]
+    },
+    "defaults": {
+      "$ref": "#/$defs/defaults"
+    },
+    "services": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/service"
+      }
+    }
+  },
+  "$defs": {
+    "defaults": {
+      "type": "object",
+      "description": "Default configuration applied to all services",
+      "properties": {
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 300,
+          "description": "Default timeout in seconds for service execution"
+        },
+        "restart_policy": {
+          "$ref": "#/$defs/restart_policy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "restart_policy": {
+      "type": "object",
+      "description": "Policy for handling service failures",
+      "properties": {
+        "on_failure": {
+          "type": "string",
+          "enum": ["retry", "skip", "abort"],
+          "default": "skip",
+          "description": "Action when service fails"
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2,
+          "description": "Maximum retry attempts before giving up"
+        }
+      },
+      "additionalProperties": false
+    },
+    "service": {
+      "type": "object",
+      "required": ["id", "schedule", "execution"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Unique service identifier"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what the service does"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the service is enabled"
+        },
+        "schedule": {
+          "$ref": "#/$defs/schedule"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "concurrency": {
+          "$ref": "#/$defs/concurrency"
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Override default timeout for this service"
+        },
+        "restart_policy": {
+          "$ref": "#/$defs/restart_policy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "schedule": {
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        { "$ref": "#/$defs/interval_schedule" },
+        { "$ref": "#/$defs/event_schedule" },
+        { "$ref": "#/$defs/continuous_schedule" }
+      ]
+    },
+    "interval_schedule": {
+      "type": "object",
+      "required": ["type", "interval"],
+      "properties": {
+        "type": {
+          "const": "interval"
+        },
+        "interval": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Interval in seconds between executions"
+        },
+        "run_on_startup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run immediately on startup before waiting for first interval"
+        }
+      },
+      "additionalProperties": false
+    },
+    "event_schedule": {
+      "type": "object",
+      "required": ["type", "trigger"],
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "trigger": {
+          "type": "string",
+          "description": "Event name that triggers this service (e.g., 'worker.completed', 'scheduling_event')"
+        }
+      },
+      "additionalProperties": false
+    },
+    "continuous_schedule": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "continuous"
+        },
+        "restart_delay": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 5,
+          "description": "Delay in seconds before restarting after completion"
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        { "$ref": "#/$defs/command_execution" },
+        { "$ref": "#/$defs/function_execution" },
+        { "$ref": "#/$defs/pipeline_execution" }
+      ]
+    },
+    "command_execution": {
+      "type": "object",
+      "required": ["type", "command"],
+      "properties": {
+        "type": {
+          "const": "command"
+        },
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute"
+        },
+        "working_dir": {
+          "type": "string",
+          "description": "Working directory for command execution"
+        }
+      },
+      "additionalProperties": false
+    },
+    "function_execution": {
+      "type": "object",
+      "required": ["type", "function"],
+      "properties": {
+        "type": {
+          "const": "function"
+        },
+        "function": {
+          "type": "string",
+          "description": "Bash function name to call"
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Arguments to pass to the function"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pipeline_execution": {
+      "type": "object",
+      "required": ["type", "pipeline"],
+      "properties": {
+        "type": {
+          "const": "pipeline"
+        },
+        "pipeline": {
+          "type": "string",
+          "description": "Pipeline name to execute"
+        }
+      },
+      "additionalProperties": false
+    },
+    "concurrency": {
+      "type": "object",
+      "description": "Concurrency control for the service",
+      "properties": {
+        "max_instances": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "Maximum concurrent instances of this service"
+        },
+        "if_running": {
+          "type": "string",
+          "enum": ["skip", "queue", "kill"],
+          "default": "skip",
+          "description": "Action when service is already running: skip (don't start), queue (wait), kill (stop old)"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
