@@ -1473,9 +1473,7 @@ pr_merge_execute() {
     local state_file
     state_file=$(_pr_merge_state_file "$ralph_dir")
 
-    # Note: All log messages in this function go to stderr so they don't
-    # interfere with the return value (echo to stdout at the end)
-    log "Phase 4: Executing merges..." >&2
+    log "Phase 4: Executing merges..."
 
     # Reset merged list
     jq '.merged_this_cycle = []' "$state_file" > "$state_file.tmp"
@@ -1489,7 +1487,7 @@ pr_merge_execute() {
     # These PRs don't conflict with each other, so we can merge them all
     # without refreshing between each. This is the fast path.
 
-    log "  Step 1: Merging independent PRs (no inter-PR conflicts)..." >&2
+    log "  Step 1: Merging independent PRs (no inter-PR conflicts)..."
 
     local optimal_batch
     optimal_batch=$(jq -r '.optimal_batch // [] | .[]' "$state_file")
@@ -1501,7 +1499,7 @@ pr_merge_execute() {
         # Check if ready to merge
         local reason
         if reason=$(_is_pr_ready_to_merge "$state_file" "$task_id"); then
-            log "    $task_id: Merging (independent)..." >&2
+            log "    $task_id: Merging (independent)..."
 
             if _attempt_merge "$ralph_dir" "$task_id"; then
                 # Mark as merged
@@ -1512,11 +1510,11 @@ pr_merge_execute() {
                 ((++independent_merged))
             fi
         else
-            log "    $task_id: Skipped ($reason)" >&2
+            log "    $task_id: Skipped ($reason)"
         fi
     done <<< "$optimal_batch"
 
-    log "  Step 1 complete: merged $independent_merged independent PR(s)" >&2
+    log "  Step 1 complete: merged $independent_merged independent PR(s)"
 
     # =========================================================================
     # Step 2: Handle remaining tangled PRs (with refresh after each merge)
@@ -1524,7 +1522,7 @@ pr_merge_execute() {
     # These PRs may conflict with each other, so we need to refresh merge
     # status after each successful merge to detect cascade effects.
 
-    log "  Step 2: Merging remaining PRs (with conflict re-evaluation)..." >&2
+    log "  Step 2: Merging remaining PRs (with conflict re-evaluation)..."
 
     local max_passes=10  # Prevent infinite loops
     local pass=0
@@ -1555,7 +1553,7 @@ pr_merge_execute() {
             # Check if ready to merge
             local reason
             if reason=$(_is_pr_ready_to_merge "$state_file" "$task_id"); then
-                log "    $task_id: Attempting merge..." >&2
+                log "    $task_id: Attempting merge..."
 
                 if _attempt_merge "$ralph_dir" "$task_id"; then
                     # Mark as merged
@@ -1569,7 +1567,7 @@ pr_merge_execute() {
                     _refresh_merge_status "$ralph_dir"
                 fi
             else
-                log "    $task_id: Skipped ($reason)" >&2
+                log "    $task_id: Skipped ($reason)"
             fi
         done <<< "$remaining_tasks"
 
@@ -1578,11 +1576,10 @@ pr_merge_execute() {
             break
         fi
 
-        log "    Pass $pass: merged $merged_this_pass PR(s), checking for newly unblocked..." >&2
+        log "    Pass $pass: merged $merged_this_pass PR(s), checking for newly unblocked..."
     done
 
-    log "  Total merged: $merged_count PR(s)" >&2
-    echo "$merged_count"
+    log "  Total merged: $merged_count PR(s)"
 }
 
 # =============================================================================
@@ -1836,13 +1833,16 @@ pr_merge_optimize_and_execute() {
     echo ""
 
     # Phase 4: Execute
-    local merged
-    merged=$(pr_merge_execute "$ralph_dir" "$project_dir")
+    pr_merge_execute "$ralph_dir" "$project_dir"
     echo ""
 
     # Phase 5: Handle remaining
     pr_merge_handle_remaining "$ralph_dir"
     echo ""
+
+    # Get merged count from state file (more reliable than capturing stdout)
+    local merged
+    merged=$(jq -r '.merged_this_cycle | length' "$(_pr_merge_state_file "$ralph_dir")" 2>/dev/null || echo "0")
 
     log "PR merge optimization complete (merged $merged PRs)"
 
