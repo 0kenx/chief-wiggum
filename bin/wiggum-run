@@ -421,7 +421,26 @@ _check_completed_planners() {
                             continue
                         fi
                         if [ ! -d "$worker_dir/workspace" ]; then
-                            log "Skipping $task_id - workspace already cleaned up (PR likely merged)"
+                            # Verify actual merge status instead of guessing
+                            local kanban_status pr_status="unknown"
+                            kanban_status=$(grep -E "^\- \[.\] \*\*\[$task_id\]" "$RALPH_DIR/kanban.md" 2>/dev/null | \
+                                sed 's/^- \[\(.\)\].*/\1/' | head -1 || echo "")
+
+                            if [ "$kanban_status" = "x" ]; then
+                                log "Skipping $task_id - PR is merged (workspace cleaned up)"
+                            else
+                                # Check GitHub if kanban doesn't show merged
+                                local pr_number
+                                pr_number=$(git_state_get_pr "$worker_dir" 2>/dev/null || echo "")
+                                if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
+                                    pr_status=$(timeout "${WIGGUM_GH_TIMEOUT:-10}" gh pr view "$pr_number" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")
+                                fi
+                                if [ "$pr_status" = "MERGED" ]; then
+                                    log "Skipping $task_id - PR #$pr_number is merged (workspace cleaned up)"
+                                else
+                                    log_warn "Skipping $task_id - workspace missing (kanban: $kanban_status, PR: $pr_status)"
+                                fi
+                            fi
                             continue
                         fi
                         git_state_set "$worker_dir" "needs_resolve" "wiggum-run._check_completed_planners" "Resolution plan ready"

@@ -20,6 +20,65 @@ source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 
+# Verify if a task's PR is actually merged
+#
+# Checks kanban status and optionally GitHub PR state to determine
+# if a task is truly merged (not just assumed).
+#
+# Args:
+#   ralph_dir  - Ralph directory path
+#   task_id    - Task identifier
+#   worker_dir - Worker directory path (optional, for PR number lookup)
+#
+# Returns: 0 if merged, 1 if not merged or unknown
+# Outputs: "merged", "open", "closed", or "unknown"
+_verify_task_merged() {
+    local ralph_dir="$1"
+    local task_id="$2"
+    local worker_dir="${3:-}"
+
+    local kanban_file="$ralph_dir/kanban.md"
+
+    # First check: kanban status
+    if [ -f "$kanban_file" ]; then
+        local task_status
+        task_status=$(grep -E "^\- \[.\] \*\*\[$task_id\]" "$kanban_file" 2>/dev/null | \
+            sed 's/^- \[\(.\)\].*/\1/' | head -1 || echo "")
+        if [ "$task_status" = "x" ]; then
+            echo "merged"
+            return 0
+        fi
+    fi
+
+    # Second check: GitHub PR state (if we have PR number)
+    local pr_number=""
+    if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+        pr_number=$(git_state_get_pr "$worker_dir" 2>/dev/null || echo "")
+    fi
+
+    if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
+        local pr_state
+        pr_state=$(timeout "${WIGGUM_GH_TIMEOUT:-10}" gh pr view "$pr_number" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")
+        case "$pr_state" in
+            MERGED)
+                echo "merged"
+                return 0
+                ;;
+            OPEN)
+                echo "open"
+                return 1
+                ;;
+            CLOSED)
+                echo "closed"
+                return 1
+                ;;
+        esac
+    fi
+
+    echo "unknown"
+    return 1
+}
+
 # Check for tasks needing fixes and spawn fix workers
 #
 # Reads from .tasks-needing-fix.txt (populated by wiggum-review sync),
@@ -436,14 +495,28 @@ _spawn_batch_resolve_worker() {
     # If the PR was merged independently, the workspace may have been cleaned up
     # but batch-context.json might still exist (race condition)
     if [ ! -d "$worker_dir/workspace" ]; then
-        log_warn "Skipping batch resolver for $task_id - workspace already cleaned up (PR likely merged)"
+        # Verify actual merge status instead of guessing
+        local merge_status
+        merge_status=$(_verify_task_merged "$(dirname "$(dirname "$worker_dir")")" "$task_id" "$worker_dir")
+
+        if [ "$merge_status" = "merged" ]; then
+            log "Skipping batch resolver for $task_id - PR is merged (workspace cleaned up)"
+        else
+            log_warn "Skipping batch resolver for $task_id - workspace missing (PR status: $merge_status)"
+        fi
+
         # Clean up stale batch context
         rm -f "$worker_dir/batch-context.json"
-        # Mark as merged if not already in a terminal state
+
+        # Update git state based on actual status
         local current_state
         current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "unknown")
         if [[ "$current_state" != "merged" && "$current_state" != "failed" ]]; then
-            git_state_set "$worker_dir" "merged" "priority-workers._spawn_batch_resolve_worker" "Workspace cleaned up, PR was merged"
+            if [ "$merge_status" = "merged" ]; then
+                git_state_set "$worker_dir" "merged" "priority-workers._spawn_batch_resolve_worker" "PR confirmed merged"
+            else
+                git_state_set "$worker_dir" "failed" "priority-workers._spawn_batch_resolve_worker" "Workspace missing, PR status: $merge_status"
+            fi
         fi
         return 0
     fi
