@@ -1676,11 +1676,20 @@ pr_merge_handle_remaining() {
         done < <(echo "$conflicts_with_prs" | jq -r '.[]')
 
         if [ "$has_multi_conflict" = "true" ]; then
+            # Check current state - don't interrupt active resolution or post-resolution states
+            local current_git_state
+            current_git_state=$(git_state_get "$worker_dir")
+            case "$current_git_state" in
+                resolving|resolved|needs_merge|merging)
+                    log "  $task_id: active resolution (state=$current_git_state) - skipping"
+                    ((++needs_multi_resolve))
+                    continue
+                    ;;
+            esac
+
             # Check if this worker is already part of a planned batch
             # If so, don't override the state (planner may have already transitioned to needs_resolve)
             if [ -f "$worker_dir/batch-context.json" ]; then
-                local current_git_state
-                current_git_state=$(git_state_get "$worker_dir")
                 log "  $task_id: already in batch (state=$current_git_state) - skipping"
                 ((++needs_multi_resolve))
                 continue
@@ -1699,6 +1708,17 @@ pr_merge_handle_remaining() {
             git_state_set "$worker_dir" "needs_multi_resolve" "pr-merge-optimizer" "Multi-PR conflict detected"
             ((++needs_multi_resolve))
         else
+            # Check current state - don't interrupt active resolution or post-resolution states
+            local current_git_state
+            current_git_state=$(git_state_get "$worker_dir")
+            case "$current_git_state" in
+                resolving|resolved|needs_merge|merging)
+                    log "  $task_id: active resolution (state=$current_git_state) - skipping"
+                    ((++needs_resolve))
+                    continue
+                    ;;
+            esac
+
             log "  $task_id: needs_resolve (single-PR conflict with main)"
 
             git_state_set "$worker_dir" "needs_resolve" "pr-merge-optimizer" "Merge conflict with main"

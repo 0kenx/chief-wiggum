@@ -46,9 +46,10 @@ agent_run() {
         return 1
     fi
 
-    # Verify workspace is a git repository
-    if [ ! -d "$workspace/.git" ] && ! git -C "$workspace" rev-parse --git-dir &>/dev/null; then
-        log_error "Workspace is not a git repository: $workspace"
+    # Verify workspace is a functional git repository (catches broken worktrees)
+    if ! git -C "$workspace" rev-parse HEAD &>/dev/null; then
+        log_error "Workspace is not a functional git repository (broken worktree?): $workspace"
+        agent_write_result "$worker_dir" "FAIL" '{"error":"broken_worktree"}'
         return 1
     fi
 

@@ -595,6 +595,13 @@ cmd_task_resolve() {
         return 1
     fi
 
+    # Verify workspace is a functional git repository (catches broken worktrees)
+    if ! git -C "$workspace" rev-parse HEAD &>/dev/null; then
+        error "Workspace is not a functional git repository (broken worktree?): $workspace"
+        error "The worktree may need to be recreated. Mark worker as failed or delete and restart."
+        return 1
+    fi
+
     # Sync with main unless --no-fetch is specified
     if [ "$no_fetch" != "true" ]; then
         log "Fetching and merging origin/main..."

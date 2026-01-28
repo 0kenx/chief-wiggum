@@ -1004,8 +1004,14 @@ handle_resolve_worker_completion() {
         # Need to commit and push the resolution
         log "Conflicts resolved for $task_id - committing resolution..."
 
+        # Derive paths from worker_dir (works correctly with worktrees)
+        # worker_dir = project/.ralph/workers/worker-XXX/
+        # ralph_dir  = project/.ralph/
+        # project_dir = project/
+        local ralph_dir
+        ralph_dir=$(dirname "$(dirname "$worker_dir")")
         local project_dir
-        project_dir=$(cd "$workspace" && git rev-parse --show-toplevel 2>/dev/null || pwd)
+        project_dir=$(dirname "$ralph_dir")
 
         (
             cd "$project_dir" || exit 1
@@ -1013,9 +1019,7 @@ handle_resolve_worker_completion() {
             "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" push 2>&1 | sed "s/^/  [push-$task_id] /"
         )
 
-        # Remove from conflict queue
-        local ralph_dir
-        ralph_dir=$(dirname "$(dirname "$worker_dir")")
+        # Remove from conflict queue (ralph_dir already computed above)
         conflict_queue_remove "$ralph_dir" "$task_id"
 
         # Ready for another merge attempt
