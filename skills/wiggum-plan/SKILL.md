@@ -1,12 +1,12 @@
 | name | description |
 |------|-------------|
-| wiggum-plan | Create implementation plans by exploring the codebase and designing an approach. Planning only - never implements. Always writes plan to `.ralph/plans/TASK-ID.md`. |
+| wiggum-plan | Create implementation plans through systematic 7-phase workflow: discovery, exploration, clarifying questions, architecture design, plan writing, and summary. Planning only - never implements. Always writes plan to `.ralph/plans/TASK-ID.md`. |
 
 # Wiggum Plan
 
 ## Purpose
 
-Create implementation plans by exploring the codebase and designing an approach. This skill is for **planning only** - it never implements code.
+Create implementation plans through a systematic 7-phase workflow that ensures deep codebase understanding and thoughtful architecture decisions. This skill is for **planning only** - it never implements code.
 
 ## Input
 
@@ -33,8 +33,9 @@ Create implementation plans by exploring the codebase and designing an approach.
 3. **Multiple iterations allowed** - Explore, ask questions, explore more as needed
 4. **READ-ONLY exploration** - Only modify the kanban file (when creating tasks) and plan file
 5. **Create task when needed** - If no valid task ID is provided, create the task in kanban first
+6. **Clarifying questions are critical** - Never skip Phase 3; it's one of the most important phases
 
-## Core Workflow
+## Core Workflow: 7 Phases
 
 ### Phase 0: Task Creation (when no task ID provided)
 
@@ -71,28 +72,69 @@ For task format details, see `/kanban` skill references:
 
 **After task creation, continue to Phase 1 with the newly created task ID.**
 
-### Phase 1: Explore and Understand (iterative)
+---
 
-This phase may repeat multiple times until you have a complete picture.
+### Phase 1: Discovery
+
+**Goal:** Establish clarity on what needs to be built before exploring code.
 
 **Read the task requirements:**
 - Read `.ralph/kanban.md` and find the task entry for the given ID
 - Extract Description, Scope, Acceptance Criteria, Dependencies
 - Check dependent tasks to understand what they provide
 
-**Explore the codebase (READ-ONLY):**
+**Ask initial clarifying questions:**
+- What problem does this solve?
+- What is the desired functionality?
+- Are there any constraints or requirements not in the task?
+- What does success look like?
+
+**Output:** Clear understanding of requirements and constraints before diving into code.
+
+---
+
+### Phase 2: Codebase Exploration (Parallel Analysis)
+
+**Goal:** Build comprehensive understanding of relevant existing code through parallel exploration of three dimensions.
+
+**Dimension A - Similar Features:**
+- Search for existing features that solve similar problems
+- Trace execution paths from entry points through data transformations
+- Document how existing features are structured
+
+**Dimension B - Architecture & Patterns:**
+- Map abstraction layers and module boundaries
+- Identify design patterns used in the codebase
+- Understand technology stack and conventions
+
+**Dimension C - Integration Points:**
+- Find code that will interact with the new feature
+- Identify shared utilities, services, and data models
+- Understand testing patterns and coverage expectations
+
+**Exploration tools (READ-ONLY):**
 - **Glob**: Find files by pattern
 - **Grep**: Search for code patterns, function names, imports
 - **Read**: Examine specific files in detail
-- **Bash** (read-only): `ls`, `git log`, `git diff`, `find`
+- **Bash** (read-only): `ls`, `git log`, `git diff`
 
-Look for:
-- Similar features as reference implementations
-- Existing patterns and conventions
-- Related code that will be affected
-- Test patterns used in the project
+**Output:** Identify 5-10 key files for reference with specific insights from each.
 
-**Ask clarifying questions using AskUserQuestion:**
+---
+
+### Phase 3: Clarifying Questions (CRITICAL)
+
+**Goal:** Address all remaining ambiguities before designing architecture.
+
+> ⚠️ **This is one of the most important phases. Do not skip it.**
+
+**Consolidate questions from exploration into categories:**
+
+1. **Edge Cases**: What happens when X fails? What if Y is empty?
+2. **Error Handling**: How should errors be surfaced? Retry logic?
+3. **Integration Points**: How should this interact with existing system X?
+4. **Design Preferences**: Performance vs simplicity? Explicit vs convention?
+5. **Scope Boundaries**: What's explicitly out of scope?
 
 **AskUserQuestion Format:**
 ```
@@ -104,36 +146,109 @@ Look for:
   - description: Context from exploration (file paths, patterns found)
 ```
 
-**Question types:**
-- **Approach**: Which pattern should we follow?
-- **Trade-offs**: Performance vs simplicity?
-- **Scope clarification**: What edge cases to handle?
-- **Integration**: How should this interact with X?
+**Guidelines:**
+- Ground every option in codebase findings (cite file paths)
+- One decision per question (avoid compound questions)
+- Provide trade-off context in descriptions
+- Ask 3-6 questions for complex features
 
-**Iterate:** After getting answers, explore more if needed. Repeat until complete understanding.
+**Output:** All ambiguities resolved with clear decisions documented.
 
-### Phase 2: Design the Solution
+---
 
-Consider:
-- How does this fit the existing architecture?
-- What are the trade-offs of different approaches?
-- What dependencies exist between components?
-- What could go wrong? Edge cases?
-- How does the solution impact other in-progress and pending tasks?
+### Phase 4: Architecture Design (Multiple Approaches)
 
-### Phase 3: Write the Plan (REQUIRED)
+**Goal:** Present 2-3 architecture approaches with trade-off analysis, then recommend the best fit.
+
+**Generate approaches:**
+
+| Approach | Description | When to Use |
+|----------|-------------|-------------|
+| **Minimal Changes** | Smallest possible footprint, follows existing patterns exactly | Time-critical, low-risk features |
+| **Clean Architecture** | Ideal design with proper abstractions and separation | Foundational features, long-term maintainability |
+| **Pragmatic Balance** | Balanced trade-off between minimal and clean | Most features; good default |
+
+**For each approach, document:**
+- Key architectural decisions and rationale
+- Component design with file paths and responsibilities
+- Data flow from entry points through transformations
+- Files to CREATE vs MODIFY vs REFERENCE
+- Pros and cons
+
+**Present trade-off analysis:**
+```
+questions:
+  - question: Which architecture approach should we use?
+    header: Approach
+    multiSelect: false
+    options:
+      - label: Minimal Changes (Recommended)
+        description: "Add to existing X pattern in src/Y. Fast, low risk. Trade-off: less flexible"
+      - label: Clean Architecture
+        description: "New abstraction layer with proper interfaces. Trade-off: more files, higher effort"
+      - label: Pragmatic Balance
+        description: "Extend existing patterns with targeted improvements. Trade-off: moderate complexity"
+```
+
+**After user selection, confirm before proceeding:**
+```
+questions:
+  - question: Ready to finalize the implementation plan with this approach?
+    header: Confirm
+    multiSelect: false
+    options:
+      - label: Yes, write the plan
+        description: Finalize plan with selected architecture
+      - label: Explore more
+        description: I have more questions or want to reconsider
+```
+
+**Output:** Selected architecture approach with user approval.
+
+---
+
+### Phase 5: Write the Plan (REQUIRED)
+
+**Goal:** Document the complete implementation plan.
 
 **You MUST write the plan to `.ralph/plans/TASK-ID.md`** - this is not optional.
 
+**Plan must include:**
+- Selected architecture approach and rationale
+- Patterns discovered during exploration (with file references)
+- Step-by-step implementation sequence
+- Critical files table (CREATE/MODIFY/REFERENCE)
+- Potential challenges and mitigations
+- Decisions made during clarifying questions
+
 For plan structure and format, see references/plan-format.md.
+
+---
+
+### Phase 6: Summary
+
+**Goal:** Document accomplishments and provide clear next steps.
+
+**Present summary to user:**
+- What was planned and why
+- Key architectural decisions made
+- Critical files identified
+- Potential challenges flagged
+- Suggested next steps (run worker, need more planning, etc.)
+
+**Output:** User has clear understanding of the plan and confidence to proceed.
 
 ## Examples
 
-### Example 1: Planning an Existing Task
+### Example 1: Planning an Existing Task (Full 7-Phase Workflow)
 
 **User**: `/wiggum-plan TASK-015`
 
-**Assistant**: I'll create an implementation plan for TASK-015. Let me read the task requirements first.
+---
+
+**Phase 1: Discovery**
+
+**Assistant**: I'll create an implementation plan for TASK-015 using the 7-phase workflow. Let me start with discovery.
 
 *[Reads .ralph/kanban.md]*
 
@@ -145,89 +260,243 @@ Found TASK-015:
   - Dependencies: TASK-013, TASK-014, TASK-010
 ```
 
-Now exploring the codebase for existing patterns...
+*[Uses AskUserQuestion]*
+```yaml
+questions:
+  - question: What is the primary goal for these auth routes?
+    header: Goal
+    multiSelect: false
+    options:
+      - label: User authentication
+        description: Standard login/register for existing user base
+      - label: OAuth integration
+        description: Third-party auth (Google, GitHub, etc.)
+      - label: API authentication
+        description: Machine-to-machine API access tokens
+```
 
+**User selects**: User authentication
+
+---
+
+**Phase 2: Codebase Exploration**
+
+**Assistant**: Now exploring the codebase across three dimensions...
+
+**Dimension A - Similar Features:**
 *[Uses Glob to find route files]*
 *[Uses Read to examine src/routes/users.ts]*
 
-Found route pattern using Express Router with controller separation.
+Found route pattern using Express Router with controller separation:
+- `src/routes/users.ts:15` - Route definition pattern
+- `src/controllers/userController.ts` - Controller pattern with error handling
 
+**Dimension B - Architecture & Patterns:**
 *[Uses Grep to find validation patterns]*
+*[Uses Read to examine src/middleware/]*
 
-Found validation using `express-validator` in existing routes.
+Found:
+- Validation using `express-validator` in existing routes
+- Error handling middleware at `src/middleware/errorHandler.ts`
+- Request logging at `src/middleware/logger.ts`
+
+**Dimension C - Integration Points:**
+*[Uses Read to examine dependent tasks' outputs]*
+
+Dependencies provide:
+- TASK-013: JWT utilities at `src/utils/jwt.ts`
+- TASK-014: Auth middleware at `src/middleware/auth.ts`
+- TASK-010: API routing base at `src/routes/index.ts`
+
+**Key files identified (8 total):**
+| File | Insight |
+|------|---------|
+| `src/routes/users.ts` | Route pattern to follow |
+| `src/controllers/userController.ts` | Controller structure |
+| `src/middleware/auth.ts` | Auth middleware from TASK-014 |
+| `src/utils/jwt.ts` | JWT utils from TASK-013 |
+| `src/middleware/rate-limit.ts` | Existing rate limiter |
+| `src/middleware/errorHandler.ts` | Error handling pattern |
+| `src/models/User.ts` | User model structure |
+| `src/validators/index.ts` | Validation patterns |
+
+---
+
+**Phase 3: Clarifying Questions**
+
+**Assistant**: Based on exploration, I have clarifying questions across key decision areas.
 
 *[Uses AskUserQuestion]*
-```
+```yaml
 questions:
   - question: Should registration require email verification?
     header: Email verify
     multiSelect: false
     options:
-      - label: No verification
-        description: User gets immediate access after registration
+      - label: No verification (Recommended)
+        description: User gets immediate access. Simpler, matches existing user flow
       - label: Email verification
-        description: User must verify email before login (requires email service)
-  - question: What password requirements?
+        description: Requires email service integration (not currently in codebase)
+  - question: What password requirements should we enforce?
     header: Password
     multiSelect: false
     options:
       - label: Minimum 8 chars
-        description: Simple requirement, good UX
+        description: Simple requirement, good UX, found in similar apps
       - label: Complex rules
-        description: Uppercase, lowercase, number, special char
+        description: Upper, lower, number, special char - more secure but friction
   - question: Should failed logins be rate-limited?
     header: Rate limit
     multiSelect: false
     options:
-      - label: Yes, use existing pattern
-        description: Found rate-limiter in src/middleware/rate-limit.ts
+      - label: Yes, use existing pattern (Recommended)
+        description: Found rate-limiter at src/middleware/rate-limit.ts
       - label: No rate limiting
-        description: Simpler but less secure
+        description: Simpler but vulnerable to brute force
+  - question: How should login errors be reported?
+    header: Errors
+    multiSelect: false
+    options:
+      - label: Generic message
+        description: "Invalid credentials" - security best practice
+      - label: Specific message
+        description: "Wrong password" vs "User not found" - better UX, info leak risk
 ```
 
-**User selects**: No verification, Minimum 8 chars, Yes use existing pattern
+**User selects**: No verification, Minimum 8 chars, Yes use existing pattern, Generic message
 
-**Assistant**: Good. Let me verify the rate limiter integration...
+**Assistant**: Decisions recorded. All ambiguities resolved.
 
-*[Uses Read to examine src/middleware/rate-limit.ts]*
+---
 
-Confirmed rate limiter pattern. I have a complete picture.
+**Phase 4: Architecture Design**
+
+**Assistant**: I'll present three architecture approaches with trade-offs.
+
+### Approach 1: Minimal Changes
+- Add routes directly to existing `src/routes/index.ts`
+- Inline validation logic
+- Reuse existing patterns exactly
+- **Pros**: Fast, low risk, familiar patterns
+- **Cons**: Larger single file, less separation
+
+### Approach 2: Clean Architecture
+- New `src/routes/auth.ts` with dedicated router
+- New `src/controllers/authController.ts` with separated concerns
+- New `src/validators/auth.ts` for validation schemas
+- New `src/services/authService.ts` for business logic
+- **Pros**: Proper separation, testable, maintainable
+- **Cons**: More files, higher initial effort
+
+### Approach 3: Pragmatic Balance
+- New `src/routes/auth.ts` with dedicated router
+- New `src/controllers/authController.ts`
+- Reuse existing validator patterns inline
+- **Pros**: Good separation without over-engineering
+- **Cons**: Validation not reusable
+
+*[Uses AskUserQuestion]*
+```yaml
+questions:
+  - question: Which architecture approach should we use?
+    header: Approach
+    multiSelect: false
+    options:
+      - label: Pragmatic Balance (Recommended)
+        description: New auth router + controller, inline validation. Good balance
+      - label: Clean Architecture
+        description: Full separation with service layer. Best for complex auth
+      - label: Minimal Changes
+        description: Add to existing routes. Fast but less organized
+```
+
+**User selects**: Pragmatic Balance
+
+*[Uses AskUserQuestion]*
+```yaml
+questions:
+  - question: Ready to finalize the implementation plan with Pragmatic Balance approach?
+    header: Confirm
+    multiSelect: false
+    options:
+      - label: Yes, write the plan
+        description: Finalize plan with selected architecture
+      - label: Explore more
+        description: I have more questions
+```
+
+**User selects**: Yes, write the plan
+
+---
+
+**Phase 5: Write the Plan**
+
+**Assistant**: Writing the implementation plan...
 
 *[Writes to .ralph/plans/TASK-015.md]*
 
-I've saved the implementation plan to `.ralph/plans/TASK-015.md`. The plan covers:
+Plan written with:
+- Pragmatic Balance architecture
+- Route at `src/routes/auth.ts`
+- Controller at `src/controllers/authController.ts`
+- Rate limiting on login endpoint
+- Password validation (min 8 chars)
+- Generic error messages
 
-- Route structure following `src/routes/users.ts` pattern
-- Validation using `express-validator`
-- Rate limiting using existing middleware
-- Password hashing with bcrypt (min 8 chars)
-- Integration with TASK-013 (JWT utils) and TASK-014 (auth middleware)
+---
 
-The plan is ready for a Chief Wiggum worker to execute.
+**Phase 6: Summary**
+
+**Assistant**: ✓ Implementation plan complete for TASK-015.
+
+**What was planned:**
+- POST `/auth/login` and POST `/auth/register` endpoints
+- Following Pragmatic Balance architecture
+
+**Key decisions made:**
+- No email verification (immediate access)
+- 8-char minimum password
+- Rate limiting on login (using existing middleware)
+- Generic error messages for security
+
+**Critical files:**
+| File | Action |
+|------|--------|
+| `src/routes/auth.ts` | CREATE |
+| `src/controllers/authController.ts` | CREATE |
+| `src/routes/index.ts` | MODIFY (mount auth routes) |
+
+**Next steps:**
+- Run `wiggum run TASK-015` to execute with a worker
+- Or review plan at `.ralph/plans/TASK-015.md` first
+
+---
 
 ### Example 2: Creating Task and Plan Together
 
 **User**: `/wiggum-plan Add a dark mode toggle to the settings page`
 
-**Assistant**: I'll help create and plan this feature. Since no task ID was provided, let me first analyze the existing kanban.
+**Phase 0: Task Creation**
+
+**Assistant**: Since no task ID was provided, I'll first create the task.
 
 *[Reads .ralph/kanban.md]*
 
-Found 15 tasks. Highest ID is TASK-015. TASK-012 (Settings page) is complete `[x]`. Using TASK- prefix.
+Found 15 tasks. Highest ID is TASK-015. TASK-012 (Settings page) is complete `[x]`.
 
 *[Uses AskUserQuestion]*
-```
+```yaml
 questions:
   - question: What priority level for dark mode?
     header: Priority
     multiSelect: false
     options:
+      - label: MEDIUM (Recommended)
+        description: Nice-to-have UX enhancement
       - label: HIGH
-        description: Important UX feature, blocking other work
-      - label: MEDIUM
-        description: Nice-to-have, not blocking other tasks
+        description: Important, blocking other work
       - label: LOW
-        description: Low priority enhancement
+        description: Low priority
   - question: What should be included in dark mode scope?
     header: Scope
     multiSelect: true
@@ -237,87 +506,40 @@ questions:
       - label: System preference
         description: Auto-detect OS dark/light preference
       - label: Persist choice
-        description: Remember user's selection across sessions
+        description: Remember selection across sessions
 ```
 
 **User selects**: MEDIUM, Settings toggle, Persist choice
 
-**Assistant**: I'll create a single task for this. Let me show you the proposed entry:
+*[Creates TASK-016 in kanban, then proceeds through Phases 1-6]*
 
-```markdown
-- [ ] **[TASK-016]** Add dark mode toggle to settings page
-  - Description: Add a toggle in settings to switch between light and dark themes with persistence
-  - Priority: MEDIUM
-  - Dependencies: TASK-012
-  - Scope:
-    - Add toggle switch component to settings page
-    - Implement theme state management
-    - Apply theme styles across the application
-    - Persist theme preference in local storage
-  - Acceptance Criteria:
-    - Toggle changes theme immediately
-    - Theme persists across page reloads
-    - Theme persists across browser sessions
-```
+...
 
-*[Uses AskUserQuestion]*
-```
-questions:
-  - question: Add this task to .ralph/kanban.md?
-    header: Confirm
-    multiSelect: false
-    options:
-      - label: Yes, add task
-        description: Add TASK-016 to kanban and continue to planning
-      - label: Modify first
-        description: I want to adjust something before adding
-```
+**Phase 6: Summary**
 
-**User selects**: Yes, add task
+**Assistant**: ✓ Created TASK-016 and implementation plan.
 
-**Assistant**: Added TASK-016 to kanban. Now let me explore the codebase to create the implementation plan...
+**Task created:** TASK-016 - Add dark mode toggle to settings page (MEDIUM)
 
-*[Uses Glob to find settings components]*
-*[Uses Read to examine src/pages/Settings.tsx]*
-*[Uses Grep to find existing theme patterns]*
+**Architecture:** CSS variables approach with body class toggle
 
-Found existing color variables in `src/styles/variables.css`. Settings page uses component library.
+**Key decisions:**
+- Theme stored in localStorage
+- No system preference detection (out of scope)
+- Immediate toggle effect (no animation)
 
-*[Uses AskUserQuestion]*
-```
-questions:
-  - question: How should the theme be managed?
-    header: Theme state
-    multiSelect: false
-    options:
-      - label: React Context
-        description: Found existing context pattern in src/context/
-      - label: CSS variables
-        description: Toggle CSS class on body, simpler approach
-```
-
-**User selects**: CSS variables
-
-**Assistant**: Good choice for simplicity. Let me complete the plan...
-
-*[Writes to .ralph/plans/TASK-016.md]*
-
-I've created TASK-016 in kanban and saved the implementation plan to `.ralph/plans/TASK-016.md`. Summary:
-
-- Task added to `.ralph/kanban.md` with MEDIUM priority
-- Plan uses CSS variables approach with body class toggle
-- Theme stored in localStorage for persistence
-- Toggle component added to Settings page
+**Plan saved to:** `.ralph/plans/TASK-016.md`
 
 ## Key Principles
 
-1. **Research before questions** - Explore codebase first, ground questions in findings
-2. **Iterate freely** - Multiple rounds of explore → ask → explore is expected
-3. **Be specific** - Reference actual file paths, function names, line numbers
-4. **Always write plan** - Session must end with `.ralph/plans/TASK-ID.md`
-5. **Never implement** - Planning only, no code changes
-6. **Seamless task creation** - When no task ID provided, create task in kanban before planning
-7. **Confirm before writing kanban** - Always ask user to confirm before adding tasks to kanban
+1. **Follow the 7 phases** - Discovery → Exploration → Questions → Architecture → Plan → Summary
+2. **Parallel exploration** - Analyze similar features, architecture, and integration points together
+3. **Questions are critical** - Phase 3 is one of the most important; never skip it
+4. **Multiple approaches** - Present 2-3 architecture options with trade-off analysis
+5. **Get approval** - Confirm architecture choice before writing plan
+6. **Ground in findings** - Every option must reference actual codebase patterns
+7. **Always write plan** - Session must end with `.ralph/plans/TASK-ID.md`
+8. **Never implement** - Planning only, no code changes
 
 ## Progressive Disclosure
 

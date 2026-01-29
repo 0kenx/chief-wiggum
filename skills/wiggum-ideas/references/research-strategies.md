@@ -2,109 +2,76 @@
 
 ## Codebase Analysis
 
-### Finding Technical Debt
-```bash
-# TODO/FIXME comments
-Grep: "TODO|FIXME|HACK|XXX"
+Explore the codebase at a high level to understand:
 
-# Deprecated patterns
-Grep: "@deprecated|deprecate"
+### What to Look For
 
-# Error suppression
-Grep: "eslint-disable|@ts-ignore|noqa"
-```
+**Technical Debt:**
+- TODO/FIXME comments indicating deferred work
+- Deprecated patterns still in use
+- Inconsistent error handling across modules
 
-### Finding Security Issues
-```bash
-# Hardcoded secrets
-Grep: "password.*=|secret.*=|api_key"
+**Security Concerns:**
+- Authentication and authorization gaps
+- Input validation inconsistencies
+- Exposed sensitive data in logs or responses
 
-# SQL injection risks
-Grep: "query.*\+|execute.*\+"
+**Performance Opportunities:**
+- Database query patterns that could be optimized
+- Missing caching layers
+- Synchronous operations that could be async
 
-# Missing validation
-Grep: "req\.body\.|req\.params\." # then check for validation
-```
+**Reliability Gaps:**
+- Missing retry logic for external services
+- Incomplete error handling
+- Lack of circuit breakers
 
-### Finding Performance Issues
-```bash
-# N+1 queries
-Grep: "for.*await|\.map.*await"
-
-# Missing indexes (check models)
-Read: models/ directory, look for query patterns
-
-# Large synchronous operations
-Grep: "readFileSync|writeFileSync"
-```
-
-### Finding Missing Tests
-```bash
-# Compare source to test files
-Glob: "src/**/*.ts"
-Glob: "tests/**/*.test.ts"
-# Look for untested modules
-```
+**Architectural Issues:**
+- Inconsistent patterns across modules
+- Missing abstractions
+- Tight coupling between components
 
 ## Market Research
 
-### WebSearch Queries
+**Use the WebSearch tool** for all market research.
 
-**Security:**
-- "[framework] security best practices 2026"
-- "OWASP top 10 [language]"
-- "[library] known vulnerabilities"
+### Research Areas
 
-**Features:**
-- "[product type] must-have features"
-- "[competitor] features comparison"
-- "[industry] user expectations"
+**Industry Best Practices:**
+- Current standards for the product category
+- Emerging patterns and approaches
+- Compliance requirements (SOC2, GDPR, etc.)
 
-**Performance:**
-- "[framework] performance optimization"
-- "[database] query optimization"
-- "web vitals improvement techniques"
+**Competitive Landscape:**
+- Features competitors offer
+- Gaps in competitor offerings
+- Differentiation opportunities
 
-**Architecture:**
-- "[pattern] vs [pattern] trade-offs"
-- "[framework] recommended architecture"
-- "scaling [technology] best practices"
+**User Expectations:**
+- What users expect from this type of product
+- Common pain points in the industry
+- Feature requests and trends
 
-### Competitive Analysis
-
-1. Identify main competitors
-2. Search: "[competitor] features"
-3. Search: "[competitor] vs [your product type]"
-4. Look for feature gaps and differentiators
+**Technology Trends:**
+- Emerging technologies that could provide advantages
+- Frameworks and tools gaining adoption
+- Patterns becoming industry standard
 
 ## Combining Findings
 
-### Pattern: Gap Analysis
-1. List current features (from codebase)
-2. List expected features (from research)
-3. Identify gaps
-4. Prioritize by effort vs impact
+### Gap Analysis
+1. List what the project currently has
+2. List what research indicates it should have
+3. The gaps become task candidates
 
-### Pattern: Risk Assessment
-1. Find potential issues (codebase)
-2. Research severity (web)
-3. Check if addressed in kanban
-4. Prioritize by risk level
+### Opportunity Mapping
+1. Identify findings from codebase analysis
+2. Cross-reference with market research
+3. Prioritize where codebase gaps align with market expectations
 
-### Pattern: Modernization
-1. Identify outdated patterns (codebase)
-2. Research current best practices (web)
-3. Assess migration effort
-4. Propose incremental updates
+## Output Target
 
-## Iteration Guidelines
-
-**When to iterate:**
-- Found something that needs deeper investigation
-- User answer reveals new area to explore
-- Initial findings are inconclusive
-
-**When to stop:**
-- Have 3-5 solid ideas with evidence
-- Further research yields diminishing returns
-- User has indicated enough options
+Each research session should generate enough findings to produce **30-50 tasks**:
+- Continue exploring until you have substantial findings
+- Cover multiple areas (security, performance, features, etc.)
+- Include findings that could lead to innovative tasks
