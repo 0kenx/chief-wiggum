@@ -12,17 +12,23 @@ SKIP_CONFIRM=false
 
 show_help() {
     cat << EOF
-wiggum clean - Clean up worktrees, worker directories, or reset kanban tasks
+wiggum clean - Clean up workspaces, logs, or reset kanban tasks
 
 Usage: wiggum clean [options] <target>
+       wiggum clean logs [all|done|<pattern>]
        wiggum clean kanban [all|<task-id>]
        wiggum clean batch [all|stale|<batch-id>]
 
-Worker Targets:
-  <pattern>           Clean workers matching pattern (e.g., TASK-001, 030)
+Workspace Targets (removes worktree only, preserves logs):
+  <pattern>           Clean workspace of workers matching pattern (e.g., TASK-001, 030)
   <p1>,<p2>,...       Clean multiple patterns (comma-separated)
-  all                 Clean all worktrees and worker directories
-  done                Clean workers whose PRs have been merged
+  all                 Clean workspaces of finished [x] tasks
+  done                Clean workspaces of workers whose PRs have been merged
+
+Log Targets (removes entire worker directory including logs):
+  logs all            Remove entire worker directories of finished [x] tasks
+  logs done           Remove entire directories of workers with merged PRs
+  logs <pattern>      Remove entire worker directory matching pattern
 
 Kanban Targets:
   kanban all          Reset resettable tasks (in-progress, pending approval, failed)
@@ -42,11 +48,12 @@ Options:
   -h, --help          Show this help message
 
 Examples:
-  wiggum clean TASK-001       # Clean workers matching TASK-001
-  wiggum clean 030            # Clean workers matching "030"
-  wiggum clean all            # Clean up all worktrees and worker directories
-  wiggum clean done           # Clean workers with merged PRs
-  wiggum clean -y all         # Clean all without confirmation
+  wiggum clean all            # Clean workspaces of finished [x] tasks (preserves logs)
+  wiggum clean TASK-001       # Clean workspace of TASK-001 (preserves logs)
+  wiggum clean done           # Clean workspaces of workers with merged PRs
+  wiggum clean logs all       # Remove entire worker directories of finished tasks
+  wiggum clean logs TASK-001  # Remove entire worker directory of TASK-001
+  wiggum clean -y all         # Clean workspaces without confirmation
   wiggum clean kanban all     # Reset all resettable tasks in kanban
   wiggum clean kanban 030     # Reset TASK-030 if it's resettable
   wiggum clean batch stale    # Clean stale batch state (recommended)
@@ -92,8 +99,23 @@ find_workers_with_merged_prs() {
     done
 }
 
-clean_worker() {
-    local worker_dir="$RALPH_DIR/workers/$1"
+# Remove workspace only (preserves logs)
+clean_worker_workspace() {
+    local worker_name="$1"
+    local worker_dir="$RALPH_DIR/workers/$worker_name"
+
+    if [ -d "$worker_dir/workspace" ]; then
+        log "Removing worktree: $worker_dir/workspace"
+        git worktree remove "$worker_dir/workspace" --force 2>/dev/null || true
+    else
+        log "No workspace found for $worker_name"
+    fi
+}
+
+# Remove entire worker directory (including logs)
+clean_worker_full() {
+    local worker_name="$1"
+    local worker_dir="$RALPH_DIR/workers/$worker_name"
 
     if [ -d "$worker_dir/workspace" ]; then
         log "Removing worktree: $worker_dir/workspace"
@@ -101,7 +123,7 @@ clean_worker() {
     fi
 
     if [ -d "$worker_dir" ]; then
-        log "Removing worker directory: $1"
+        log "Removing worker directory: $worker_name"
         rm -rf "$worker_dir"
     fi
 }
@@ -140,18 +162,57 @@ resolve_patterns() {
     printf '%s\n' "${resolved[@]}"
 }
 
-do_clean() {
+# Clean workspaces only (default behavior - preserves logs)
+do_clean_workspaces() {
     local workers=("$@")
 
     for worker in "${workers[@]}"; do
-        clean_worker "$worker"
+        clean_worker_workspace "$worker"
     done
 
     git worktree prune 2>/dev/null
-    log "Cleaned ${#workers[@]} worker(s)"
+    log "Cleaned workspaces of ${#workers[@]} worker(s) (logs preserved)"
     echo ""
     log "Current status:"
     git worktree list
+}
+
+# Clean entire worker directories (including logs)
+do_clean_full() {
+    local workers=("$@")
+
+    for worker in "${workers[@]}"; do
+        clean_worker_full "$worker"
+    done
+
+    git worktree prune 2>/dev/null
+    log "Removed ${#workers[@]} worker(s) including logs"
+    echo ""
+    log "Current status:"
+    git worktree list
+}
+
+# Find workers for tasks marked as complete [x] in kanban
+find_workers_for_finished_tasks() {
+    local kanban_file="$RALPH_DIR/kanban.md"
+
+    [ -f "$kanban_file" ] || return
+    [ -d "$RALPH_DIR/workers" ] || return
+
+    # Get completed task IDs from kanban
+    local completed_tasks
+    completed_tasks=$(grep -E '^\s*-\s*\[x\].*\*\*\[([A-Za-z]{2,10}-[0-9]{1,4})\]\*\*' "$kanban_file" \
+        | sed -E 's/.*\*\*\[([A-Za-z]{2,10}-[0-9]{1,4})\]\*\*.*/\1/' || true)
+
+    [ -z "$completed_tasks" ] && return
+
+    # Find workers matching completed tasks
+    while IFS= read -r task_id; do
+        [ -z "$task_id" ] && continue
+        for dir in "${RALPH_DIR}/workers/worker-${task_id}-"*; do
+            [ -d "$dir" ] && basename "$dir"
+        done
+    done <<< "$completed_tasks"
 }
 
 # Status character to human-readable name
@@ -530,6 +591,7 @@ set -- "${WIGGUM_REMAINING_ARGS[@]}"
 TARGET=""
 KANBAN_TARGET=""
 BATCH_TARGET=""
+LOGS_TARGET=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes)
@@ -558,6 +620,14 @@ while [[ $# -gt 0 ]]; do
             shift
             [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]] && {
                 BATCH_TARGET="$1"
+                shift
+            }
+            ;;
+        logs)
+            TARGET="logs"
+            shift
+            [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]] && {
+                LOGS_TARGET="$1"
                 shift
             }
             ;;
@@ -616,9 +686,69 @@ if [ "$TARGET" = "batch" ]; then
     exit $EXIT_OK
 fi
 
-# Determine workers to clean
+# Handle logs subcommand (full removal including logs)
+if [ "$TARGET" = "logs" ]; then
+    [ -z "$LOGS_TARGET" ] && {
+        echo "No logs target specified. Use 'wiggum clean logs all', 'wiggum clean logs done', or 'wiggum clean logs <pattern>'."
+        show_help
+        exit $EXIT_USAGE
+    }
+
+    # Determine workers for logs cleanup
+    if [ "$LOGS_TARGET" = "all" ]; then
+        workers_to_clean=$(find_workers_for_finished_tasks)
+        [ -z "$workers_to_clean" ] && {
+            echo "No workers found for finished [x] tasks."
+            exit $EXIT_OK
+        }
+    elif [ "$LOGS_TARGET" = "done" ]; then
+        echo "Checking PR status for all workers (this may take a moment)..."
+        workers_to_clean=$(find_workers_with_merged_prs)
+    else
+        workers_to_clean=$(resolve_patterns "$LOGS_TARGET") || exit $EXIT_CLEAN_PATTERN_NOT_FOUND
+    fi
+
+    [ -z "$workers_to_clean" ] && {
+        echo "No workers to clean."
+        exit $EXIT_OK
+    }
+
+    mapfile -t workers_array <<< "$workers_to_clean"
+
+    # Check for running workers
+    running_workers=()
+    for worker in "${workers_array[@]}"; do
+        is_worker_running "$RALPH_DIR/workers/$worker" && running_workers+=("$worker")
+    done
+
+    [ ${#running_workers[@]} -gt 0 ] && {
+        echo "ERROR: Cannot clean running workers. Stop them first with 'wiggum stop <id>'."
+        echo ""
+        echo "Running workers:"
+        printf '  %s\n' "${running_workers[@]}"
+        exit $EXIT_CLEAN_WORKERS_RUNNING
+    }
+
+    echo "The following worker directories will be FULLY removed (including logs):"
+    printf '  %s\n' "${workers_array[@]}"
+    echo ""
+
+    confirm "Proceed with full cleanup (including logs)?" || {
+        echo "Aborted."
+        exit $EXIT_OK
+    }
+
+    do_clean_full "${workers_array[@]}"
+    exit $EXIT_OK
+fi
+
+# Determine workers to clean (workspace only - default behavior)
 if [ "$TARGET" = "all" ]; then
-    workers_to_clean=$(list_all_workers "$RALPH_DIR")
+    workers_to_clean=$(find_workers_for_finished_tasks)
+    [ -z "$workers_to_clean" ] && {
+        echo "No workers found for finished [x] tasks."
+        exit $EXIT_OK
+    }
 elif [ "$TARGET" = "done" ]; then
     echo "Checking PR status for all workers (this may take a moment)..."
     workers_to_clean=$(find_workers_with_merged_prs)
@@ -647,14 +777,14 @@ done
     exit $EXIT_CLEAN_WORKERS_RUNNING
 }
 
-# Confirm and clean
-echo "The following worker directories will be removed:"
+# Confirm and clean workspaces only
+echo "The following worker workspaces will be removed (logs preserved):"
 printf '  %s\n' "${workers_array[@]}"
 echo ""
 
-confirm "Proceed with cleanup?" || {
+confirm "Proceed with workspace cleanup?" || {
     echo "Aborted."
     exit $EXIT_OK
 }
 
-do_clean "${workers_array[@]}"
+do_clean_workspaces "${workers_array[@]}"
