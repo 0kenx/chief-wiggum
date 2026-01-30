@@ -381,7 +381,7 @@ class KanbanColumn(Widget):
     """
 
     def __init__(self, status: TaskStatus, tasks_list: list[Task], header_suffix: str = "") -> None:
-        super().__init__()
+        super().__init__(id=f"col-{status.value}")
         self._status = status
         self._tasks_list = tasks_list
         self._header_suffix = header_suffix
@@ -407,6 +407,48 @@ class KanbanColumn(Widget):
         with VerticalScroll(classes="column-content"):
             for task_item in self._tasks_list:
                 yield TaskCard(task_item)
+
+    def update_tasks(self, tasks: list[Task], header_suffix: str = "") -> None:
+        """Update column tasks in-place, minimizing DOM changes."""
+        old_task_ids = [t.id for t in self._tasks_list]
+        new_task_ids = [t.id for t in tasks]
+
+        self._tasks_list = tasks
+        self._header_suffix = header_suffix
+
+        # Update header text
+        status_name = self._status.value.replace("_", " ").upper()
+        header_class = f"column-header-{self._status.value}"
+        emoji = self.COLUMN_EMOJI.get(self._status, "")
+        suffix = f" [#7f849c]{self._header_suffix}[/]" if self._header_suffix else ""
+        try:
+            header = self.query_one(".column-header", Static)
+            header.update(
+                f"[{header_class}]{emoji} {status_name} ({len(tasks)}){suffix}[/]"
+            )
+        except Exception:
+            pass
+
+        # If same task IDs in same order, update card data in-place (no DOM changes)
+        if old_task_ids == new_task_ids:
+            try:
+                cards = list(self.query(TaskCard))
+                for card, task in zip(cards, tasks):
+                    card._task_data = task
+                    card.refresh()
+            except Exception:
+                pass
+            return
+
+        # Structural change: rebuild cards within the scroll container
+        try:
+            scroll = self.query_one(VerticalScroll)
+            for card in list(scroll.query(TaskCard)):
+                card.remove()
+            for task in tasks:
+                scroll.mount(TaskCard(task))
+        except Exception:
+            pass
 
 
 class KanbanPanel(Widget):
@@ -578,7 +620,7 @@ class KanbanPanel(Widget):
             pass
 
     def refresh_data(self) -> None:
-        """Refresh task data and re-render only if data changed."""
+        """Refresh task data incrementally, only updating changed elements."""
         self._load_tasks()
 
         # Check if data actually changed
@@ -587,12 +629,12 @@ class KanbanPanel(Widget):
             return  # No change, skip refresh
         self._last_data_hash = new_hash
 
-        # Save focused card's task ID before rebuilding
+        # Save focused card's task ID before updating
         focused_task_id = self._get_focused_task_id()
 
         grouped = group_tasks_by_status(self._tasks_list)
 
-        # Update header
+        # Update header counts
         try:
             header = self.query_one(".kanban-header", Static)
             header.update(
@@ -606,24 +648,62 @@ class KanbanPanel(Widget):
         except Exception:
             pass
 
-        # Remove old board and recompose columns
-        try:
-            old_board = self.query_one(".kanban-board", Horizontal)
-            old_board.remove()
-        except Exception:
-            pass
+        if not self._tasks_list:
+            # No tasks — remove board if present
+            try:
+                self.query_one(".kanban-board", Horizontal).remove()
+            except Exception:
+                pass
+            self._restore_focus_by_task_id(focused_task_id)
+            return
 
-        if self._tasks_list:
-            # Sort pending tasks based on current sort mode
-            pending_tasks = self._sort_pending_tasks(grouped[TaskStatus.PENDING])
+        # Prepare sorted task lists
+        pending_tasks = self._sort_pending_tasks(grouped[TaskStatus.PENDING])
+        pa_tasks = sorted(
+            grouped[TaskStatus.PENDING_APPROVAL],
+            key=lambda t: (0 if t.is_running else 1),
+        )
+        pending_header = self._get_pending_column_header()
 
-            # Sort pending approval: running tasks first
-            pa_tasks = sorted(
-                grouped[TaskStatus.PENDING_APPROVAL],
-                key=lambda t: (0 if t.is_running else 1),
-            )
+        # Try incremental column updates (no DOM tear-down)
+        incremental_ok = True
+        column_updates = [
+            (TaskStatus.PENDING, pending_tasks, pending_header),
+            (TaskStatus.IN_PROGRESS, grouped[TaskStatus.IN_PROGRESS], ""),
+            (TaskStatus.PENDING_APPROVAL, pa_tasks, ""),
+            (TaskStatus.COMPLETE, grouped[TaskStatus.COMPLETE], ""),
+        ]
+        for status, tasks, suffix in column_updates:
+            try:
+                col = self.query_one(f"#col-{status.value}", KanbanColumn)
+                col.update_tasks(tasks, suffix)
+            except Exception:
+                incremental_ok = False
+                break
 
-            pending_header = self._get_pending_column_header()
+        if incremental_ok:
+            # Handle FAILED column (may appear or disappear)
+            failed_tasks = grouped[TaskStatus.FAILED]
+            try:
+                failed_col = self.query_one("#col-failed", KanbanColumn)
+                if failed_tasks:
+                    failed_col.update_tasks(failed_tasks)
+                else:
+                    failed_col.remove()
+            except Exception:
+                if failed_tasks:
+                    try:
+                        board = self.query_one(".kanban-board", Horizontal)
+                        board.mount(KanbanColumn(TaskStatus.FAILED, failed_tasks))
+                    except Exception:
+                        incremental_ok = False
+
+        if not incremental_ok:
+            # Fallback: full rebuild (first render after empty state, etc.)
+            try:
+                self.query_one(".kanban-board", Horizontal).remove()
+            except Exception:
+                pass
 
             columns = [
                 KanbanColumn(TaskStatus.PENDING, pending_tasks, header_suffix=pending_header),
@@ -635,8 +715,8 @@ class KanbanPanel(Widget):
                 columns.append(KanbanColumn(TaskStatus.FAILED, grouped[TaskStatus.FAILED]))
 
             self.mount(Horizontal(*columns, classes="kanban-board"))
-            # Restore focus to the previously focused card
-            self._restore_focus_by_task_id(focused_task_id)
+
+        self._restore_focus_by_task_id(focused_task_id)
 
     def _get_pending_column_header(self) -> str:
         """Get header suffix for the pending column showing current sort mode."""
