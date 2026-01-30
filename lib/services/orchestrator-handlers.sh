@@ -226,6 +226,12 @@ svc_orch_init_terminal() {
     echo ""
 
     terminal_header_init "$MAX_WORKERS" "$mode_desc"
+
+    # Run initial scheduler tick and status display so the terminal shows
+    # real data immediately, rather than waiting for the first post-phase cycle
+    scheduler_tick
+    SCHED_SCHEDULING_EVENT=true
+    svc_orch_status_display
 }
 
 # =============================================================================
