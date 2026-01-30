@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# terminal-header.sh - Fixed terminal header for wiggum run
+# terminal-header.sh - htop-style full-screen header for wiggum run
 #
-# Provides a fixed header at the top of the terminal showing current worker
-# status, with log output scrolling in the region below.
+# Provides an htop-style full-screen display with a fixed header at the top
+# showing current worker status, and captured log output scrolling below.
 #
-# Uses ANSI terminal scroll regions to split the terminal into:
+# Uses alternate screen buffer (like htop, vim, less) for clean terminal handling:
 #   - Top zone (fixed header): Compact worker status, refreshed each iteration
-#   - Bottom zone (scroll region): All log()/echo output scrolls naturally
+#   - Bottom zone (log area): Tail of captured log output
+#
+# All stdout/stderr is redirected to a temp buffer file while active.
+# Each refresh composites header + log tail into a single write (no flicker).
 #
 # Disabled (all functions no-op) when:
 #   - stdout is not a TTY
@@ -24,12 +27,13 @@ _TERMINAL_HEADER_LOADED=1
 # =============================================================================
 
 _TH_ENABLED=false
-_TH_HEADER_HEIGHT=0
 _TH_TERM_ROWS=0
 _TH_TERM_COLS=0
 _TH_LAST_CONTENT=""
 _TH_RUN_MODE=""
 _TH_MAX_LINES="${WIGGUM_HEADER_MAX_LINES:-12}"
+_TH_LOG_FILE=""
+_TH_FDS_REDIRECTED=false
 
 # Cached status counts (set by terminal_header_set_status_data)
 _TH_READY_COUNT=0
@@ -45,9 +49,9 @@ _TH_STUCK_COUNT=0
 
 # Initialize the terminal header
 #
-# Detects terminal capabilities, sets scroll region, and prepares for
-# header rendering. No-ops if stdout is not a TTY, TERM is dumb, or
-# WIGGUM_NO_HEADER=1.
+# Enters alternate screen buffer, hides cursor, redirects stdout/stderr
+# to a temp log buffer file. No-ops if stdout is not a TTY, TERM is dumb,
+# or WIGGUM_NO_HEADER=1.
 #
 # Args:
 #   max_workers - Maximum concurrent workers
@@ -74,21 +78,22 @@ terminal_header_init() {
 
     _terminal_header_query_size
 
-    # Initial height: banner + separator (adjusted on first refresh)
-    _TH_HEADER_HEIGHT=2
-    _terminal_header_set_scroll_region
+    # Create temp log buffer file
+    _TH_LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/wiggum-log.XXXXXX")
 
-    # Position cursor at start of scroll region
-    local scroll_top=$((_TH_HEADER_HEIGHT + 1))
-    printf '\033[%d;1H' "$scroll_top" > /dev/tty 2>/dev/null || true
+    # Save original stdout/stderr (fd 3/4) and redirect to log file
+    exec 3>&1 4>&2
+    exec 1>>"$_TH_LOG_FILE" 2>>"$_TH_LOG_FILE"
+    _TH_FDS_REDIRECTED=true
 
-    _terminal_header_clear_header_area
+    # Enter alternate screen buffer and hide cursor
+    printf '\033[?1049h\033[?25l' > /dev/tty 2>/dev/null || true
 }
 
 # Refresh the header with current worker status
 #
-# Rebuilds header content from the worker pool. Skips terminal writes
-# if content is unchanged from the last render.
+# Rebuilds header content from the worker pool and composites a full
+# frame (header + log tail) written to /dev/tty in a single call.
 #
 # Args:
 #   iteration   - Current loop iteration number
@@ -99,29 +104,13 @@ terminal_header_refresh() {
     local iteration="$1"
     local max_workers="$2"
 
+    _terminal_header_query_size
+
     local content
     content=$(_terminal_header_build_content "$iteration" "$max_workers")
-
-    # Skip if unchanged
-    [[ "$content" != "$_TH_LAST_CONTENT" ]] || return 0
     _TH_LAST_CONTENT="$content"
 
-    # Recalculate height from content
-    local new_height
-    new_height=$(printf '%s\n' "$content" | wc -l)
-    new_height=$((new_height))  # trim whitespace from wc
-
-    local old_height=$_TH_HEADER_HEIGHT
-    if [[ "$new_height" -ne "$_TH_HEADER_HEIGHT" ]]; then
-        _TH_HEADER_HEIGHT="$new_height"
-        # DECSC: save cursor before DECSTBM (which resets cursor to home)
-        printf '\0337' > /dev/tty 2>/dev/null || true
-        _terminal_header_set_scroll_region
-        # DECRC: restore cursor to pre-DECSTBM position
-        printf '\0338' > /dev/tty 2>/dev/null || true
-    fi
-
-    _terminal_header_render "$content" "$old_height"
+    _terminal_header_render_frame "$content"
 }
 
 # Force the next refresh to redraw (clear cached content)
@@ -131,17 +120,29 @@ terminal_header_force_redraw() {
 
 # Clean up terminal state
 #
-# Resets scroll region to full terminal and moves cursor to bottom.
-# Safe to call multiple times.
+# Restores stdout/stderr, shows cursor, exits alternate screen buffer,
+# and prints the last 20 lines of captured log output to the restored
+# terminal. Safe to call multiple times.
 terminal_header_cleanup() {
     [[ "$_TH_ENABLED" == true ]] || return 0
     _TH_ENABLED=false
 
-    # Reset scroll region to full terminal
-    printf '\033[r' > /dev/tty 2>/dev/null || true
+    # Restore stdout/stderr before any other output
+    if [[ "$_TH_FDS_REDIRECTED" == true ]]; then
+        exec 1>&3 2>&4
+        exec 3>&- 4>&-
+        _TH_FDS_REDIRECTED=false
+    fi
 
-    # Move cursor to bottom of terminal
-    printf '\033[%d;1H\n' "$_TH_TERM_ROWS" > /dev/tty 2>/dev/null || true
+    # Show cursor and exit alternate screen buffer
+    printf '\033[?25h\033[?1049l' > /dev/tty 2>/dev/null || true
+
+    # Print last 20 log lines to the restored terminal
+    if [[ -n "$_TH_LOG_FILE" ]] && [[ -f "$_TH_LOG_FILE" ]]; then
+        tail -n 20 "$_TH_LOG_FILE" 2>/dev/null || true
+        rm -f "$_TH_LOG_FILE" 2>/dev/null || true
+        _TH_LOG_FILE=""
+    fi
 }
 
 # Check if header mode is active
@@ -176,16 +177,11 @@ terminal_header_set_status_data() {
 # SIGWINCH Handler
 # =============================================================================
 
-# Handle terminal resize - re-query size, reset scroll region, force redraw
+# Handle terminal resize - re-query size, force redraw on next refresh
 _terminal_header_on_resize() {
     [[ "$_TH_ENABLED" == true ]] || return 0
 
     _terminal_header_query_size
-    # DECSC: save cursor before DECSTBM (which resets cursor to home)
-    printf '\0337' > /dev/tty 2>/dev/null || true
-    _terminal_header_set_scroll_region
-    # DECRC: restore cursor
-    printf '\0338' > /dev/tty 2>/dev/null || true
     _TH_LAST_CONTENT=""
 }
 
@@ -193,43 +189,69 @@ _terminal_header_on_resize() {
 # Internal Helpers
 # =============================================================================
 
-# Query terminal dimensions
+# Query terminal dimensions via /dev/tty (works with redirected stdout)
 _terminal_header_query_size() {
-    _TH_TERM_ROWS=$(tput lines 2>/dev/null || echo 24)
-    _TH_TERM_COLS=$(tput cols 2>/dev/null || echo 80)
+    local size
+    if size=$(stty size < /dev/tty 2>/dev/null); then
+        _TH_TERM_ROWS="${size%% *}"
+        _TH_TERM_COLS="${size##* }"
+    else
+        _TH_TERM_ROWS=${_TH_TERM_ROWS:-24}
+        _TH_TERM_COLS=${_TH_TERM_COLS:-80}
+    fi
 }
 
-# Set the scroll region below the header
+# Render full screen: header content + tail of log buffer
 #
-# Only sets DECSTBM (scroll margins). Does NOT reposition the cursor.
-# Callers are responsible for cursor placement after calling this.
+# Builds the entire frame in a variable and writes it to /dev/tty in
+# a single printf call, eliminating flicker.
 #
-# Note: DECSTBM moves cursor to home (1,1) per VT100 spec.
-_terminal_header_set_scroll_region() {
-    local scroll_top=$((_TH_HEADER_HEIGHT + 1))
+# Args:
+#   content - Multi-line header content string
+_terminal_header_render_frame() {
+    local content="$1"
 
-    # Ensure scroll region has at least 2 usable rows
-    if [[ "$scroll_top" -ge "$((_TH_TERM_ROWS - 1))" ]]; then
-        scroll_top=$((_TH_TERM_ROWS - 2))
-        [[ "$scroll_top" -ge 2 ]] || scroll_top=2
+    # Count header lines
+    local header_lines
+    header_lines=$(printf '%s\n' "$content" | wc -l)
+    header_lines=$((header_lines))  # trim whitespace from wc
+
+    # Calculate log area rows
+    local log_rows=$((_TH_TERM_ROWS - header_lines))
+    [[ "$log_rows" -ge 0 ]] || log_rows=0
+
+    # Collect all frame lines into an array
+    local -a frame_lines=()
+
+    # Header lines
+    while IFS= read -r line; do
+        frame_lines+=("$line")
+    done <<< "$content"
+
+    # Log lines from buffer tail
+    if [[ "$log_rows" -gt 0 ]] && [[ -n "$_TH_LOG_FILE" ]] && [[ -f "$_TH_LOG_FILE" ]]; then
+        local -a log_lines=()
+        mapfile -t log_lines < <(tail -n "$log_rows" "$_TH_LOG_FILE" 2>/dev/null || true)
+
+        local i
+        for ((i = 0; i < log_rows; i++)); do
+            frame_lines+=("${log_lines[$i]:-}")
+        done
     fi
 
-    # DECSTBM: set scroll region (moves cursor to home per VT100 spec)
-    printf '\033[%d;%dr' "$scroll_top" "$_TH_TERM_ROWS" > /dev/tty 2>/dev/null || true
-}
-
-# Clear all lines in the header area
-_terminal_header_clear_header_area() {
-    # DECSC: save cursor
-    printf '\0337' > /dev/tty 2>/dev/null || true
-
-    local i
-    for ((i = 1; i <= _TH_HEADER_HEIGHT; i++)); do
-        printf '\033[%d;1H\033[2K' "$i" > /dev/tty 2>/dev/null || true
+    # Build frame: home cursor + hide cursor + lines with clear-to-EOL
+    local frame=$'\033[H\033[?25l'
+    local total=${#frame_lines[@]}
+    local j
+    for ((j = 0; j < total; j++)); do
+        frame+="${frame_lines[$j]}"$'\033[K'
+        if ((j < total - 1)); then
+            frame+=$'\n'
+        fi
     done
 
-    # DECRC: restore cursor
-    printf '\0338' > /dev/tty 2>/dev/null || true
+    # Single write of entire frame to terminal
+    printf '%s' "$frame" > /dev/tty 2>/dev/null || true
 }
 
 # Callback for pool_foreach - collects worker entries into _th_entries array
@@ -349,38 +371,4 @@ _terminal_header_build_content() {
     printf -v separator '%*s' "$_TH_TERM_COLS" ''
     separator="${separator// /─}"
     echo "$separator"
-}
-
-# Render content into the header area
-#
-# Saves cursor position, writes header lines, clears leftover lines
-# from a previously taller header, then restores cursor position.
-#
-# Args:
-#   content    - Multi-line header content string
-#   old_height - Previous header height (for clearing stale rows)
-_terminal_header_render() {
-    local content="$1"
-    local old_height="${2:-$_TH_HEADER_HEIGHT}"
-
-    # DECSC: save cursor position (more reliable with scroll regions than SCP)
-    printf '\0337' > /dev/tty 2>/dev/null || true
-
-    # Write each header line
-    local line_num=1
-    while IFS= read -r line; do
-        printf '\033[%d;1H\033[2K%s' "$line_num" "$line" > /dev/tty 2>/dev/null || true
-        ((++line_num)) || true
-    done <<< "$content"
-
-    # Clear leftover lines from previously taller header
-    local clear_to=$_TH_HEADER_HEIGHT
-    [[ "$old_height" -gt "$clear_to" ]] && clear_to="$old_height"
-    while [[ "$line_num" -le "$clear_to" ]]; do
-        printf '\033[%d;1H\033[2K' "$line_num" > /dev/tty 2>/dev/null || true
-        ((++line_num)) || true
-    done
-
-    # DECRC: restore cursor position (back to scroll region)
-    printf '\0338' > /dev/tty 2>/dev/null || true
 }
