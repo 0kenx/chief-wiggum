@@ -81,9 +81,24 @@ resolve_worker_id() {
             return 0
             ;;
         *)
+            # If multiple match, try narrowing to only running workers
+            local running_matches=()
+            for m in "${matches[@]}"; do
+                if is_worker_running "$m"; then
+                    running_matches+=("$m")
+                fi
+            done
+
+            if [[ ${#running_matches[@]} -eq 1 ]]; then
+                echo "${running_matches[0]}"
+                return 0
+            fi
+
             echo "Error: Multiple workers match '$partial':" >&2
             for m in "${matches[@]}"; do
-                echo "  - $(basename "$m")" >&2
+                local status="stopped"
+                is_worker_running "$m" && status="running"
+                echo "  - $(basename "$m") ($status)" >&2
             done
             echo "Please be more specific." >&2
             return 1
