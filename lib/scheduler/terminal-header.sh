@@ -86,6 +86,9 @@ terminal_header_init() {
     exec 1>>"$_TH_LOG_FILE" 2>>"$_TH_LOG_FILE"
     _TH_FDS_REDIRECTED=true
 
+    # Disable keyboard echo so arrow keys / scroll don't print ^[[A/^[[B
+    stty -echo < /dev/tty 2>/dev/null || true
+
     # Enter alternate screen buffer and hide cursor
     printf '\033[?1049h\033[?25l' > /dev/tty 2>/dev/null || true
 }
@@ -136,6 +139,9 @@ terminal_header_cleanup() {
 
     # Show cursor and exit alternate screen buffer
     printf '\033[?25h\033[?1049l' > /dev/tty 2>/dev/null || true
+
+    # Restore keyboard echo
+    stty echo < /dev/tty 2>/dev/null || true
 
     # Print last 20 log lines to the restored terminal
     if [[ -n "$_TH_LOG_FILE" ]] && [[ -f "$_TH_LOG_FILE" ]]; then

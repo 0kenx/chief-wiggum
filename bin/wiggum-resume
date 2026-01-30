@@ -407,9 +407,9 @@ do_resume() {
         fi
 
         _log_ts "INFO: Running agent system.task-worker"
+        _exit_code=0
         run_agent "system.task-worker" "$_WORKER_DIR" "$_WORKER_PROJECT_DIR" 30 "$_WORKER_MAX_ITERATIONS" "$_WORKER_MAX_TURNS" \
-            "$_WORKER_RESUME_STEP" "$_WORKER_RESUME_INSTRUCTIONS"
-        local _exit_code=$?
+            "$_WORKER_RESUME_STEP" "$_WORKER_RESUME_INSTRUCTIONS" || _exit_code=$?
         if [ $_exit_code -ne 0 ]; then
             _log_ts "ERROR: run_agent failed with exit code $_exit_code"
             exit 1

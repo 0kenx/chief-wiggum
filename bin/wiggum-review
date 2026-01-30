@@ -545,8 +545,8 @@ cmd_task_fix() {
         fi
 
         _log_ts "INFO: Running agent '"$agent_type"'"
-        run_agent "'"$agent_type"'" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
-        local _exit_code=$?
+        _exit_code=0
+        run_agent "'"$agent_type"'" "'"$worker_dir"'" "'"$PROJECT_DIR"'" || _exit_code=$?
         if [ $_exit_code -ne 0 ]; then
             _log_ts "ERROR: run_agent failed with exit code $_exit_code"
             exit 1

@@ -308,6 +308,28 @@ local exit_code=0
 wait "$pid" 2>/dev/null || exit_code=$?
 ```
 
+### `bash -c` Subprocesses and `local`
+- **Never use `local` at the top level of a `bash -c` or `setsid bash -c` block** — `local` is only valid inside bash functions. At the top level of a `bash -c` subprocess it causes `bash: local: can only be used in a function`, which under `set -e` kills the subprocess.
+- Also apply the `|| exit_code=$?` guard pattern (above) inside `bash -c` blocks — bare commands with non-zero exits are fatal under `set -e` before the next line can capture `$?`.
+
+```bash
+# BAD - local at top level of bash -c, bare command under set -e
+setsid bash -c '
+    set -euo pipefail
+    some_command "$@"
+    local exit_code=$?         # BREAKS: "local: can only be used in a function"
+    echo "exit: $exit_code"    # Never reached
+' ...
+
+# GOOD - plain variable, || guard
+setsid bash -c '
+    set -euo pipefail
+    exit_code=0
+    some_command "$@" || exit_code=$?
+    echo "exit: $exit_code"
+' ...
+```
+
 ### Platform Compatibility
 - Code must work on both Linux and macOS — use `lib/core/platform.sh` for OS-specific operations (e.g., `stat`, `date`, `sed -i`)
 - Never use GNU-only flags directly; call the platform abstraction instead
