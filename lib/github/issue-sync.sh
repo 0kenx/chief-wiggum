@@ -658,10 +658,20 @@ _build_issue_body() {
 # Returns: label name on stdout (e.g., "priority:high"), or empty
 _get_priority_label() {
     local priority="$1"
+    local mapping="${GITHUB_SYNC_PRIORITY_LABELS:-}"
 
-    echo "$GITHUB_SYNC_PRIORITY_LABELS" | \
+    # Guard: need a non-trivial JSON object
+    [[ -n "$mapping" && "$mapping" != "{}" ]] || return 0
+
+    local result
+    result=$(echo "$mapping" | \
         jq -r --arg pri "$priority" \
-        'to_entries[] | select(.value == $pri) | .key // empty' 2>/dev/null || true
+        'to_entries[] | select(.value == $pri) | .key' 2>/dev/null) || true
+
+    # Only output valid label names (must contain a letter)
+    if [[ -n "$result" && "$result" =~ [a-zA-Z] ]]; then
+        echo "$result"
+    fi
 }
 
 # Create GitHub issues for untracked kanban tasks and sync them

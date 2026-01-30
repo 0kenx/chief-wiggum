@@ -169,7 +169,9 @@ github_issue_create() {
     label_args+=(--label "${GITHUB_SYNC_LABEL_FILTER:-wiggum}")
     local label
     for label in "${labels[@]}"; do
-        [ -n "$label" ] && label_args+=(--label "$label")
+        # Skip empty, JSON artifacts, or whitespace-only labels
+        [[ -n "$label" && "$label" != "{}" && "$label" != "null" && "$label" =~ [a-zA-Z] ]] && \
+            label_args+=(--label "$label")
     done
 
     local result stderr_file exit_code=0
