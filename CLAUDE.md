@@ -45,7 +45,9 @@ WIGGUM_LOG_LEVEL=debug wiggum run           # Verbose logging
 |-----------|---------|
 | `bin/` | CLI entry points (15 command scripts) |
 | `lib/core/` | Shared utilities (logger, exit codes, file locking, preflight) |
-| `lib/claude/` | Claude Code invocation patterns |
+| `lib/runtime/` | Backend-agnostic runtime abstraction (execution, retry, loop) |
+| `lib/backend/` | Backend implementations (claude, opencode) |
+| `lib/claude/` | DEPRECATED: backward-compat shims → `lib/runtime/` |
 | `lib/agents/` | Agent implementations (system, engineering, product) |
 | `lib/pipeline/` | Pipeline engine (loader, runner - state machine) |
 | `lib/worker/` | Worker lifecycle management |
@@ -58,12 +60,22 @@ WIGGUM_LOG_LEVEL=debug wiggum run           # Verbose logging
 | `skills/` | Claude Code skill definitions |
 | `tui/` | Python Textual-based monitoring UI |
 
-### Claude Invocation Patterns (`lib/claude/`)
+### Runtime Abstraction (`lib/runtime/`)
 
-1. **run-claude-once.sh** - Single-shot execution, no session continuity
-2. **run-claude-ralph-loop.sh** - Unified iterative loop with optional supervision
+Backend-agnostic execution layer. See `docs/RUNTIME-SCHEMA.md` for the full specification.
+
+1. **runtime.sh** - Backend loader + public API (`run_agent_once`, `run_agent_resume`)
+2. **runtime-loop.sh** - Iterative loop with optional supervision (`run_ralph_loop`)
    - `supervisor_interval=0` (default): Pure iterative loop with summaries
    - `supervisor_interval=N`: Supervisor reviews every N iterations (CONTINUE/STOP/RESTART)
+3. **runtime-retry.sh** - Exponential backoff retry (`runtime_exec_with_retry`)
+4. **backend-interface.sh** - Contract for backend implementations
+
+**Backends** (`lib/backend/`):
+- `claude/claude-backend.sh` - Claude Code CLI backend (default)
+- `opencode/opencode-backend.sh` - OpenCode skeleton (stub)
+
+**Backend selection** (priority): `WIGGUM_RUNTIME_BACKEND` env → `.ralph/config.json` → `config/config.json` → `"claude"`
 
 ### Pipeline Engine
 
@@ -182,6 +194,7 @@ assert_file_exists "/path"
 | `docs/AGENT_DEV_GUIDE.md` | Writing custom agents, lifecycle hooks |
 | `docs/PROTOCOL.md` | Inter-agent communication, data passing mechanisms |
 | `docs/AUDIT_LOG.md` | Security audit trail format and events |
+| `docs/RUNTIME-SCHEMA.md` | Runtime abstraction, backend interface, execution patterns |
 
 ## Spec-Driven Development
 
@@ -204,6 +217,7 @@ Chief Wiggum follows spec-driven development: specifications define behavior bef
 | `docs/AGENT_DEV_GUIDE.md` | Agent interfaces | `agent_run()` signature, lifecycle hooks |
 | `docs/PROTOCOL.md` | Inter-component communication | File formats, event schemas |
 | `docs/SERVICES.md` | Service definitions | `wiggum run` schedular managed services |
+| `docs/RUNTIME-SCHEMA.md` | Runtime abstraction | Backend interface, execution patterns |
 | `config/agents.json` | Agent configuration | Iteration limits, result mappings |
 
 ### When Writing New Code

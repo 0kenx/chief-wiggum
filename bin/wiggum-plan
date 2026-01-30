@@ -15,7 +15,8 @@ source "$WIGGUM_HOME/lib/core/verbose-flags.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
-source "$WIGGUM_HOME/lib/claude/usage-tracker.sh"
+source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 
 # Recompute usage at startup (ensures rate limit checks use fresh data)
 if [ -d "$RALPH_DIR" ]; then

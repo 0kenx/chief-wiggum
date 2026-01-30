@@ -17,7 +17,8 @@ source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
-source "$WIGGUM_HOME/lib/claude/usage-tracker.sh"
+source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
 
 # Default configuration

@@ -84,7 +84,8 @@ agent_source_core() {
 # Source ralph loop (unified execution pattern with optional supervision)
 # Supervision is enabled by passing supervisor_interval > 0 to run_ralph_loop
 agent_source_ralph() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 }
 
 # Alias for backward compatibility - sources the same unified ralph loop
@@ -95,7 +96,7 @@ agent_source_ralph_supervised() {
 
 # Source one-shot agent execution (no iteration loop)
 agent_source_once() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-once.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 }
 
 # Source git operations
@@ -127,7 +128,7 @@ agent_source_lock() {
 
 # Source resume capabilities
 agent_source_resume() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-resume.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 }
 
 # =============================================================================

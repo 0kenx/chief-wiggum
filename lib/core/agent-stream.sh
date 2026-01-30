@@ -116,8 +116,8 @@ RESPOND ONLY WITH THE RESULT TAG. NO OTHER OUTPUT."
     backup_log="$worker_dir/logs/$run_id/${log_prefix}-backup-$(date +%s).log"
     mkdir -p "$(dirname "$backup_log")"
 
-    # Source resume capabilities if not already loaded
-    source "$WIGGUM_HOME/lib/claude/run-claude-resume.sh"
+    # Source runtime (provides resume capabilities)
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 
     # Attempt to resume session with focused prompt (max 7 turns to allow completion)
     if ! run_agent_resume "$session_id" "$prompt" "$backup_log" 7 2>/dev/null; then

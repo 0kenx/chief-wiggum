@@ -16,7 +16,8 @@ source "$WIGGUM_HOME/lib/git/pr-comments.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
-source "$WIGGUM_HOME/lib/claude/usage-tracker.sh"
+source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 
 # Recompute usage at startup (ensures rate limit checks use fresh data)
 if [ -d "$RALPH_DIR" ]; then

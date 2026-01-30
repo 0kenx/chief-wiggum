@@ -1033,8 +1033,9 @@ _md_run_ralph_loop() {
     log_debug "_md_run_ralph_loop: starting for worker_dir=$worker_dir"
 
     # Source ralph loop
-    log_debug "_md_run_ralph_loop: sourcing run-claude-ralph-loop.sh"
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    log_debug "_md_run_ralph_loop: sourcing runtime"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     # Get config values
     local agent_name_upper
@@ -1083,8 +1084,8 @@ _md_run_ralph_loop() {
 _md_run_once() {
     local worker_dir="$1"
 
-    # Source once execution
-    source "$WIGGUM_HOME/lib/claude/run-claude-once.sh"
+    # Source runtime
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 
     # Get config values
     local agent_name_upper
@@ -1119,8 +1120,8 @@ _md_run_once() {
 _md_run_resume() {
     local worker_dir="$1"
 
-    # Source resume execution
-    source "$WIGGUM_HOME/lib/claude/run-claude-resume.sh"
+    # Source runtime
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 
     # Get config values
     local agent_name_upper
@@ -1192,9 +1193,8 @@ _md_run_resume() {
 _md_run_live() {
     local worker_dir="$1"
 
-    # Source both once and resume execution
-    source "$WIGGUM_HOME/lib/claude/run-claude-once.sh"
-    source "$WIGGUM_HOME/lib/claude/run-claude-resume.sh"
+    # Source runtime (provides both once and resume)
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 
     # Get config values
     local agent_name_upper

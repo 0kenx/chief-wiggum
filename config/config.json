@@ -29,6 +29,18 @@
     "threshold_prompts": 22000,
     "threshold_boundary": 1769349244
   },
+  "runtime": {
+    "backend": "claude",
+    "backends": {
+      "claude": {
+        "binary": "claude",
+        "max_retries": 3,
+        "initial_backoff": 5,
+        "max_backoff": 60,
+        "backoff_multiplier": 2
+      }
+    }
+  },
   "review": {
     "approved_authors": ["copilot", "dependabot", "github-actions[bot]", "dependabot[bot]", "renovate[bot]", "codecov[bot]"],
     "fix_max_iterations": 10,
