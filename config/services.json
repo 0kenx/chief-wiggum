@@ -304,7 +304,7 @@
       "id": "task-spawner",
       "description": "Spawn workers for ready tasks",
       "phase": "post",
-      "order": 40,
+      "order": 45,
       "schedule": { "type": "tick" },
       "execution": {
         "type": "function",
@@ -351,7 +351,7 @@
       "id": "status-display",
       "description": "Update terminal header with current status",
       "phase": "post",
-      "order": 80,
+      "order": 35,
       "schedule": { "type": "tick" },
       "execution": {
         "type": "function",

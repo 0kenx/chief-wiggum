@@ -156,6 +156,9 @@ scheduler_restore_workers() {
 scheduler_tick() {
     SCHED_SCHEDULING_EVENT=false
 
+    local prev_ready="$SCHED_READY_TASKS"
+    local prev_blocked="$SCHED_BLOCKED_TASKS"
+
     # Get tasks ready to run (pending with satisfied dependencies, sorted by priority)
     SCHED_READY_TASKS=$(get_ready_tasks \
         "$_SCHED_RALPH_DIR/kanban.md" \
@@ -168,6 +171,11 @@ scheduler_tick() {
 
     SCHED_BLOCKED_TASKS=$(get_blocked_tasks "$_SCHED_RALPH_DIR/kanban.md")
     SCHED_PENDING_TASKS=$(get_todo_tasks "$_SCHED_RALPH_DIR/kanban.md")
+
+    # Mark scheduling event when task lists change (ensures first-tick display)
+    if [ "$SCHED_READY_TASKS" != "$prev_ready" ] || [ "$SCHED_BLOCKED_TASKS" != "$prev_blocked" ]; then
+        SCHED_SCHEDULING_EVENT=true
+    fi
 }
 
 # Check if a task can be spawned
