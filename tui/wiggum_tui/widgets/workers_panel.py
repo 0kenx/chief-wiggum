@@ -92,7 +92,14 @@ class WorkersPanel(Widget):
 
     def _compute_data_hash(self, workers: list[Worker]) -> str:
         """Compute a hash of worker data for change detection."""
-        data = [(w.id, w.task_id, w.status.value, w.pid, w.pr_url) for w in workers]
+        data = [
+            (
+                w.id, w.task_id, w.status.value, w.pid, w.pr_url,
+                (w.pipeline_info.pipeline_name, w.pipeline_info.step_id, w.pipeline_info.agent)
+                if w.pipeline_info else None,
+            )
+            for w in workers
+        ]
         return str(data)
 
     def compose(self) -> ComposeResult:
@@ -126,7 +133,7 @@ class WorkersPanel(Widget):
             return
         try:
             table = self.query_one("#workers-table", DataTable)
-            table.add_columns("Status", "Worker ID", "Task", "PID", "Duration", "PR URL")
+            table.add_columns("Status", "Worker ID", "Task", "PID", "Pipeline", "Step", "Agent", "Duration", "PR URL")
             self._populate_table(table)
         except Exception as e:
             self.log.error(f"Failed to populate workers table: {e}")
@@ -175,11 +182,20 @@ class WorkersPanel(Widget):
             if len(pr_url) > 30:
                 pr_url = pr_url[:27] + "..."
 
+            # Pipeline info columns
+            pi = worker.pipeline_info
+            pipeline_name = pi.pipeline_name if pi else ""
+            step_id = pi.step_id if pi else ""
+            agent_short = pi.agent_short if pi else ""
+
             table.add_row(
                 status_text,
                 worker_id,
                 worker.task_id,
                 pid_str,
+                pipeline_name,
+                step_id,
+                agent_short,
                 duration,
                 pr_url,
                 key=worker.id,

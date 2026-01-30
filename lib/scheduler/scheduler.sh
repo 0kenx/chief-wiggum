@@ -312,9 +312,14 @@ scheduler_remove_from_aging() {
 #
 # Returns: 0 if complete (no pending tasks, no workers, no pending fixes), 1 otherwise
 scheduler_is_complete() {
+    local run_mode="${WIGGUM_RUN_MODE:-default}"
+
     # Check for pending tasks ([ ] status)
-    if [ -n "$SCHED_PENDING_TASKS" ]; then
-        return 1
+    # In fix-only/merge-only modes, don't wait for pending tasks - we're not processing them
+    if [[ "$run_mode" == "default" ]]; then
+        if [ -n "$SCHED_PENDING_TASKS" ]; then
+            return 1
+        fi
     fi
 
     # Check for running workers
@@ -325,9 +330,12 @@ scheduler_is_complete() {
     fi
 
     # Check for tasks needing fixes (populated by PR optimization)
-    local tasks_needing_fix="$_SCHED_RALPH_DIR/.tasks-needing-fix.txt"
-    if [ -s "$tasks_needing_fix" ]; then
-        return 1
+    # In merge-only mode, skip this check - we're not fixing tasks
+    if [[ "$run_mode" != "merge-only" ]]; then
+        local tasks_needing_fix="$_SCHED_RALPH_DIR/.tasks-needing-fix.txt"
+        if [ -s "$tasks_needing_fix" ]; then
+            return 1
+        fi
     fi
 
     # Check for workers in needs_fix or needs_resolve state
@@ -340,7 +348,12 @@ scheduler_is_complete() {
             local git_state
             git_state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null)
             case "$git_state" in
-                needs_fix|needs_resolve|needs_multi_resolve|fixing|resolving)
+                needs_fix|fixing)
+                    # In merge-only mode, don't wait for fix tasks
+                    [[ "$run_mode" == "merge-only" ]] && continue
+                    return 1
+                    ;;
+                needs_resolve|needs_multi_resolve|resolving)
                     return 1
                     ;;
             esac

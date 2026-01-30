@@ -52,6 +52,7 @@ AGING_FACTOR=7         # Scheduling events per priority level promotion
 SIBLING_WIP_PENALTY=20000  # Fixed-point penalty when sibling is WIP (20000 = 2.0)
 PLAN_BONUS=15000           # Fixed-point bonus for tasks with plans (15000 = 1.5)
 DEP_BONUS_PER_TASK=7000    # Fixed-point bonus per task blocked (7000 = 0.7)
+WIGGUM_RUN_MODE="default"  # default | fix-only | merge-only
 
 show_help() {
     cat << EOF
@@ -63,6 +64,10 @@ Modes:
   (default)            Use system.task-worker agent (standard execution)
   plan                 Use system.task-worker agent with plan mode enabled (creates
                        implementation plan before execution)
+  --fix-only           Skip spawning new workers. Only fix existing PRs (review
+                       comments, test failures) and merge them
+  --merge-only         Skip new workers AND fix workers. Only merge PRs that are
+                       ready and resolve merge conflicts
 
 Options:
   --max-workers N      Maximum concurrent workers (default: 4)
@@ -83,6 +88,8 @@ Examples:
   wiggum run --max-workers 8              # Start with max 8 workers
   wiggum run plan --max-workers 2         # Planning mode with 2 workers
   wiggum run --pipeline fast              # Use the fast pipeline
+  wiggum run --fix-only                   # Only fix and merge existing PRs
+  wiggum run --merge-only                 # Only merge ready PRs
 
 Behavior:
   - Chief assigns pending tasks [ ] to workers based on dependency graph
@@ -576,6 +583,16 @@ _schedule_resume_workers() {
     while read -r worker_dir task_id current_step worker_type; do
         [ -n "$worker_dir" ] || continue
 
+        # Skip workers not applicable to the current run mode
+        if [[ "$WIGGUM_RUN_MODE" != "default" && "$worker_type" != "fix" && "$worker_type" != "resolve" ]]; then
+            log_debug "Skipping resume of main worker $task_id ($WIGGUM_RUN_MODE mode)"
+            continue
+        fi
+        if [[ "$WIGGUM_RUN_MODE" == "merge-only" && "$worker_type" == "fix" ]]; then
+            log_debug "Skipping resume of fix worker $task_id (merge-only mode)"
+            continue
+        fi
+
         # Check capacity based on worker type
         if [[ "$worker_type" == "fix" || "$worker_type" == "resolve" ]]; then
             local fix_count resolve_count total_priority
@@ -820,6 +837,18 @@ _main_loop() {
         service_load_override "$RALPH_DIR/services.json" 2>/dev/null || true
     fi
 
+    # Apply run-mode service restrictions
+    if [[ "$WIGGUM_RUN_MODE" == "merge-only" ]]; then
+        _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
+            .services |= map(
+                if .id == "fix-workers" or .id == "multi-pr-planner"
+                then .enabled = false
+                else . end)')
+        log "Merge-only mode: disabled fix-workers, multi-pr-planner services"
+    elif [[ "$WIGGUM_RUN_MODE" == "fix-only" ]]; then
+        log "Fix-only mode: task spawning disabled"
+    fi
+
     # Initialize service state (persists across restarts)
     service_state_init "$RALPH_DIR"
     service_state_restore 2>/dev/null || true
@@ -876,76 +905,78 @@ _main_loop() {
         # The task-spawner service is disabled/no-op because services run in subshells.
         scheduler_tick
 
-        # Debug: show ready tasks (only when there are some)
-        if [ -n "$SCHED_READY_TASKS" ]; then
-            log_debug "Ready tasks: $SCHED_READY_TASKS"
-        fi
-
-        # Spawn workers for ready tasks (directly in main process, not via service)
-        for task_id in $SCHED_READY_TASKS; do
-            # Check if we can spawn this task
-            if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
-                case "$SCHED_SKIP_REASON" in
-                    at_capacity) break ;;  # Stop trying when at capacity
-                    file_conflict)
-                        # Build conflict info for logging
-                        local -A _temp_workers=()
-                        _build_workers() {
-                            local pid="$1" type="$2" tid="$3"
-                            [ "$type" = "main" ] && _temp_workers[$pid]="$tid"
-                        }
-                        pool_foreach "main" _build_workers
-                        local conflicts
-                        conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
-                        log "Deferring $task_id - file conflict: $conflicts"
-                        ;;
-                    *) ;;  # Skip silently for cyclic_dependency, skip_count
-                esac
-                continue
+        if [[ "$WIGGUM_RUN_MODE" == "default" ]]; then
+            # Debug: show ready tasks (only when there are some)
+            if [ -n "$SCHED_READY_TASKS" ]; then
+                log_debug "Ready tasks: $SCHED_READY_TASKS"
             fi
 
-            # Run pre-worker checks (git pull, conflict detection)
-            if ! pre_worker_checks; then
-                log_error "Pre-worker checks failed for $task_id - skipping this task"
-                continue
-            fi
-
-            # Get task priority for logging
-            local task_priority
-            task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
-
-            # Mark task as in-progress in kanban
-            log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
-            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
-                log_error "Failed to mark $task_id as in-progress"
-                scheduler_increment_skip "$task_id"
-                local skip_count
-                skip_count=$(scheduler_get_skip_count "$task_id")
-                log "Task $task_id skip count: $skip_count/$MAX_SKIP_RETRIES"
-                if [ "$skip_count" -ge "$MAX_SKIP_RETRIES" ]; then
-                    log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive kanban failures"
+            # Spawn workers for ready tasks (directly in main process, not via service)
+            for task_id in $SCHED_READY_TASKS; do
+                # Check if we can spawn this task
+                if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
+                    case "$SCHED_SKIP_REASON" in
+                        at_capacity) break ;;  # Stop trying when at capacity
+                        file_conflict)
+                            # Build conflict info for logging
+                            local -A _temp_workers=()
+                            _build_workers() {
+                                local pid="$1" type="$2" tid="$3"
+                                [ "$type" = "main" ] && _temp_workers[$pid]="$tid"
+                            }
+                            pool_foreach "main" _build_workers
+                            local conflicts
+                            conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
+                            log "Deferring $task_id - file conflict: $conflicts"
+                            ;;
+                        *) ;;  # Skip silently for cyclic_dependency, skip_count
+                    esac
+                    continue
                 fi
-                continue
-            fi
 
-            # Spawn worker (wiggum-start handles backgrounding)
-            if ! spawn_worker "$task_id"; then
-                log_error "Failed to spawn worker for $task_id"
-                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
-                continue
-            fi
+                # Run pre-worker checks (git pull, conflict detection)
+                if ! pre_worker_checks; then
+                    log_error "Pre-worker checks failed for $task_id - skipping this task"
+                    continue
+                fi
 
-            pool_add "$SPAWNED_WORKER_PID" "main" "$task_id"
-            scheduler_mark_event
+                # Get task priority for logging
+                local task_priority
+                task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
 
-            # Remove from ready-since tracking (task is no longer waiting)
-            scheduler_remove_from_aging "$task_id"
+                # Mark task as in-progress in kanban
+                log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
+                if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
+                    log_error "Failed to mark $task_id as in-progress"
+                    scheduler_increment_skip "$task_id"
+                    local skip_count
+                    skip_count=$(scheduler_get_skip_count "$task_id")
+                    log "Task $task_id skip count: $skip_count/$MAX_SKIP_RETRIES"
+                    if [ "$skip_count" -ge "$MAX_SKIP_RETRIES" ]; then
+                        log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive kanban failures"
+                    fi
+                    continue
+                fi
 
-            # Log task assignment to audit log
-            audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
+                # Spawn worker (wiggum-start handles backgrounding)
+                if ! spawn_worker "$task_id"; then
+                    log_error "Failed to spawn worker for $task_id"
+                    update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
+                    continue
+                fi
 
-            log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
-        done
+                pool_add "$SPAWNED_WORKER_PID" "main" "$task_id"
+                scheduler_mark_event
+
+                # Remove from ready-since tracking (task is no longer waiting)
+                scheduler_remove_from_aging "$task_id"
+
+                # Log task assignment to audit log
+                audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
+
+                log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
+            done
+        fi
 
         # Periodically decay skip counts (every ~3 minutes at 1s sleep)
         if (( iteration % 180 == 0 )); then
@@ -996,6 +1027,14 @@ main() {
         case "$1" in
             plan)
                 export WIGGUM_PLAN_MODE=true
+                shift
+                ;;
+            --fix-only)
+                WIGGUM_RUN_MODE="fix-only"
+                shift
+                ;;
+            --merge-only)
+                WIGGUM_RUN_MODE="merge-only"
                 shift
                 ;;
             --max-workers)
@@ -1060,6 +1099,12 @@ main() {
                 ;;
         esac
     done
+
+    # Validate mutually exclusive options
+    if [[ "$WIGGUM_RUN_MODE" != "default" && "${WIGGUM_PLAN_MODE:-false}" == "true" ]]; then
+        echo "Error: --${WIGGUM_RUN_MODE} cannot be combined with plan mode"
+        exit $EXIT_USAGE
+    fi
 
     # Initialize project if needed
     if [ ! -d "$RALPH_DIR" ]; then
@@ -1246,7 +1291,11 @@ main() {
     fi
 
     local mode_desc="standard"
-    if [ "${WIGGUM_PLAN_MODE:-false}" = "true" ]; then
+    if [[ "$WIGGUM_RUN_MODE" == "fix-only" ]]; then
+        mode_desc="fix-only"
+    elif [[ "$WIGGUM_RUN_MODE" == "merge-only" ]]; then
+        mode_desc="merge-only"
+    elif [ "${WIGGUM_PLAN_MODE:-false}" = "true" ]; then
         mode_desc="plan mode"
     fi
     if [ -n "${WIGGUM_PIPELINE:-}" ]; then

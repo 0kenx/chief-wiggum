@@ -161,7 +161,7 @@ def parse_kanban_with_status(
     ralph_dir: Path,
     worker_service: WorkerStatusService | None = None,
 ) -> list[Task]:
-    """Parse kanban.md and enrich in-progress tasks with running status.
+    """Parse kanban.md and enrich in-progress/pending-approval tasks with running status.
 
     Args:
         file_path: Path to kanban.md file.
@@ -170,28 +170,47 @@ def parse_kanban_with_status(
             If not provided, will call get_task_running_status directly.
 
     Returns:
-        List of Task objects with is_running and start_time populated
-        for IN_PROGRESS tasks.
+        List of Task objects with is_running, start_time, and pipeline_info
+        populated for IN_PROGRESS and PENDING_APPROVAL tasks.
     """
     tasks = parse_kanban(file_path)
 
-    # Get task IDs for in-progress tasks
-    in_progress_ids = [t.id for t in tasks if t.status == TaskStatus.IN_PROGRESS]
+    # Get task IDs for in-progress and pending approval tasks
+    enrichable_ids = [
+        t.id for t in tasks
+        if t.status in (TaskStatus.IN_PROGRESS, TaskStatus.PENDING_APPROVAL)
+    ]
 
-    if not in_progress_ids:
+    if not enrichable_ids:
         return tasks
 
-    # Get running status for all in-progress tasks at once
+    # Get running status for all enrichable tasks at once
     if worker_service is not None:
-        running_status = worker_service.get_task_running_status(in_progress_ids)
+        running_status = worker_service.get_task_running_status(enrichable_ids)
     else:
-        running_status = get_task_running_status(ralph_dir, in_progress_ids)
+        running_status = get_task_running_status(ralph_dir, enrichable_ids)
 
-    # Enrich tasks with running status
+    # Build a map of task_id -> pipeline_info from running workers
+    pipeline_info_map: dict[str, object] = {}
+    if worker_service is not None:
+        workers = worker_service.get_workers()
+    else:
+        from .worker_scanner import scan_workers
+        workers = scan_workers(ralph_dir)
+
+    from .models import WorkerStatus as WS
+    for worker in workers:
+        if worker.status == WS.RUNNING and worker.pipeline_info:
+            if worker.task_id not in pipeline_info_map:
+                pipeline_info_map[worker.task_id] = worker.pipeline_info
+
+    # Enrich tasks with running status and pipeline info
     for task in tasks:
-        if task.status == TaskStatus.IN_PROGRESS and task.id in running_status:
+        if task.status in (TaskStatus.IN_PROGRESS, TaskStatus.PENDING_APPROVAL) and task.id in running_status:
             is_running, start_time = running_status[task.id]
             task.is_running = is_running
             task.start_time = start_time
+            if task.id in pipeline_info_map:
+                task.pipeline_info = pipeline_info_map[task.id]
 
     return tasks

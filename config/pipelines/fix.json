@@ -22,7 +22,8 @@
           "max": 3,
           "on_result": {
             "PASS": { "jump": "test-run" },
-            "FAIL": { "jump": "abort" }
+            "FAIL": { "jump": "abort" },
+            "SKIP": { "jump": "test-run" }
           }
         }
       }

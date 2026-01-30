@@ -35,6 +35,23 @@ class LogLevel(Enum):
 
 
 @dataclass
+class PipelineInfo:
+    """Pipeline execution state from pipeline-config.json."""
+
+    pipeline_name: str = ""
+    step_id: str = ""
+    step_idx: int = 0
+    agent: str = ""  # e.g. "engineering.test-runner"
+
+    @property
+    def agent_short(self) -> str:
+        """Get agent name without category prefix."""
+        if "." in self.agent:
+            return self.agent.split(".", 1)[1]
+        return self.agent
+
+
+@dataclass
 class Task:
     """A task from the kanban board."""
 
@@ -51,6 +68,7 @@ class Task:
     # Runtime status for in-progress tasks
     is_running: bool | None = None  # None = not checked, True = process running, False = not running
     start_time: int | None = None  # Unix timestamp when worker started
+    pipeline_info: PipelineInfo | None = None
 
 
 @dataclass
@@ -66,6 +84,7 @@ class Worker:
     log_path: str
     workspace_path: str
     pr_url: str | None = None
+    pipeline_info: PipelineInfo | None = None
 
 
 @dataclass

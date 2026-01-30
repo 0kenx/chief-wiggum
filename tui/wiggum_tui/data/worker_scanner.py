@@ -1,10 +1,11 @@
 """Worker scanner - ported from TypeScript."""
 
+import json
 import os
 import re
 import subprocess
 from pathlib import Path
-from .models import Worker, WorkerStatus
+from .models import PipelineInfo, Worker, WorkerStatus
 
 
 # Pattern: worker-TASK-XXX-TIMESTAMP
@@ -14,6 +15,9 @@ WORKER_PATTERN = re.compile(r"^worker-([A-Za-z]{2,10}-\d{1,4})-(\d+)$")
 # These workers' state never changes, so we can skip re-scanning them.
 _completed_workers_cache: dict[str, Worker] = {}
 
+# Cache for pipeline-config.json: worker_dir -> (mtime, PipelineInfo)
+_pipeline_config_cache: dict[str, tuple[float, PipelineInfo | None]] = {}
+
 
 def clear_completed_workers_cache() -> None:
     """Clear the completed workers cache.
@@ -22,6 +26,60 @@ def clear_completed_workers_cache() -> None:
     """
     global _completed_workers_cache
     _completed_workers_cache.clear()
+    _pipeline_config_cache.clear()
+
+
+def read_pipeline_config(worker_dir: Path) -> PipelineInfo | None:
+    """Read pipeline-config.json from a worker directory.
+
+    Uses mtime-based caching to avoid re-reading unchanged files.
+
+    Args:
+        worker_dir: Path to the worker directory.
+
+    Returns:
+        PipelineInfo if file exists and is valid, None otherwise.
+    """
+    config_path = worker_dir / "pipeline-config.json"
+    cache_key = str(worker_dir)
+
+    try:
+        mtime = config_path.stat().st_mtime
+    except OSError:
+        # File doesn't exist, clear cache entry if present
+        _pipeline_config_cache.pop(cache_key, None)
+        return None
+
+    # Check cache
+    cached = _pipeline_config_cache.get(cache_key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    # Parse file
+    try:
+        data = json.loads(config_path.read_text())
+        pipeline_name = data.get("pipeline", {}).get("name", "")
+        current = data.get("current", {})
+        step_id = current.get("step_id", "")
+        step_idx = current.get("step_idx", 0)
+
+        # Look up agent from the steps map
+        agent = ""
+        steps = data.get("steps", {})
+        if step_id and step_id in steps:
+            agent = steps[step_id].get("agent", "")
+
+        info = PipelineInfo(
+            pipeline_name=pipeline_name,
+            step_id=step_id,
+            step_idx=step_idx,
+            agent=agent,
+        )
+        _pipeline_config_cache[cache_key] = (mtime, info)
+        return info
+    except (json.JSONDecodeError, OSError, KeyError):
+        _pipeline_config_cache[cache_key] = (mtime, None)
+        return None
 
 
 def is_process_running(pid: int) -> bool:
@@ -251,6 +309,7 @@ def scan_workers(ralph_dir: Path) -> list[Worker]:
             log_path=str(log_path),
             workspace_path=str(workspace_path),
             pr_url=pr_url,
+            pipeline_info=read_pipeline_config(entry),
         )
 
         # Cache completed/failed workers since their state never changes

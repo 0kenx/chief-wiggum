@@ -271,6 +271,18 @@ class TaskCard(Static):
             else:
                 first_line += " [bold #f38ba8]●[/]"
 
+        # For pending approval tasks with a running worker, show agent info
+        if self._task_data.status == TaskStatus.PENDING_APPROVAL and self._task_data.is_running:
+            pi = self._task_data.pipeline_info
+            agent_label = pi.agent_short if pi else ""
+            duration = ""
+            if self._task_data.start_time:
+                duration = f" {format_duration(self._task_data.start_time)}"
+            if agent_label:
+                first_line += f" [bold #cba6f7]● {agent_label}{duration}[/]"
+            else:
+                first_line += f" [bold #cba6f7]●{duration}[/]"
+
         lines = [
             first_line,
             f"[#cdd6f4]{title}[/]",
@@ -412,7 +424,13 @@ class KanbanPanel(Widget):
     def _compute_data_hash(self, tasks: list[Task]) -> str:
         """Compute a hash of task data for change detection."""
         # Include fields that affect display (excluding start_time which changes constantly)
-        data = [(t.id, t.title, t.status.value, t.priority, t.is_running) for t in tasks]
+        data = [
+            (
+                t.id, t.title, t.status.value, t.priority, t.is_running,
+                (t.pipeline_info.step_id, t.pipeline_info.agent) if t.pipeline_info else None,
+            )
+            for t in tasks
+        ]
         return str(data)
 
     def on_mount(self) -> None:
@@ -429,7 +447,7 @@ class KanbanPanel(Widget):
         try:
             for card in self.query(TaskCard):
                 task = card._task_data
-                if task.status == TaskStatus.IN_PROGRESS and task.is_running:
+                if task.is_running and task.status in (TaskStatus.IN_PROGRESS, TaskStatus.PENDING_APPROVAL):
                     card.refresh()
         except Exception:
             pass

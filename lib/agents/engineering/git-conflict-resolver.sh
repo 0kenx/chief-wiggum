@@ -30,6 +30,7 @@ agent_required_paths() {
 # Source dependencies using base library helpers
 agent_source_core
 agent_source_ralph
+source "$WIGGUM_HOME/lib/git/git-operations.sh"
 
 # Main entry point
 agent_run() {
@@ -57,11 +58,12 @@ agent_run() {
     # This prevents "Your local changes would be overwritten" errors during merge
     # IMPORTANT: Skip this if a merge is in progress - we must not stage conflicted files
     # as that would mark them as "resolved" even though they still have conflict markers
-    if [ ! -f "$workspace/.git/MERGE_HEAD" ] && \
+    if ! git -C "$workspace" rev-parse --verify MERGE_HEAD &>/dev/null && \
        { ! git -C "$workspace" diff --quiet || ! git -C "$workspace" diff --cached --quiet; }; then
         log "Working tree has uncommitted changes - committing before conflict resolution"
+        git_set_identity
         git -C "$workspace" add -A
-        git -C "$workspace" commit -m "chore: auto-commit before conflict resolution" 2>/dev/null || true
+        git -C "$workspace" commit --no-gpg-sign -m "chore: auto-commit before conflict resolution" 2>/dev/null || true
     fi
 
     # Create standard directories
@@ -78,7 +80,7 @@ agent_run() {
     conflicted_files=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null)
 
     # Check if merge is in progress but files were already staged (edge case)
-    if [ -f "$workspace/.git/MERGE_HEAD" ] && [ -z "$conflicted_files" ]; then
+    if git -C "$workspace" rev-parse --verify MERGE_HEAD &>/dev/null && [ -z "$conflicted_files" ]; then
         # MERGE_HEAD exists but no unmerged files - check if working tree has conflict markers
         local has_markers=false
         if grep -rq '^<<<<<<< ' "$workspace" --include='*.ts' --include='*.js' --include='*.json' \

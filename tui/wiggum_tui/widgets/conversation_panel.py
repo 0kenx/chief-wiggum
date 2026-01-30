@@ -228,8 +228,13 @@ class ConversationPanel(Widget):
                     # Check if there are any log files (quick existence check)
                     has_logs = any(logs_dir.glob("*.log")) or any(logs_dir.glob("*/*.log"))
                     if has_logs:
-                        # Use worker timestamp from scanner for ordering
-                        label = f"{worker.task_id} - {worker.status.value}"
+                        # Build label with pipeline info when available
+                        pi = worker.pipeline_info
+                        if pi and pi.step_id:
+                            agent_label = pi.agent_short or pi.step_id
+                            label = f"{worker.task_id} - {agent_label} @ {pi.step_id} ({worker.status.value})"
+                        else:
+                            label = f"{worker.task_id} - {worker.status.value}"
                         workers_with_mtime.append((worker.id, label, worker.timestamp))
                 except OSError:
                     continue
