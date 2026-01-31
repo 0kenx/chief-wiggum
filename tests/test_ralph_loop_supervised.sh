@@ -415,6 +415,74 @@ test_default_supervisor_prompt_contains_required_elements() {
 }
 
 # =============================================================================
+# Test: RALPH_LOOP_STOP_REASON exported on supervisor_stop path
+# =============================================================================
+
+test_stop_reason_variable_exported_on_supervisor_stop() {
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    # Verify the source code contains the RALPH_LOOP_STOP_REASON export
+    # on the supervisor STOP path
+    local loop_file="$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    # Check that RALPH_LOOP_STOP_REASON is exported on the supervisor_stop path
+    if grep -q 'RALPH_LOOP_STOP_REASON="supervisor_stop"' "$loop_file"; then
+        assert_success "runtime-loop.sh should export RALPH_LOOP_STOP_REASON=supervisor_stop" true
+    else
+        assert_failure "runtime-loop.sh should export RALPH_LOOP_STOP_REASON=supervisor_stop" true
+    fi
+}
+
+test_stop_reason_variable_exported_on_max_iterations() {
+    local loop_file="$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    if grep -q 'RALPH_LOOP_STOP_REASON="max_iterations"' "$loop_file"; then
+        assert_success "runtime-loop.sh should export RALPH_LOOP_STOP_REASON=max_iterations" true
+    else
+        assert_failure "runtime-loop.sh should export RALPH_LOOP_STOP_REASON=max_iterations" true
+    fi
+}
+
+test_stop_reason_variable_exported_on_restart_limit() {
+    local loop_file="$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    if grep -q 'RALPH_LOOP_STOP_REASON="restart_limit"' "$loop_file"; then
+        assert_success "runtime-loop.sh should export RALPH_LOOP_STOP_REASON=restart_limit" true
+    else
+        assert_failure "runtime-loop.sh should export RALPH_LOOP_STOP_REASON=restart_limit" true
+    fi
+}
+
+test_stop_reason_variable_exported_on_normal_completion() {
+    local loop_file="$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    # Normal completion uses the $loop_stop_reason variable
+    if grep -q 'RALPH_LOOP_STOP_REASON="\$loop_stop_reason"' "$loop_file"; then
+        assert_success "runtime-loop.sh should export RALPH_LOOP_STOP_REASON from loop_stop_reason variable" true
+    else
+        assert_failure "runtime-loop.sh should export RALPH_LOOP_STOP_REASON from loop_stop_reason variable" true
+    fi
+}
+
+test_stop_reason_all_exit_paths_covered() {
+    local loop_file="$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    # Count all return statements in run_ralph_loop function
+    # There should be RALPH_LOOP_STOP_REASON export before each return
+    # (excluding early returns for validation errors before the loop starts)
+    local return_count
+    return_count=$(grep -c 'RALPH_LOOP_STOP_REASON=' "$loop_file")
+
+    # We expect 4 exports: supervisor_stop, restart_limit, max_iterations, $loop_stop_reason
+    if [ "$return_count" -ge 4 ]; then
+        assert_success "Should have RALPH_LOOP_STOP_REASON on all exit paths ($return_count found)" true
+    else
+        assert_failure "Should have RALPH_LOOP_STOP_REASON on all exit paths (expected >=4, got $return_count)" true
+    fi
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -461,6 +529,13 @@ run_test test_agent_source_ralph_supervised_provides_extraction_helpers
 # Default supervisor prompt
 run_test test_default_supervisor_prompt_exists
 run_test test_default_supervisor_prompt_contains_required_elements
+
+# RALPH_LOOP_STOP_REASON exports
+run_test test_stop_reason_variable_exported_on_supervisor_stop
+run_test test_stop_reason_variable_exported_on_max_iterations
+run_test test_stop_reason_variable_exported_on_restart_limit
+run_test test_stop_reason_variable_exported_on_normal_completion
+run_test test_stop_reason_all_exit_paths_covered
 
 # Print summary
 print_test_summary

@@ -241,6 +241,7 @@ run_ralph_loop() {
     local last_session_id=""
     local supervisor_feedback=""
     _ralph_loop_completed_normally=false
+    local loop_stop_reason="completed"
 
     # Check if backend supports sessions
     local _has_sessions=false
@@ -308,6 +309,7 @@ run_ralph_loop() {
         # Check for shutdown request
         if [ "$shutdown_requested" = true ]; then
             log "Ralph loop shutting down due to signal"
+            loop_stop_reason="shutdown"
             break
         fi
 
@@ -325,6 +327,7 @@ run_ralph_loop() {
         # Check completion using callback
         if $completion_check_fn 2>/dev/null; then
             log "Completion check passed - work is done"
+            loop_stop_reason="completed"
             break
         fi
 
@@ -401,12 +404,14 @@ run_ralph_loop() {
         if [ $exit_code -eq 130 ] || [ $exit_code -eq 143 ]; then
             log "Work phase was interrupted by signal (exit code: $exit_code)"
             shutdown_requested=true
+            loop_stop_reason="shutdown"
             break
         fi
 
         # Check if shutdown was requested during work phase
         if [ "$shutdown_requested" = true ]; then
             log "Shutdown requested during work phase - exiting loop"
+            loop_stop_reason="shutdown"
             break
         fi
 
@@ -509,6 +514,7 @@ ${summary_prompt}"
         # Check if shutdown was requested during summary phase
         if [ "$shutdown_requested" = true ]; then
             log "Shutdown requested during summary phase - exiting loop"
+            loop_stop_reason="shutdown"
             break
         fi
 
@@ -599,6 +605,7 @@ ${summary_prompt}"
                     echo "[$(iso_now)] INFO: LOOP_STOPPED_BY_SUPERVISOR end_time=$end_time duration_sec=$duration iterations=$iteration" >> "$output_dir/worker.log" 2>/dev/null || true
 
                     export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+                    export RALPH_LOOP_STOP_REASON="supervisor_stop"
                     _ralph_loop_completed_normally=true
                     trap - EXIT
                     return 0
@@ -617,6 +624,7 @@ ${summary_prompt}"
 
                         log "Ralph loop stopped due to restart limit (duration: ${duration}s)"
                         export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+                        export RALPH_LOOP_STOP_REASON="restart_limit"
                         _ralph_loop_completed_normally=true
                         trap - EXIT
                         return 1
@@ -657,6 +665,7 @@ ${summary_prompt}"
         else
             echo "[$(iso_now)] WARN: LOOP_INCOMPLETE end_time=$end_time duration_sec=$duration iterations=$iteration max_iterations=$max_iterations" >> "$output_dir/worker.log" 2>/dev/null || true
         fi
+        export RALPH_LOOP_STOP_REASON="max_iterations"
         _ralph_loop_completed_normally=true
         trap - EXIT
         return 1
@@ -671,6 +680,7 @@ ${summary_prompt}"
     fi
 
     export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+    export RALPH_LOOP_STOP_REASON="$loop_stop_reason"
 
     _ralph_loop_completed_normally=true
     trap - EXIT

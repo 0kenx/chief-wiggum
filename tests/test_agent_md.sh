@@ -1085,6 +1085,228 @@ test_live_mode_session_id_persistence() {
 }
 
 # =============================================================================
+# Test: Supervisor STOP Fallback Result Extraction
+# =============================================================================
+
+# Helper: create a mock stream-JSON log with a result tag in assistant output
+_create_mock_stream_log() {
+    local log_file="$1"
+    local result_value="$2"
+
+    # Stream-JSON format: one JSON object per line with assistant message
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Work completed successfully.\n\n<result>'"$result_value"'</result>"}]}}' > "$log_file"
+}
+
+test_supervisor_stop_fallback_overrides_fail_with_pass() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Set up worker dir with status_file agent
+    local worker_dir="$tmpdir/worker-TEST-001-12345"
+    mkdir -p "$worker_dir/workspace"
+
+    # Create a PRD with unchecked items (would normally yield FAIL)
+    cat > "$worker_dir/prd.md" << 'PRDEOF'
+# Requirements
+- [x] Implement feature A
+- [ ] Implement feature B
+PRDEOF
+
+    # Create a work log where the LLM said PASS
+    local run_id="execute-1700000000"
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="execute"
+    mkdir -p "$worker_dir/logs/$run_id"
+    _create_mock_stream_log "$worker_dir/logs/$run_id/execute-0-1700000000.log" "PASS"
+
+    # Simulate supervisor STOP
+    export RALPH_LOOP_STOP_REASON="supervisor_stop"
+
+    # Load a status_file agent
+    _MD_TYPE="engineering.software-engineer"
+    _MD_COMPLETION_CHECK="status_file:{{worker_dir}}/prd.md"
+    _MD_REPORT_TAG="report"
+    _MD_RESULT_TAG="result"
+    _MD_WORKER_DIR="$worker_dir"
+    _MD_PROJECT_DIR="$tmpdir"
+    _MD_WORKSPACE="$worker_dir/workspace"
+    declare -gA _MD_VALID_RESULTS=([0]="PASS" [1]="FAIL" [2]="FIX")
+
+    # Run the extraction
+    _md_extract_and_write_result "$worker_dir"
+
+    # Check result file
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | head -1)
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result' "$result_file" 2>/dev/null)
+        assert_equals "PASS" "$gate_result" "Supervisor STOP + LLM PASS in log should override PRD FAIL"
+    else
+        assert_failure "Should have created a result file" true
+    fi
+
+    unset RALPH_LOOP_STOP_REASON RALPH_RUN_ID WIGGUM_STEP_ID
+    rm -rf "$tmpdir"
+}
+
+test_no_supervisor_stop_preserves_fail() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    local worker_dir="$tmpdir/worker-TEST-002-12345"
+    mkdir -p "$worker_dir/workspace"
+
+    # PRD with unchecked items
+    cat > "$worker_dir/prd.md" << 'PRDEOF'
+# Requirements
+- [x] Implement feature A
+- [ ] Implement feature B
+PRDEOF
+
+    # Work log with PASS
+    local run_id="execute-1700000001"
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="execute"
+    mkdir -p "$worker_dir/logs/$run_id"
+    _create_mock_stream_log "$worker_dir/logs/$run_id/execute-0-1700000001.log" "PASS"
+
+    # No supervisor stop - normal flow
+    unset RALPH_LOOP_STOP_REASON 2>/dev/null || true
+
+    _MD_TYPE="engineering.software-engineer"
+    _MD_COMPLETION_CHECK="status_file:{{worker_dir}}/prd.md"
+    _MD_REPORT_TAG="report"
+    _MD_RESULT_TAG="result"
+    _MD_WORKER_DIR="$worker_dir"
+    _MD_PROJECT_DIR="$tmpdir"
+    _MD_WORKSPACE="$worker_dir/workspace"
+    declare -gA _MD_VALID_RESULTS=([0]="PASS" [1]="FAIL" [2]="FIX")
+
+    _md_extract_and_write_result "$worker_dir"
+
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | head -1)
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result' "$result_file" 2>/dev/null)
+        assert_equals "FAIL" "$gate_result" "Without supervisor STOP, unchecked PRD should remain FAIL"
+    else
+        assert_failure "Should have created a result file" true
+    fi
+
+    unset RALPH_RUN_ID WIGGUM_STEP_ID
+    rm -rf "$tmpdir"
+}
+
+test_supervisor_stop_no_log_result_stays_fail() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    local worker_dir="$tmpdir/worker-TEST-003-12345"
+    mkdir -p "$worker_dir/workspace"
+
+    # PRD with unchecked items
+    cat > "$worker_dir/prd.md" << 'PRDEOF'
+# Requirements
+- [ ] Implement feature A
+PRDEOF
+
+    # Create log dir but with no result tag in the log
+    local run_id="execute-1700000002"
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="execute"
+    mkdir -p "$worker_dir/logs/$run_id"
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working on things..."}]}}' \
+        > "$worker_dir/logs/$run_id/execute-0-1700000002.log"
+
+    export RALPH_LOOP_STOP_REASON="supervisor_stop"
+
+    _MD_TYPE="engineering.software-engineer"
+    _MD_COMPLETION_CHECK="status_file:{{worker_dir}}/prd.md"
+    _MD_REPORT_TAG="report"
+    _MD_RESULT_TAG="result"
+    _MD_WORKER_DIR="$worker_dir"
+    _MD_PROJECT_DIR="$tmpdir"
+    _MD_WORKSPACE="$worker_dir/workspace"
+    declare -gA _MD_VALID_RESULTS=([0]="PASS" [1]="FAIL" [2]="FIX")
+
+    _md_extract_and_write_result "$worker_dir"
+
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | head -1)
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result' "$result_file" 2>/dev/null)
+        assert_equals "FAIL" "$gate_result" "Supervisor STOP + no result in log should stay FAIL"
+    else
+        assert_failure "Should have created a result file" true
+    fi
+
+    unset RALPH_LOOP_STOP_REASON RALPH_RUN_ID WIGGUM_STEP_ID
+    rm -rf "$tmpdir"
+}
+
+test_max_iterations_unchecked_prd_stays_fail() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    local worker_dir="$tmpdir/worker-TEST-004-12345"
+    mkdir -p "$worker_dir/workspace"
+
+    # PRD with unchecked items
+    cat > "$worker_dir/prd.md" << 'PRDEOF'
+# Requirements
+- [ ] Implement feature A
+PRDEOF
+
+    local run_id="execute-1700000003"
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="execute"
+    mkdir -p "$worker_dir/logs/$run_id"
+    _create_mock_stream_log "$worker_dir/logs/$run_id/execute-0-1700000003.log" "PASS"
+
+    # Max iterations stop reason - should NOT trigger override
+    export RALPH_LOOP_STOP_REASON="max_iterations"
+
+    _MD_TYPE="engineering.software-engineer"
+    _MD_COMPLETION_CHECK="status_file:{{worker_dir}}/prd.md"
+    _MD_REPORT_TAG="report"
+    _MD_RESULT_TAG="result"
+    _MD_WORKER_DIR="$worker_dir"
+    _MD_PROJECT_DIR="$tmpdir"
+    _MD_WORKSPACE="$worker_dir/workspace"
+    declare -gA _MD_VALID_RESULTS=([0]="PASS" [1]="FAIL" [2]="FIX")
+
+    _md_extract_and_write_result "$worker_dir"
+
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | head -1)
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result' "$result_file" 2>/dev/null)
+        assert_equals "FAIL" "$gate_result" "Max iterations + unchecked PRD should stay FAIL"
+    else
+        assert_failure "Should have created a result file" true
+    fi
+
+    unset RALPH_LOOP_STOP_REASON RALPH_RUN_ID WIGGUM_STEP_ID
+    rm -rf "$tmpdir"
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -1128,6 +1350,10 @@ run_test test_live_mode_session_directory_creation
 run_test test_live_mode_session_file_naming
 run_test test_live_mode_first_run_detection
 run_test test_live_mode_session_id_persistence
+run_test test_supervisor_stop_fallback_overrides_fail_with_pass
+run_test test_no_supervisor_stop_preserves_fail
+run_test test_supervisor_stop_no_log_result_stays_fail
+run_test test_max_iterations_unchecked_prd_stays_fail
 
 # Print summary
 print_test_summary

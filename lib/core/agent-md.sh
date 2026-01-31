@@ -803,6 +803,37 @@ _md_extract_result_from_status_file() {
     fi
 }
 
+# Fallback result extraction from work logs (for supervisor STOP override)
+#
+# When the supervisor stops the loop, the PRD may have unchecked items even
+# though the LLM reported a passing result. This function extracts the result
+# from the latest work log as a fallback.
+#
+# Args:
+#   worker_dir  - Worker directory
+#   valid_regex - Pipe-separated valid result values
+#
+# Returns: Result value from log, or empty string if not found
+_md_fallback_result_from_logs() {
+    local worker_dir="$1"
+    local valid_regex="$2"
+
+    local run_id="${RALPH_RUN_ID:-}"
+    if [ -z "$run_id" ] || [ ! -d "$worker_dir/logs/$run_id" ]; then
+        return 0
+    fi
+
+    local step_id="${WIGGUM_STEP_ID:-agent}"
+    local latest_log
+    latest_log=$(find_newest "$worker_dir/logs/$run_id" -name "${step_id}-*.log")
+
+    if [ -z "$latest_log" ] || [ ! -f "$latest_log" ]; then
+        return 0
+    fi
+
+    _extract_result_value_from_stream_json "$latest_log" "$valid_regex" || true
+}
+
 # Extract result and write to epoch-named files
 _md_extract_and_write_result() {
     local worker_dir="$1"
@@ -831,6 +862,17 @@ _md_extract_and_write_result() {
 
         local result
         result=$(_md_extract_result_from_status_file "$file_path" "$valid_regex")
+
+        # Supervisor STOP override: if PRD says FAIL but supervisor stopped the loop,
+        # check if the LLM actually reported a passing result in its work logs
+        if [ "$result" = "FAIL" ] && [ "${RALPH_LOOP_STOP_REASON:-}" = "supervisor_stop" ]; then
+            local log_result
+            log_result=$(_md_fallback_result_from_logs "$worker_dir" "$valid_regex")
+            if [ -n "$log_result" ] && [ "$log_result" != "FAIL" ]; then
+                log_warn "Supervisor STOP override: LLM output indicates $log_result (PRD has unchecked items)"
+                result="$log_result"
+            fi
+        fi
 
         if [ -z "$result" ]; then
             result="UNKNOWN"
