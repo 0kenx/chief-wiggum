@@ -129,7 +129,7 @@ _priority_capacity_sync() {
             # Check if this is a priority worker (fix or resolve)
             local state=""
             if [ -f "$worker_dir/git-state.json" ]; then
-                state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null || echo "")
+                state=$(jq -r '.current_state // ""' "$worker_dir/git-state.json" 2>/dev/null || echo "")
             fi
 
             # Count only active fix/resolve workers

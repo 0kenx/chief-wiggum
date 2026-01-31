@@ -357,7 +357,7 @@ scheduler_is_complete() {
 
         if [ -f "$worker_dir/git-state.json" ]; then
             local git_state
-            git_state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null)
+            git_state=$(jq -r '.current_state // ""' "$worker_dir/git-state.json" 2>/dev/null)
             case "$git_state" in
                 needs_fix|fixing)
                     # In merge-only mode, don't wait for fix tasks
