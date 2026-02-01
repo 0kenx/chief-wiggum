@@ -824,7 +824,6 @@ The default `config/services.json` defines services organized by phase:
 | `preflight-ssh` | 40 | Test SSH connection |
 | `preflight-gh` | 50 | Test GitHub CLI auth |
 | `restore-workers` | 60 | Restore worker pool from worker directories |
-| `resume-workers` | 70 | Resume stopped WIP workers |
 | `init-terminal` | 80 | Initialize terminal header |
 
 ### Pre Phase (every tick, sequential)
@@ -845,6 +844,7 @@ The default `config/services.json` defines services organized by phase:
 | `pr-optimizer` | 900s | Optimize and execute PR merges |
 | `multi-pr-planner` | 900s | Check for conflict batches |
 | `fix-workers` | 60s | Spawn fix workers for PR comment issues |
+| `resume-workers` | 300s | Resume stopped WIP workers |
 | `resolve-workers` | 60s | Spawn resolve workers for merge conflicts |
 | `pr-optimizer-check` | 60s | Check for completed PR optimizer |
 

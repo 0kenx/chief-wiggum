@@ -162,6 +162,15 @@
         "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
       }
     },
+    "system.resume-decide": {
+      "max_iterations": 1,
+      "max_turns": 25,
+      "timeout_seconds": 300,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
+    },
     "workflow.git-sync-main": {
       "max_iterations": 1,
       "max_turns": 5,

@@ -20,6 +20,7 @@ source "$WIGGUM_HOME/lib/core/file-lock.sh"
 source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
+source "$WIGGUM_HOME/lib/core/resume-state.sh"
 
 # Default configuration
 MAX_ITERATIONS=20
@@ -248,34 +249,33 @@ do_resume() {
         _msg "Analyzing previous run to decide resume step..."
         run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1 25
 
-        # === STEP 4: Read decision and recovery metadata ===
-        resume_step=$(cat "$worker_dir/resume-step.txt" 2>/dev/null || echo "ABORT")
-        resume_step=$(echo "$resume_step" | tr -d '[:space:]')
-
+        # === STEP 4: Read decision ===
         # Get the result file path for later use (workspace recovery, instructions)
         resume_result_file=$(agent_find_latest_result "$worker_dir" "system.resume-decide")
-
-        if [ "$resume_step" = "ABORT" ]; then
-            _msg ""
-            _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            _msg "RESUME ABORTED"
-            _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            _msg ""
-            local abort_report
-            abort_report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
-            if [ -n "$abort_report" ] && [ -f "$abort_report" ]; then
-                _msg "Reason:"
-                [ "$QUIET_MODE" = "true" ] || cat "$abort_report"
-            fi
-            _msg ""
-            exit $EXIT_ERROR
-        fi
     fi
 
-    # === STEP 5: Load pipeline config ===
-    # Load the pipeline to validate the resume step against actual step IDs
+    # === STEP 5: Parse decision ===
+    local decision="" resume_pipeline="" resume_step_id=""
+    _read_resume_decision "$worker_dir" "$needs_resume_decide" "$current_step"
+
+    # Update resume state with this attempt
+    resume_state_increment "$worker_dir" "$decision" "$resume_pipeline" "$resume_step_id" \
+        "Resume attempt via wiggum-resume"
+
+    # Route by decision
+    case "$decision" in
+        COMPLETE) _handle_complete "$worker_dir" "$task_id" ;;
+        ABORT)    _handle_abort "$worker_dir" "$task_id" ;;
+        DEFER)    _handle_defer "$worker_dir" "$task_id" ;;
+        RETRY)    ;; # fall through to pipeline validation + worker launch
+        *)        _handle_abort "$worker_dir" "$task_id" ;; # unknown → abort
+    esac
+
+    # === RETRY path: Load pipeline config ===
+    resume_step="$resume_step_id"
+    local effective_pipeline="${resume_pipeline:-${WIGGUM_PIPELINE:-}}"
     local pipeline_file
-    pipeline_file=$(pipeline_resolve "$PROJECT_DIR" "$task_id" "${WIGGUM_PIPELINE:-}")
+    pipeline_file=$(pipeline_resolve "$PROJECT_DIR" "$task_id" "$effective_pipeline")
     if [ -n "$pipeline_file" ]; then
         pipeline_load "$pipeline_file" || {
             _msg "Error: Failed to load pipeline config: $pipeline_file"
@@ -307,27 +307,26 @@ do_resume() {
         exit $EXIT_ERROR
     fi
 
-    log "Resume decision: start from '$resume_step' step (index $step_idx)"
-    log_debug "needs_resume_decide=$needs_resume_decide"
-    activity_log "resume.decision" "$worker_id" "$task_id" "resume_step=$resume_step" "step_idx=$step_idx"
+    log "Resume decision: RETRY from '$resume_step' step (index $step_idx)"
+    log_debug "needs_resume_decide=$needs_resume_decide pipeline=$effective_pipeline"
+    activity_log "resume.decision" "$worker_id" "$task_id" \
+        "decision=RETRY" "resume_step=$resume_step" "step_idx=$step_idx" \
+        "pipeline=${effective_pipeline:-default}"
 
-    _msg "Resume decision: start from '$resume_step' step (index $step_idx)"
+    _msg "Resume decision: RETRY from '$resume_step' step (index $step_idx)"
     _msg ""
 
-    # === STEP 5.5: Handle workspace recovery if needed ===
-    # Check if we should reset workspace to a known checkpoint
+    # === Handle workspace recovery if needed ===
     if [ "$needs_resume_decide" = "true" ]; then
         local last_checkpoint recovery_possible
-        if [ -n "$resume_result_file" ] && [ -f "$resume_result_file" ]; then
+        if [ -n "${resume_result_file:-}" ] && [ -f "$resume_result_file" ]; then
             last_checkpoint=$(jq -r '.outputs.workspace_recovery.last_checkpoint_step // ""' "$resume_result_file" 2>/dev/null)
             recovery_possible=$(jq -r '.outputs.workspace_recovery.recovery_possible // false' "$resume_result_file" 2>/dev/null)
         fi
 
-        if [ "$recovery_possible" = "true" ] && [ -n "$last_checkpoint" ]; then
+        if [ "${recovery_possible:-false}" = "true" ] && [ -n "${last_checkpoint:-}" ]; then
             _msg "Workspace recovery checkpoint available: $last_checkpoint"
 
-            # Find the commit from the checkpoint step
-            # Commits are tagged with the step name in the message
             local checkpoint_commit
             checkpoint_commit=$(cd "$worker_dir/workspace" && \
                 git log --oneline --all --grep="$last_checkpoint" -1 --format="%H" 2>/dev/null || true)
@@ -335,7 +334,6 @@ do_resume() {
             if [ -n "$checkpoint_commit" ]; then
                 _msg "  Found checkpoint commit: ${checkpoint_commit:0:8}"
 
-                # Check if workspace has uncommitted changes that would be lost
                 local has_changes
                 has_changes=$(cd "$worker_dir/workspace" && git status --porcelain 2>/dev/null | head -1)
 
@@ -353,8 +351,7 @@ do_resume() {
     fi
     _msg ""
 
-    # === STEP 6: Check rate limit before launching ===
-    # Update usage data and check rate limit (orchestrator may not be running)
+    # === Check rate limit before launching ===
     usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
     if rate_limit_check "$RALPH_DIR"; then
         log "Rate limit threshold reached - waiting for cycle reset before resuming"
@@ -362,8 +359,7 @@ do_resume() {
         usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
     fi
 
-    # === STEP 7: Launch system.task-worker ===
-    # Always use normal system.task-worker (not plan-mode) — it picks up existing plan files
+    # === Launch system.task-worker ===
     _msg "Launching system.task-worker from step: $resume_step"
 
     mkdir -p "$RALPH_DIR/logs"
@@ -381,12 +377,11 @@ do_resume() {
     export _WORKER_RESUME_STEP="$resume_step"
 
     # Read report path from result file (standard mechanism)
-    # Note: resume_result_file may already be set from step 4 (resume-decide analysis)
     local resume_instructions_path=""
     if [ -z "${resume_result_file:-}" ]; then
         resume_result_file=$(agent_find_latest_result "$worker_dir" "system.resume-decide")
     fi
-    if [ -n "$resume_result_file" ] && [ -f "$resume_result_file" ]; then
+    if [ -n "${resume_result_file:-}" ] && [ -f "$resume_result_file" ]; then
         resume_instructions_path=$(jq -r '.outputs.report_file // ""' "$resume_result_file")
     fi
     export _WORKER_RESUME_INSTRUCTIONS="${resume_instructions_path:-}"
@@ -432,6 +427,218 @@ do_resume() {
         _msg "Worker started (PID file pending)"
     fi
     _msg "Use 'wiggum monitor' to follow progress"
+}
+
+# Read and parse the resume decision from resume-decision.json or resume-step.txt
+#
+# Sets outer-scope variables: decision, resume_pipeline, resume_step_id
+#
+# Args:
+#   worker_dir          - Worker directory path
+#   needs_resume_decide - "true" if resume-decide was run
+#   current_step        - Current step from pipeline config (fallback for direct resume)
+_read_resume_decision() {
+    local worker_dir="$1"
+    local needs_resume_decide="$2"
+    local current_step="${3:-}"
+
+    if [ "$needs_resume_decide" != "true" ]; then
+        # Direct resume: step was interrupted mid-execution
+        decision="RETRY"
+        resume_step_id="$current_step"
+        return
+    fi
+
+    # Read from structured JSON (preferred) or fallback to text file
+    if [ -f "$worker_dir/resume-decision.json" ]; then
+        decision=$(jq -r '.decision // "ABORT"' "$worker_dir/resume-decision.json")
+        resume_pipeline=$(jq -r '.pipeline // ""' "$worker_dir/resume-decision.json")
+        resume_step_id=$(jq -r '.resume_step // ""' "$worker_dir/resume-decision.json")
+        # Normalize null to empty
+        [ "$resume_pipeline" = "null" ] && resume_pipeline=""
+        [ "$resume_step_id" = "null" ] && resume_step_id=""
+    else
+        # Backward compat: old resume-step.txt
+        local raw
+        raw=$(cat "$worker_dir/resume-step.txt" 2>/dev/null || echo "ABORT")
+        raw=$(echo "$raw" | tr -d '[:space:]')
+        if [[ "$raw" == RETRY:* ]]; then
+            decision="RETRY"
+            resume_pipeline=$(echo "$raw" | cut -d: -f2)
+            resume_step_id=$(echo "$raw" | cut -d: -f3)
+        elif [[ "$raw" == "COMPLETE" || "$raw" == "ABORT" || "$raw" == "DEFER" ]]; then
+            decision="$raw"
+        else
+            # Legacy: bare step_id → treat as RETRY with current pipeline
+            decision="RETRY"
+            resume_step_id="$raw"
+        fi
+    fi
+}
+
+# Handle COMPLETE decision: ensure PR exists, mark task [P]
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task ID
+_handle_complete() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+
+    _msg ""
+    _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _msg "RESUME DECISION: COMPLETE"
+    _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _msg ""
+
+    # Check if PR already exists
+    local pr_url=""
+    if [ -f "$worker_dir/pr_url.txt" ]; then
+        pr_url=$(cat "$worker_dir/pr_url.txt" 2>/dev/null)
+    fi
+
+    if [ -z "$pr_url" ]; then
+        # No PR exists — push branch and create PR
+        _msg "No PR found — creating PR..."
+        local workspace="$worker_dir/workspace"
+        if [ -d "$workspace" ]; then
+            # Get branch name
+            local branch_name
+            branch_name=$(cd "$workspace" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+            if [ -n "$branch_name" ] && [ "$branch_name" != "HEAD" ]; then
+                # Push branch
+                (cd "$workspace" && git push -u origin "$branch_name" 2>/dev/null) || true
+
+                # Get task description from PRD
+                local task_desc=""
+                if [ -f "$worker_dir/prd.md" ]; then
+                    task_desc=$(head -5 "$worker_dir/prd.md" | sed -n 's/^# *//p' | head -1)
+                fi
+                task_desc="${task_desc:-Task $task_id}"
+
+                # Create PR
+                local pr_exit=0
+                git_create_pr "$branch_name" "$task_id" "$task_desc" "$worker_dir" "$PROJECT_DIR" || pr_exit=$?
+                if [ $pr_exit -eq 0 ] && [ -n "${GIT_PR_URL:-}" ]; then
+                    pr_url="$GIT_PR_URL"
+                    echo "$pr_url" > "$worker_dir/pr_url.txt"
+                    _msg "PR created: $pr_url"
+                else
+                    log_warn "Failed to create PR for $task_id (exit: $pr_exit)"
+                    _msg "Warning: Could not create PR, but marking task as complete"
+                fi
+            else
+                log_warn "No branch found in workspace for $task_id"
+            fi
+        fi
+    else
+        _msg "PR exists: $pr_url"
+    fi
+
+    # Mark task as [P] pending approval
+    update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+
+    # Set git-state to needs_merge so merge flow picks it up
+    echo "needs_merge" > "$worker_dir/git-state" 2>/dev/null || true
+
+    # Mark resume state as terminal
+    resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
+
+    # Show report if available
+    local report
+    report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
+    if [ -n "$report" ] && [ -f "$report" ] && [ "$QUIET_MODE" != "true" ]; then
+        _msg ""
+        _msg "Analysis:"
+        cat "$report"
+    fi
+
+    log "Task $task_id finalized as COMPLETE"
+    activity_log "resume.complete" "$worker_id" "$task_id" "pr_url=${pr_url:-none}"
+    _msg ""
+
+    exit $EXIT_RESUME_COMPLETE
+}
+
+# Handle ABORT decision: mark task [*] failed
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task ID
+_handle_abort() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+
+    _msg ""
+    _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _msg "RESUME DECISION: ABORT"
+    _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _msg ""
+
+    # Mark task as [*] failed
+    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+
+    # Mark resume state as terminal
+    resume_state_set_terminal "$worker_dir" "Unrecoverable failure — aborted by resume-decide"
+
+    # Show report if available
+    local abort_report
+    abort_report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
+    if [ -n "$abort_report" ] && [ -f "$abort_report" ]; then
+        _msg "Reason:"
+        [ "$QUIET_MODE" = "true" ] || cat "$abort_report"
+    fi
+
+    log_error "Task $task_id marked FAILED by resume-decide (unrecoverable)"
+    activity_log "resume.abort" "$worker_id" "$task_id"
+    _msg ""
+
+    exit $EXIT_RESUME_ABORT
+}
+
+# Handle DEFER decision: write cooldown, no kanban change
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task ID
+_handle_defer() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+
+    _msg ""
+    _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _msg "RESUME DECISION: DEFER"
+    _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _msg ""
+
+    # Load cooldown config
+    load_resume_config
+
+    # Set cooldown
+    resume_state_set_cooldown "$worker_dir" "$RESUME_COOLDOWN_SECONDS"
+
+    _msg "Task $task_id deferred — will retry after ${RESUME_COOLDOWN_SECONDS}s cooldown"
+
+    # Show report if available
+    local defer_report
+    defer_report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
+    if [ -n "$defer_report" ] && [ -f "$defer_report" ] && [ "$QUIET_MODE" != "true" ]; then
+        _msg ""
+        _msg "Reason:"
+        cat "$defer_report"
+    fi
+
+    log "Task $task_id deferred by resume-decide (cooldown: ${RESUME_COOLDOWN_SECONDS}s)"
+    activity_log "resume.defer" "$worker_id" "$task_id" "cooldown=${RESUME_COOLDOWN_SECONDS}"
+    _msg ""
+
+    exit $EXIT_RESUME_DEFER
 }
 
 # Main
@@ -500,8 +707,9 @@ main() {
         esac
     done
 
-    # Load rate limit configuration
+    # Load configuration
     load_rate_limit_config
+    load_resume_config
 
     # Require target
     if [ -z "$target" ]; then

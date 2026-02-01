@@ -81,10 +81,14 @@
     },
     {
       "id": "resume-workers",
-      "description": "Resume stopped WIP workers",
-      "phase": "startup",
-      "order": 70,
-      "schedule": { "type": "tick" },
+      "description": "Resume stopped WIP workers periodically",
+      "phase": "periodic",
+      "order": 65,
+      "schedule": {
+        "type": "interval",
+        "interval": 300,
+        "run_on_startup": true
+      },
       "execution": {
         "type": "function",
         "function": "svc_orch_resume_workers"

@@ -68,6 +68,10 @@
     "max_lines": 10000,
     "max_archives": 10
   },
+  "resume": {
+    "max_attempts": 5,
+    "cooldown_seconds": 3600
+  },
   "review": {
     "approved_user_ids": [123998984,124862625,124581466,175728472],
     "fix_max_iterations": 10,

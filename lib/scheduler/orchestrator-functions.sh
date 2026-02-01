@@ -1220,22 +1220,38 @@ _poll_pending_resumes() {
         local worker_dir task_id worker_type
         IFS='|' read -r worker_dir task_id worker_type <<< "$entry"
 
-        if [ "$resume_exit" -ne 0 ]; then
-            log_error "Resume command failed for $task_id (exit code: $resume_exit)"
-            continue
-        fi
-
-        # Worker subprocess was launched by wiggum-resume — poll for its PID
-        if wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
-            local wpid
-            wpid=$(cat "$worker_dir/agent.pid")
-            pool_add "$wpid" "$worker_type" "$task_id"
-            scheduler_mark_event
-            activity_log "worker.resumed" "$(basename "$worker_dir")" "$task_id" \
-                "pipeline_step=$(cat "$worker_dir/current_step" 2>/dev/null || echo unknown) pid=$wpid type=$worker_type"
-            log "Resumed worker for $task_id (PID: $wpid, type: $worker_type)"
-        else
-            log_error "Resume started but PID not created for $task_id"
-        fi
+        case "$resume_exit" in
+            0)
+                # RETRY: worker subprocess launched — poll for PID
+                if wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
+                    local wpid
+                    wpid=$(cat "$worker_dir/agent.pid")
+                    pool_add "$wpid" "$worker_type" "$task_id"
+                    scheduler_mark_event
+                    activity_log "worker.resumed" "$(basename "$worker_dir")" "$task_id" \
+                        "pipeline_step=$(cat "$worker_dir/current_step" 2>/dev/null || echo unknown) pid=$wpid type=$worker_type"
+                    log "Resumed worker for $task_id (PID: $wpid, type: $worker_type)"
+                else
+                    log_error "Resume started but PID not created for $task_id"
+                fi
+                ;;
+            "$EXIT_RESUME_COMPLETE")
+                log "Task $task_id finalized as COMPLETE by resume-decide"
+                activity_log "worker.resume_complete" "$(basename "$worker_dir")" "$task_id"
+                scheduler_mark_event
+                ;;
+            "$EXIT_RESUME_ABORT")
+                log_error "Task $task_id marked FAILED by resume-decide (unrecoverable)"
+                activity_log "worker.resume_abort" "$(basename "$worker_dir")" "$task_id"
+                scheduler_mark_event
+                ;;
+            "$EXIT_RESUME_DEFER")
+                log "Task $task_id deferred by resume-decide (will retry after cooldown)"
+                activity_log "worker.resume_defer" "$(basename "$worker_dir")" "$task_id"
+                ;;
+            *)
+                log_error "Resume failed for $task_id (exit code: $resume_exit)"
+                ;;
+        esac
     done
 }

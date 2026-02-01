@@ -12,7 +12,8 @@
 #   40-49   - Review errors (wiggum-review)
 #   50-55   - Clean errors (wiggum-clean)
 #   56-63   - Agent errors (agent lifecycle)
-#   64-127  - (reserved - some systems use these)
+#   65-68   - Resume decision codes (wiggum-resume)
+#   70-79   - Claude service errors
 #   128+N   - Terminated by signal N (standard convention)
 set -euo pipefail
 
@@ -69,6 +70,11 @@ export EXIT_AGENT_VALIDATION_FAILED=60 # Agent validation review returned FAIL
 export EXIT_AGENT_VIOLATION=61         # Workspace boundary violation detected
 export EXIT_AGENT_TIMEOUT=62           # Agent exceeded timeout_seconds
 export EXIT_AGENT_MAX_ITERATIONS=63    # Agent hit max_iterations limit
+
+# === Resume decision exit codes (65-68) ===
+export EXIT_RESUME_ABORT=65     # Resume-decide: unrecoverable, mark failed
+export EXIT_RESUME_DEFER=66     # Resume-decide: defer, try again later
+export EXIT_RESUME_COMPLETE=67  # Resume-decide: work done, finalized as [P]
 
 # === Claude service errors (70-79) ===
 export EXIT_CLAUDE_SERVICE_ERROR=72    # Transient Claude API/service error (retryable)

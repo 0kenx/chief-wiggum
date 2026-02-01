@@ -28,6 +28,7 @@ source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/resume-state.sh"
 
 # Scheduler configuration (set by scheduler_init)
 declare -g _SCHED_RALPH_DIR=""
@@ -442,6 +443,10 @@ scheduler_get_dep_bonus_per_task() { echo "$_SCHED_DEP_BONUS_PER_TASK"; }
 # Returns: 0 if terminal failure, 1 otherwise
 _is_terminal_failure() {
     local worker_dir="$1"
+
+    # Check resume-state first (covers COMPLETE and ABORT decisions)
+    resume_state_is_terminal "$worker_dir" && return 0
+
     local config_file="$worker_dir/pipeline-config.json"
     [ -f "$config_file" ] || return 1
 
@@ -499,8 +504,14 @@ get_resumable_workers() {
         # Skip if still running
         is_worker_running "$worker_dir" && continue
 
-        # Skip terminal failures (last step + FAIL)
+        # Skip terminal failures (last step + FAIL, or resume-state terminal)
         _is_terminal_failure "$worker_dir" && continue
+
+        # Skip workers in cooldown (DEFER)
+        resume_state_is_cooling "$worker_dir" && continue
+
+        # Skip workers that exceeded max resume attempts
+        resume_state_max_exceeded "$worker_dir" && continue
 
         local task_id current_step worker_type
         task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")

@@ -221,8 +221,56 @@ _generate_decision_criteria() {
     cat << 'EOF'
 ## Recovery-Focused Decision Making
 
-Your goal is NOT just to find the interruption point, but to identify the **best step to resume from**
-that will successfully recover the pipeline. Consider these factors:
+Your goal is NOT just to find the interruption point, but to identify the **best outcome** for this worker.
+You have FOUR possible decisions:
+
+### Decision Options
+
+| Decision | When to Use |
+|----------|-------------|
+| **COMPLETE** | All PRD requirements met, code committed, build passes. Work is done. |
+| **RETRY:PIPELINE:STEP** | Resume pipeline from a specific step. Work remains. |
+| **ABORT** | Fundamental/unrecoverable issue (bad PRD, impossible task, repeated failures). |
+| **DEFER** | Transient failure (OOM, API timeout, rate limit). Worth retrying later. |
+
+### COMPLETE Criteria
+
+Choose COMPLETE when:
+- All PRD items are implemented and committed
+- Git status shows committed work (not just staged)
+- A PR already exists (check `pr_url.txt`) OR the branch has commits ready for PR creation
+- Build/tests pass (or no test step was configured)
+
+Do NOT choose COMPLETE if PRD items remain unchecked or workspace has no meaningful changes.
+
+### RETRY Criteria
+
+Choose RETRY when work remains and can be continued. Format: `RETRY:PIPELINE_NAME:STEP_ID`
+- PIPELINE_NAME comes from `pipeline-config.json` field `.pipeline.name`
+- STEP_ID is the step to resume from
+
+Consider workspace recoverability:
+- Steps with **Commit After = Yes** create recovery checkpoints
+- Resuming from the NEXT step after a committed step is safe
+- If workspace state is uncertain, go back to an earlier checkpoint
+
+### ABORT Criteria
+
+Choose ABORT only for truly unrecoverable situations:
+- Bad/impossible requirements in PRD
+- Architectural impossibility
+- Same step has failed repeatedly across multiple resume attempts
+- Fundamental tooling/environment issues that won't self-resolve
+
+### DEFER Criteria
+
+Choose DEFER for transient issues that may resolve on their own:
+- Out-of-memory errors during execution
+- API rate limiting or service unavailability
+- Network timeouts
+- Resource contention issues
+
+The system will automatically retry after a cooldown period.
 
 ### Workspace Recoverability
 
@@ -231,27 +279,13 @@ Steps marked with **Commit After = Yes** create git commits after completion. Th
 - Resuming from the NEXT step after a committed step is safe
 - The resumed step will see a clean, known workspace state
 
-Steps without commits leave the workspace in an indeterminate state:
-- Partial changes may exist
-- Resuming may encounter conflicts or inconsistencies
-- You may need to go back to an earlier committed step
-
-### Decision Matrix
-
-| Scenario | Best Recovery Step |
-|----------|-------------------|
-| Pipeline went in unexpected direction (wrong approach, bad assumptions) | Last **committed checkpoint** before divergence |
-| PRD incomplete but workspace has useful progress | First stateful step (to restart with preserved workspace) |
-| Step failed due to transient issue (rate limits, timeouts) | The failed step itself |
-| Workspace is corrupted or in unknown state | Last committed checkpoint (or `ABORT` if none) |
-| All phases complete but results are wrong | The step that produced wrong results |
-| All phases complete with correct outputs | `ABORT` (nothing to resume) |
-| Fundamental issue (impossible task, bad PRD) | `ABORT` |
-
 ### The Key Question
 
-Ask yourself: "If I resume from step X, will the workspace be in a known good state that allows
-that step to succeed?" If the answer is uncertain, go back to an earlier committed checkpoint.
+Ask yourself: "What is the RIGHT outcome for this worker right now?"
+- If work is done → COMPLETE
+- If work can continue → RETRY from the best recovery point
+- If something temporary went wrong → DEFER
+- If it's fundamentally broken → ABORT
 EOF
 }
 
@@ -320,47 +354,66 @@ agent_run() {
         log_warn "Resume-decide agent exited with code $agent_exit"
     fi
 
-    # Extract <step> and <instructions> from Claude's output
-    local step instructions
-    step=$(_extract_tag_content_from_stream_json "$log_file" "step") || true
+    # Extract <decision> and <instructions> from Claude's output
+    # Try <decision> tag first (new format), fall back to <step> (legacy)
+    local raw_decision instructions
+    raw_decision=$(_extract_tag_content_from_stream_json "$log_file" "decision") || true
+    if [ -z "$raw_decision" ]; then
+        # Legacy fallback: try <step> tag
+        raw_decision=$(_extract_tag_content_from_stream_json "$log_file" "step") || true
+    fi
     instructions=$(_extract_tag_content_from_stream_json "$log_file" "instructions") || true
 
-    # Default to ABORT if no step extracted
-    if [ -z "$step" ]; then
-        log_error "No <step> tag found in resume-decide output"
-        step="ABORT"
-        instructions="${instructions:-Resume-decide agent did not produce a valid step decision.}"
+    # Default to ABORT if no decision extracted
+    if [ -z "$raw_decision" ]; then
+        log_error "No <decision> or <step> tag found in resume-decide output"
+        raw_decision="ABORT"
+        instructions="${instructions:-Resume-decide agent did not produce a valid decision.}"
     fi
 
-    # Determine workspace recovery information
+    # Strip whitespace
+    raw_decision=$(echo "$raw_decision" | tr -d '[:space:]')
+
+    # Parse decision into components
+    local decision="" resume_pipeline="" resume_step_id="" reason=""
+    _parse_resume_decision "$raw_decision" "$instructions"
+
+    # Determine workspace recovery information (for RETRY decisions)
     local last_checkpoint=""
     local recovery_possible="false"
 
-    if [ "$step" != "ABORT" ]; then
+    if [ "$decision" = "RETRY" ] && [ -n "$resume_step_id" ]; then
         # Find the last commit checkpoint before the chosen step
-        last_checkpoint=$(_find_last_checkpoint_before "$step")
+        last_checkpoint=$(_find_last_checkpoint_before "$resume_step_id")
 
         # Recovery is possible if there's a checkpoint
         if [ -n "$last_checkpoint" ]; then
             recovery_possible="true"
-            log "Found recovery checkpoint: $last_checkpoint (before $step)"
+            log "Found recovery checkpoint: $last_checkpoint (before $resume_step_id)"
         else
-            log "No commit checkpoint found before $step - workspace state may be uncertain"
+            log "No commit checkpoint found before $resume_step_id - workspace state may be uncertain"
         fi
     fi
 
     # Write outputs
-    echo "$step" > "$worker_dir/resume-step.txt"
+    # Backward compat: resume-step.txt with raw decision
+    echo "$raw_decision" > "$worker_dir/resume-step.txt"
+
+    # New: structured resume-decision.json
+    _write_resume_decision "$worker_dir" "$decision" "$resume_pipeline" "$resume_step_id" "$reason"
+
     if [ -z "$instructions" ]; then
-        instructions="Resuming from step: $step. No detailed instructions available."
+        instructions="Decision: $raw_decision. No detailed instructions available."
     fi
     _RESUME_DECIDE_REPORT_PATH=$(agent_write_report "$worker_dir" "$instructions")
 
-    log "Resume decision: $step"
+    log "Resume decision: $raw_decision"
 
     # Log completion footer
     log_subsection "RESUME-DECIDE COMPLETED"
-    log_kv "Decision" "$step"
+    log_kv "Decision" "$decision"
+    log_kv "Pipeline" "${resume_pipeline:-n/a}"
+    log_kv "Resume Step" "${resume_step_id:-n/a}"
     log_kv "Last Checkpoint" "${last_checkpoint:-none}"
     log_kv "Recovery Possible" "$recovery_possible"
     log_kv "Finished" "$(iso_now)"
@@ -368,12 +421,16 @@ agent_run() {
     # Build result JSON with recovery metadata
     local result_json
     result_json=$(jq -n \
-        --arg resume_step "$step" \
+        --arg decision "$decision" \
+        --arg resume_pipeline "$resume_pipeline" \
+        --arg resume_step "$resume_step_id" \
         --arg report_file "${_RESUME_DECIDE_REPORT_PATH:-}" \
         --arg last_checkpoint "$last_checkpoint" \
         --arg recovery_possible "$recovery_possible" \
         '{
-            resume_step: $resume_step,
+            decision: $decision,
+            resume_pipeline: (if $resume_pipeline == "" then null else $resume_pipeline end),
+            resume_step: (if $resume_step == "" then null else $resume_step end),
             report_file: $report_file,
             workspace_recovery: {
                 last_checkpoint_step: (if $last_checkpoint == "" then null else $last_checkpoint end),
@@ -385,6 +442,68 @@ agent_run() {
     agent_write_result "$worker_dir" "PASS" "$result_json"
 
     return 0
+}
+
+# Parse raw decision string into components
+#
+# Sets outer-scope variables: decision, resume_pipeline, resume_step_id, reason
+#
+# Args:
+#   raw_decision - Raw decision string (e.g., "RETRY:default:execution", "COMPLETE")
+#   instructions - Instructions text for reason fallback
+_parse_resume_decision() {
+    local raw="$1"
+    local instr="${2:-}"
+
+    if [[ "$raw" == RETRY:* ]]; then
+        decision="RETRY"
+        # Parse RETRY:pipeline:step
+        resume_pipeline=$(echo "$raw" | cut -d: -f2)
+        resume_step_id=$(echo "$raw" | cut -d: -f3)
+        reason="Resume from $resume_step_id in pipeline $resume_pipeline"
+    elif [[ "$raw" == "COMPLETE" ]]; then
+        decision="COMPLETE"
+        reason="${instr:0:200}"
+    elif [[ "$raw" == "ABORT" ]]; then
+        decision="ABORT"
+        reason="${instr:0:200}"
+    elif [[ "$raw" == "DEFER" ]]; then
+        decision="DEFER"
+        reason="${instr:0:200}"
+    else
+        # Legacy: bare step_id → treat as RETRY with unknown pipeline
+        decision="RETRY"
+        resume_step_id="$raw"
+        reason="Legacy format: resuming from step $raw"
+    fi
+}
+
+# Write structured resume-decision.json
+#
+# Args:
+#   worker_dir     - Worker directory path
+#   decision       - Decision type (COMPLETE, RETRY, ABORT, DEFER)
+#   pipeline       - Pipeline name (for RETRY)
+#   step           - Step ID (for RETRY)
+#   reason         - Human-readable reason
+_write_resume_decision() {
+    local worker_dir="$1"
+    local dec="$2"
+    local pipeline="${3:-}"
+    local step="${4:-}"
+    local reason="${5:-}"
+
+    jq -n \
+        --arg decision "$dec" \
+        --arg pipeline "$pipeline" \
+        --arg resume_step "$step" \
+        --arg reason "$reason" \
+        '{
+            decision: $decision,
+            pipeline: (if $pipeline == "" then null else $pipeline end),
+            resume_step: (if $resume_step == "" then null else $resume_step end),
+            reason: $reason
+        }' > "$worker_dir/resume-decision.json"
 }
 
 # System prompt for the resume-decide agent
@@ -476,6 +595,16 @@ You are a READ-ONLY analyst. The workspace contains uncommitted work that MUST N
 **ALLOWED (read-only):**
 - \`git status\`, \`git diff\`, \`git log\`, \`git show\`
 - Reading any file in the worker directory
+
+## Output Format
+
+Your final output MUST contain a \`<decision>\` tag with one of these values:
+- \`COMPLETE\` — All PRD requirements met, code committed
+- \`RETRY:PIPELINE_NAME:STEP_ID\` — Resume from step (e.g., \`RETRY:default:execution\`)
+- \`ABORT\` — Unrecoverable failure
+- \`DEFER\` — Transient issue, try again later
+
+And an \`<instructions>\` tag with analysis details for the resumed worker.
 EOF
 }
 
@@ -483,12 +612,21 @@ EOF
 _build_user_prompt() {
     local worker_dir="$1"
 
+    # Extract pipeline name from config for RETRY decisions
+    local pipeline_name=""
+    if [ -f "$worker_dir/pipeline-config.json" ]; then
+        pipeline_name=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null)
+    fi
+    pipeline_name="${pipeline_name:-default}"
+
     cat << EOF
 RESUME ANALYSIS TASK:
 
-Analyze this interrupted worker and determine the **best step to resume from** for successful
-pipeline recovery. Your job is NOT just to find where it stopped - it's to find the step that,
-when resumed, will lead to successful completion.
+Analyze this interrupted worker and determine the **best outcome** — whether the work is done
+(COMPLETE), should be resumed from a specific step (RETRY), is unrecoverable (ABORT), or hit
+a transient issue (DEFER).
+
+The worker was using pipeline '${pipeline_name}'.
 
 ## Step 1: Explore the Worker Directory Structure
 
@@ -553,7 +691,7 @@ Commits from pipeline steps (with commit_after=true) are recovery points.
 If you need to resume from a step after a checkpoint, the workspace can be
 reset to that known state.
 
-## Step 5: Check PRD Completion Status
+## Step 5: Check PRD Completion Status and PR
 
 \`\`\`
 $worker_dir/prd.md
@@ -564,9 +702,15 @@ Count task markers:
 - \`- [ ]\` = incomplete
 - \`- [*]\` = blocked/failed
 
+Also check if a PR already exists:
+\`\`\`bash
+cat $worker_dir/pr_url.txt 2>/dev/null || echo "No PR exists yet"
+\`\`\`
+
+If ALL PRD items are complete and code is committed, this may be a COMPLETE decision.
 If tasks are incomplete, determine if:
-- Execution never finished (resume from execution)
-- Execution finished but went in wrong direction (may need to go back further)
+- Execution never finished (RETRY from execution)
+- Execution finished but went in wrong direction (RETRY from earlier checkpoint)
 
 ## Step 6: Verify Workspace State
 
@@ -584,22 +728,25 @@ Compare against what was claimed in:
 
 If workspace contradicts claims, you may need to go back to an earlier checkpoint.
 
-## Step 7: Decide the Best Recovery Step
+## Step 7: Make Your Decision
 
 Consider these questions:
 
-1. **Is the workspace in a known good state?**
-   - If uncertain, find the last committed checkpoint and resume from the step AFTER it
+1. **Is ALL the work done?**
+   - If all PRD items are complete, code is committed, and build passes → **COMPLETE**
+   - Check \`pr_url.txt\` — if a PR already exists, that's further evidence of COMPLETE
 
-2. **Did the pipeline go in the wrong direction?**
-   - If the approach was fundamentally wrong, go back to a checkpoint before the divergence
-   - The resumed step can try a different approach
+2. **Is the workspace in a known good state for resuming?**
+   - If uncertain, find the last committed checkpoint and use RETRY from the step AFTER it
 
-3. **Was this a transient failure?**
-   - If a step failed due to rate limits, timeouts, or similar, resume from that step
+3. **Did the pipeline go in the wrong direction?**
+   - If the approach was fundamentally wrong, RETRY from a checkpoint before the divergence
 
-4. **Are all steps actually complete?**
-   - If everything completed successfully, return ABORT
+4. **Was this a transient failure (OOM, timeout, rate limit)?**
+   - If a step failed due to transient issues → **DEFER** (system retries after cooldown)
+
+5. **Is this fundamentally unrecoverable?**
+   - Bad PRD, impossible task, repeated same failure → **ABORT**
 
 ## Decision Criteria
 
@@ -611,11 +758,17 @@ $(_generate_decision_criteria)
 - **Trust evidence over claims** — Verify workspace diff matches what logs/PRD say happened.
 - **Consider workspace recoverability** — Steps with commit_after create safe recovery points.
 - **Don't read logs/ directory** — Raw JSON streams will exhaust your context.
-- **Recovery > Correctness** — Choose the step that gives the best chance of successful completion.
+- **For RETRY, use format** \`RETRY:${pipeline_name}:STEP_ID\` (pipeline name from above).
 
 ## Output Format
 
-<step>STEP_ID</step>
+<decision>DECISION</decision>
+
+Where DECISION is one of:
+- \`COMPLETE\`
+- \`RETRY:${pipeline_name}:STEP_ID\` (e.g., \`RETRY:${pipeline_name}:execution\`)
+- \`ABORT\`
+- \`DEFER\`
 
 <instructions>
 ## Analysis Summary
@@ -626,14 +779,15 @@ $(_generate_decision_criteria)
 
 [Bullet points of completed work, referencing specific files and results]
 
-## Why This Recovery Point
+## Why This Decision
 
-[Explain why you chose this step:
-- Is there a committed checkpoint before it?
-- What state will the workspace be in?
-- What makes this the best recovery choice?]
+[Explain why you chose this decision:
+- For COMPLETE: evidence that all work is done
+- For RETRY: why this step, is there a committed checkpoint before it?
+- For ABORT: what makes this unrecoverable
+- For DEFER: what transient issue was encountered]
 
-## Guidance for Resumed Step
+## Guidance for Resumed Step (RETRY only)
 
 [Specific instructions for the resumed step:
 - If going back to execution: what approach to try, what to preserve
@@ -647,8 +801,6 @@ $(_generate_decision_criteria)
 - Partial work that may need attention
 - Decisions that should be preserved or changed]
 </instructions>
-
-The <step> tag MUST be exactly one of the pipeline step IDs from the table in the system prompt, or ABORT
 EOF
 }
 
