@@ -113,41 +113,40 @@ _cleanup_batch_state() {
     conflict_queue_remove "$ralph_dir" "$task_id"
 }
 
-# Clean up worktree after PR is merged (keeps logs/results/reports)
+# Clean up worker directory after PR is merged
+#
+# Unregisters the git worktree, then removes the entire worker directory.
 #
 # Args:
 #   worker_dir - Worker directory path
 _cleanup_merged_pr_worktree() {
     local worker_dir="$1"
     local workspace="$worker_dir/workspace"
+    local worker_name
+    worker_name=$(basename "$worker_dir")
 
-    [ -d "$workspace" ] || return 0
-
-    # Get the worktree path for git worktree remove
-    local main_repo
-    main_repo=$(git -C "$workspace" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')
-
-    if [ -n "$main_repo" ] && [ -d "$main_repo" ]; then
-        git -C "$main_repo" worktree remove --force "$workspace" 2>/dev/null || true
-    fi
-
-    # If worktree remove didn't work, just remove the directory
-    # Retry once after a brief delay to handle race with background build processes
-    # (e.g. cargo/rustc writing to target-shared while rm -rf is deleting)
+    # Unregister git worktree if workspace exists
     if [ -d "$workspace" ]; then
-        rm -rf "$workspace" 2>/dev/null
-        if [ -d "$workspace" ]; then
-            sleep 1
-            rm -rf "$workspace" 2>/dev/null || true
+        local main_repo
+        main_repo=$(git -C "$workspace" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')
+
+        if [ -n "$main_repo" ] && [ -d "$main_repo" ]; then
+            git -C "$main_repo" worktree remove --force "$workspace" 2>/dev/null || true
         fi
     fi
 
-    # Mark cleanup in worker state
+    # Remove the entire worker directory
+    # Retry once after a brief delay to handle race with background build processes
+    # (e.g. cargo/rustc writing to target-shared while rm -rf is deleting)
     if [ -d "$worker_dir" ]; then
-        echo "merged_and_cleaned" > "$worker_dir/.cleanup_status"
+        rm -rf "$worker_dir" 2>/dev/null
+        if [ -d "$worker_dir" ]; then
+            sleep 1
+            rm -rf "$worker_dir" 2>/dev/null || true
+        fi
     fi
 
-    log "Worktree cleaned up for $(basename "$worker_dir")"
+    log "Worker directory removed for $worker_name"
 }
 
 # Attempt to merge a PR for a worker

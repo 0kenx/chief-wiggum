@@ -139,19 +139,18 @@ pr_optimizer_clear_status() {
 # Cleanup and Utility Functions
 # =============================================================================
 
-# Clean up worktree after PR is merged (keeps logs/results/reports)
+# Clean up worker directory after PR is merged
+#
+# Unregisters the git worktree, then removes the entire worker directory.
+#
+# Args:
+#   worker_dir - Worker directory path
 _cleanup_merged_worktree() {
     local worker_dir="$1"
     local workspace="$worker_dir/workspace"
 
-    [ -d "$workspace" ] || return 0
-
-    log "      Cleaning up worktree..."
-
-    local repo_root
-    repo_root=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null || echo "")
-
-    if [ -n "$repo_root" ]; then
+    # Unregister git worktree if workspace exists
+    if [ -d "$workspace" ]; then
         local main_repo
         main_repo=$(git -C "$workspace" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')
 
@@ -160,20 +159,17 @@ _cleanup_merged_worktree() {
         fi
     fi
 
+    # Remove the entire worker directory
     # Retry once after a brief delay to handle race with background build processes
-    if [ -d "$workspace" ]; then
-        rm -rf "$workspace" 2>/dev/null
-        if [ -d "$workspace" ]; then
+    if [ -d "$worker_dir" ]; then
+        rm -rf "$worker_dir" 2>/dev/null
+        if [ -d "$worker_dir" ]; then
             sleep 1
-            rm -rf "$workspace" 2>/dev/null || true
+            rm -rf "$worker_dir" 2>/dev/null || true
         fi
     fi
 
-    if [ -d "$worker_dir" ]; then
-        echo "merged_and_cleaned" > "$worker_dir/.cleanup_status"
-    fi
-
-    log "      Worktree removed (logs preserved)"
+    log "      Worker directory removed"
 }
 
 # Check if pr-comment-fix agent completed successfully (PASS)
@@ -523,7 +519,17 @@ pr_merge_gather_all() {
             log "  $task_id (PR #$pr_number): Already merged - cleaning up"
             # Update kanban to complete
             update_kanban_status "$ralph_dir/kanban.md" "$task_id" "x" 2>/dev/null || true
-            # Clean up worktree
+            # Clean up batch coordination before workspace deletion
+            if batch_coord_has_worker_context "$worker_dir"; then
+                local batch_id
+                batch_id=$(batch_coord_read_worker_context "$worker_dir" "batch_id")
+                if [ -n "$batch_id" ]; then
+                    local project_dir
+                    project_dir=$(dirname "$ralph_dir")
+                    batch_coord_mark_complete "$batch_id" "$task_id" "$project_dir"
+                fi
+            fi
+            # Delete workspace
             _cleanup_merged_worktree "$worker_dir"
             continue
         fi

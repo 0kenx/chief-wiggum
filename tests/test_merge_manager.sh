@@ -260,9 +260,10 @@ GHEOF
 
     assert_equals "0" "$result" "Should return 0 on successful merge"
 
-    local state
-    state=$(git_state_get "$WORKER_DIR")
-    assert_equals "merged" "$state" "State should be merged"
+    # Worker directory should be deleted after successful merge
+    local dir_exists="no"
+    [ -d "$WORKER_DIR" ] && dir_exists="yes"
+    assert_equals "no" "$dir_exists" "Worker directory should be removed after merge"
 }
 
 # =============================================================================
