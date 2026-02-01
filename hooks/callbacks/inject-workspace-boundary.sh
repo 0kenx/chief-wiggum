@@ -46,6 +46,7 @@ SECURITY RULES - YOU MUST FOLLOW THESE:
 4. If you discover absolute paths outside your workspace, do NOT use them
 5. The parent directory '../' is allowed ONLY for accessing ../prd.md
 6. The .ralph/plans/ directory is readable for implementation plans (read-only)
+7. The .ralph/memory/ directory is readable for project memory and lessons learned (read-only)
 
 Any file paths you return or suggest MUST be within: ${workspace}
 

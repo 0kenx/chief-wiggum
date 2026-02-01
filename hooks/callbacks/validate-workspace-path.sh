@@ -175,6 +175,14 @@ validate_path() {
         return 0
     fi
 
+    # 4. ralph_dir/memory - read-only access for agents
+    if [[ -n "$ralph_dir_abs" && "$abs_path" == "$ralph_dir_abs/memory"* ]]; then
+        case "$tool" in
+            Read|Glob|Grep) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+
     # 4. worker_dir/* (except blocked paths) - allowed
     if [[ -n "$worker_dir_abs" && "$abs_path" == "$worker_dir_abs"* ]]; then
         # Check if it's a blocked path (pass tool for read/write distinction)

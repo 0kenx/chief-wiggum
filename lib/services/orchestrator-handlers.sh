@@ -20,6 +20,9 @@
 [ -n "${_SERVICE_HANDLERS_ORCH_LOADED:-}" ] && return 0
 _SERVICE_HANDLERS_ORCH_LOADED=1
 
+# Source memory service handlers
+source "$WIGGUM_HOME/lib/services/memory-handlers.sh"
+
 # =============================================================================
 # Orchestrator Service Handlers
 #

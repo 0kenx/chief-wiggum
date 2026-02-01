@@ -989,6 +989,12 @@ _handle_main_worker_completion() {
     log "Worker for $task_id finished"
     scheduler_mark_event
 
+    # Collect deterministic stats (fast, synchronous)
+    source "$WIGGUM_HOME/lib/memory/memory.sh"
+    memory_collect_stats "$worker_dir" "$RALPH_DIR" || true
+    # Queue for LLM analysis (async, processed by memory-extract service)
+    memory_queue_worker "$worker_dir" || true
+
     # If PR was created and is already in needs_merge state, attempt merge
     # immediately (mirrors fix/resolve completion callbacks)
     if git_state_is "$worker_dir" "needs_merge"; then

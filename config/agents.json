@@ -162,6 +162,16 @@
         "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
       }
     },
+    "system.memory-analyst": {
+      "max_iterations": 1,
+      "max_turns": 20,
+      "timeout_seconds": 600,
+      "auto_commit": false,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
+    },
     "system.resume-decide": {
       "max_iterations": 1,
       "max_turns": 25,

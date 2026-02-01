@@ -378,6 +378,13 @@ _md_generate_context_section() {
         ((++item_num))
     fi
 
+    # Check for project memory
+    local memory_index="${RALPH_DIR:-$_MD_PROJECT_DIR/.ralph}/memory/INDEX.md"
+    if [ -f "$memory_index" ]; then
+        section+="${item_num}. **Review project memory** ($memory_index) - Lessons learned from previous task executions. Follow links to explore relevant patterns, agent notes, and task analyses."$'\n'
+        ((++item_num))
+    fi
+
     section+=$'\n'
     echo "$section"
 }

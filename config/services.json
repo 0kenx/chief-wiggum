@@ -95,6 +95,17 @@
       }
     },
     {
+      "id": "memory-load",
+      "description": "Initialize memory directory structure on startup",
+      "phase": "startup",
+      "order": 70,
+      "schedule": { "type": "tick" },
+      "execution": {
+        "type": "function",
+        "function": "svc_memory_load"
+      }
+    },
+    {
       "id": "init-terminal",
       "description": "Initialize terminal header display",
       "phase": "startup",
@@ -306,6 +317,25 @@
       "execution": {
         "type": "function",
         "function": "svc_orch_spawn_resolve_workers"
+      }
+    },
+    {
+      "id": "memory-extract",
+      "description": "Run LLM analysis on completed workers to update project memory",
+      "phase": "periodic",
+      "order": 90,
+      "schedule": {
+        "type": "interval",
+        "interval": 300,
+        "run_on_startup": false
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_memory_extract"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
       }
     },
     {
