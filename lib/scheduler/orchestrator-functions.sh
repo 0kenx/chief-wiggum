@@ -664,9 +664,6 @@ orch_display_status() {
         status_counts=$(compute_status_counts "$SCHED_READY_TASKS" "$SCHED_BLOCKED_TASKS" "$cyclic_ref" "$ralph_dir")
         local _sc_ready _sc_blocked _sc_deferred _sc_cyclic _sc_errors _sc_stuck
         IFS='|' read -r _sc_ready _sc_blocked _sc_deferred _sc_cyclic _sc_errors _sc_stuck <<< "$status_counts"
-        terminal_header_set_status_data "$_sc_ready" "$_sc_blocked" "$_sc_deferred" "$_sc_cyclic" "$_sc_errors" "$_sc_stuck"
-        terminal_header_force_redraw
-
         _log_detailed_status \
             "0" \
             "$max_workers" \
@@ -679,10 +676,7 @@ orch_display_status() {
             "$plan_bonus" \
             "$dep_bonus"
 
-        # Non-TTY fallback
-        if ! terminal_header_is_enabled; then
-            log "[status] ready: $_sc_ready | blocked: $_sc_blocked | deferred: $_sc_deferred | errors: $_sc_errors"
-        fi
+        log "[status] ready: $_sc_ready | blocked: $_sc_blocked | deferred: $_sc_deferred | errors: $_sc_errors"
     fi
 }
 

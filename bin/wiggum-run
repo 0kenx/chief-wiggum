@@ -32,7 +32,6 @@ source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-registry.sh"
 source "$WIGGUM_HOME/lib/scheduler/pr-merge-optimizer.sh"
 source "$WIGGUM_HOME/lib/scheduler/orchestrator-functions.sh"
-source "$WIGGUM_HOME/lib/scheduler/terminal-header.sh"
 source "$WIGGUM_HOME/lib/scheduler/smart-routing.sh"
 
 # Service-based scheduler (consolidated module includes core + state)
@@ -93,7 +92,6 @@ Options:
   --max-turns N        Maximum turns per Claude session (default: 50)
   --fix-agents N       Maximum concurrent fix/resolve workers (default: 2, or config)
   --pipeline NAME      Pipeline config to use (from config/pipelines/ or config/)
-  --text               Disable terminal header, print raw logs to stdout
   --force              Override stale orchestrator lock
   -v, --verbose        Verbose output (same as default)
   -vv                  Debug output (detailed diagnostics)
@@ -109,7 +107,6 @@ Examples:
   wiggum run --max-workers 8              # Start with max 8 workers
   wiggum run plan --max-workers 2         # Planning mode with 2 workers
   wiggum run --pipeline fast              # Use the fast pipeline
-  wiggum run --text                        # Raw log output (no terminal UI)
   wiggum run --fix-only                   # Only fix and merge existing PRs
   wiggum run --merge-only                 # Only merge ready PRs
   wiggum run --resume-only                # Only resume stopped workers

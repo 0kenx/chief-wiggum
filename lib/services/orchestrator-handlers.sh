@@ -240,8 +240,6 @@ svc_orch_init_terminal() {
     echo "=========================================="
     echo ""
 
-    terminal_header_init "$MAX_WORKERS" "$mode_desc"
-
     # Run initial scheduler tick and status display so the terminal shows
     # real data immediately, rather than waiting for the first post-phase cycle
     scheduler_tick
@@ -398,7 +396,7 @@ svc_orch_aging_update() {
     scheduler_update_aging
 }
 
-# Update terminal header with current status
+# Log current orchestrator status
 svc_orch_status_display() {
     if [ "$SCHED_SCHEDULING_EVENT" = true ]; then
         local cyclic_ref status_counts
@@ -406,8 +404,6 @@ svc_orch_status_display() {
         status_counts=$(compute_status_counts "$SCHED_READY_TASKS" "$SCHED_BLOCKED_TASKS" "$cyclic_ref" "$RALPH_DIR")
         local _sc_ready _sc_blocked _sc_deferred _sc_cyclic _sc_errors _sc_stuck
         IFS='|' read -r _sc_ready _sc_blocked _sc_deferred _sc_cyclic _sc_errors _sc_stuck <<< "$status_counts"
-        terminal_header_set_status_data "$_sc_ready" "$_sc_blocked" "$_sc_deferred" "$_sc_cyclic" "$_sc_errors" "$_sc_stuck"
-        terminal_header_force_redraw
 
         _log_detailed_status \
             "${_ORCH_ITERATION:-0}" \
@@ -421,11 +417,8 @@ svc_orch_status_display() {
             "$PLAN_BONUS" \
             "$DEP_BONUS_PER_TASK"
 
-        if ! terminal_header_is_enabled; then
-            log "[status] ready: $_sc_ready | blocked: $_sc_blocked | deferred: $_sc_deferred | errors: $_sc_errors"
-        fi
+        log "[status] ready: $_sc_ready | blocked: $_sc_blocked | deferred: $_sc_deferred | errors: $_sc_errors"
     fi
-    terminal_header_refresh "${_ORCH_ITERATION:-0}" "$MAX_WORKERS"
 }
 
 # Persist service state to disk
@@ -437,9 +430,9 @@ svc_orch_state_save() {
 # Shutdown Phase Handlers (Phase 5)
 # =============================================================================
 
-# Clean up terminal header on shutdown
+# Terminal cleanup (no-op, terminal header removed)
 svc_orch_terminal_cleanup() {
-    terminal_header_cleanup 2>/dev/null || true
+    true
 }
 
 # Remove orchestrator lock file on shutdown

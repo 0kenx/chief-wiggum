@@ -106,8 +106,8 @@
       }
     },
     {
-      "id": "init-terminal",
-      "description": "Initialize terminal header display",
+      "id": "init-startup-display",
+      "description": "Display startup info and run initial status",
       "phase": "startup",
       "order": 80,
       "schedule": { "type": "tick" },
@@ -447,7 +447,7 @@
     },
     {
       "id": "status-display",
-      "description": "Update terminal header with current status",
+      "description": "Log current orchestrator status",
       "phase": "post",
       "order": 35,
       "schedule": { "type": "tick" },
@@ -477,17 +477,6 @@
       "execution": {
         "type": "function",
         "function": "svc_orch_state_save"
-      }
-    },
-    {
-      "id": "terminal-cleanup",
-      "description": "Clean up terminal header on shutdown",
-      "phase": "shutdown",
-      "order": 20,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_terminal_cleanup"
       }
     },
     {

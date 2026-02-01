@@ -106,7 +106,6 @@ _setup_signals() {
     _ORCH_SHUTDOWN_REQUESTED=false
 
     cleanup_orchestrator() {
-        terminal_header_cleanup 2>/dev/null || true
         if [ "${_ORCH_SHUTDOWN_REQUESTED:-false}" = false ]; then
             log "Cleaning up orchestrator lock"
             _ORCH_SHUTDOWN_REQUESTED=true
@@ -116,7 +115,6 @@ _setup_signals() {
     trap cleanup_orchestrator EXIT
 
     handle_shutdown_signal() {
-        terminal_header_cleanup 2>/dev/null || true
         log ""
         log "Shutdown signal received - stopping orchestrator"
         log "Active workers will continue running to completion"
@@ -125,7 +123,6 @@ _setup_signals() {
         exit $EXIT_SIGINT
     }
     trap handle_shutdown_signal INT TERM
-    trap _terminal_header_on_resize WINCH
 }
 
 # Check for rate limit pause file and wait if needed

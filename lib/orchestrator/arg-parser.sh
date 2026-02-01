@@ -88,10 +88,6 @@ _parse_run_args() {
                 export WIGGUM_PIPELINE="$2"
                 shift 2
                 ;;
-            --text)
-                export WIGGUM_NO_HEADER=1
-                shift
-                ;;
             --force)
                 # shellcheck disable=SC2034
                 FORCE_LOCK=true
