@@ -104,6 +104,11 @@ svc_orch_github_issue_sync() {
     orch_github_issue_sync "$@"
 }
 
+# Sync plan files with GitHub issue comments
+svc_orch_github_plan_sync() {
+    orch_github_plan_sync "$@"
+}
+
 # Rotate oversized global log files
 svc_orch_log_rotation() {
     log_rotation_check_all

@@ -836,6 +836,41 @@ orch_github_issue_sync() {
     return 0
 }
 
+# Sync plan files (.ralph/plans/) with GitHub issue comments
+#
+# Runs bidirectional sync for all tracked plans. Uses the same
+# github.issue_sync.enabled gate as issue sync.
+#
+# Returns: 0 on success, 1 on failure
+orch_github_plan_sync() {
+    local ralph_dir="${RALPH_DIR:-}"
+    [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
+
+    source "$WIGGUM_HOME/lib/github/issue-config.sh"
+    load_github_sync_config
+
+    if ! github_sync_is_enabled; then
+        log_debug "GitHub issue sync disabled - skipping plan sync"
+        return 0
+    fi
+
+    if ! github_sync_validate_config; then
+        log_error "GitHub sync config invalid - skipping plan sync"
+        return 1
+    fi
+
+    source "$WIGGUM_HOME/lib/github/plan-sync.sh"
+
+    local sync_exit=0
+    github_plan_sync "$ralph_dir" "" "false" "" || sync_exit=$?
+
+    if [ "$sync_exit" -ne 0 ]; then
+        log_warn "GitHub plan sync completed with conflicts"
+    fi
+
+    return 0
+}
+
 # =============================================================================
 # Worker Spawn and Lifecycle Functions
 #

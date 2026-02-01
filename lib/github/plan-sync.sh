@@ -415,6 +415,17 @@ github_plan_sync_all() {
             continue
         fi
 
+        # Skip completed/terminal tasks to reduce API overhead
+        local synced_status
+        synced_status=$(echo "$task_state" | jq -r '.last_synced_status // " "')
+        case "$synced_status" in
+            x|"*"|N)
+                log_debug "$tid: terminal status ($synced_status), skipping"
+                ((++skipped))
+                continue
+                ;;
+        esac
+
         local exit_code=0
         github_plan_sync_task "$ralph_dir" "$tid" "$dry_run" "$force" || exit_code=$?
 

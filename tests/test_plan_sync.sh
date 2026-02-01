@@ -428,6 +428,63 @@ test_sync_all_no_plans() {
 }
 
 # =============================================================================
+# Skip Completed Tasks in Bulk Sync
+# =============================================================================
+
+test_sync_all_skips_completed_tasks() {
+    # Completed task (status "x") with a plan — should be skipped in bulk sync
+    _create_tracked_task "TASK-DONE" 200 '{"last_synced_status": "x"}'
+    printf '%s\n' "completed plan" > "$TEST_DIR/plans/TASK-DONE.md"
+
+    # Active task — should be synced
+    _create_tracked_task "TASK-ACTIVE" 201
+    printf '%s\n' "active plan" > "$TEST_DIR/plans/TASK-ACTIVE.md"
+
+    _setup_gh_mock_detailed "" '60000' ""
+
+    local output
+    output=$(github_plan_sync_all "$TEST_DIR" "false" "" 2>&1)
+
+    assert_output_contains "$output" "1 synced" "Should sync only the active task"
+    assert_output_contains "$output" "1 skipped" "Should skip the completed task"
+}
+
+test_sync_all_skips_failed_and_not_planned() {
+    _create_tracked_task "TASK-FAIL" 210 '{"last_synced_status": "*"}'
+    printf '%s\n' "failed plan" > "$TEST_DIR/plans/TASK-FAIL.md"
+
+    _create_tracked_task "TASK-NP" 211 '{"last_synced_status": "N"}'
+    printf '%s\n' "not planned" > "$TEST_DIR/plans/TASK-NP.md"
+
+    _setup_gh_mock_detailed "" '61000' ""
+
+    local output
+    output=$(github_plan_sync_all "$TEST_DIR" "false" "" 2>&1)
+
+    assert_output_contains "$output" "2 skipped" "Should skip both terminal tasks"
+}
+
+test_explicit_task_id_syncs_completed() {
+    # Completed task — bulk sync skips it, but explicit TASK-ID should still work
+    _create_tracked_task "TASK-COMP" 220 '{"last_synced_status": "x"}'
+    printf '%s\n' "completed plan content" > "$TEST_DIR/plans/TASK-COMP.md"
+
+    _setup_gh_mock_detailed "" '70000' ""
+
+    local exit_code=0
+    github_plan_sync_task "$TEST_DIR" "TASK-COMP" "false" "" || exit_code=$?
+
+    assert_equals "0" "$exit_code" "Explicit sync should succeed for completed task"
+
+    # Verify it actually synced (state has plan_comment_id)
+    local state
+    state=$(github_sync_state_get_task "$TEST_DIR" "TASK-COMP")
+    local comment_id
+    comment_id=$(echo "$state" | jq -r '.plan_comment_id')
+    assert_equals "70000" "$comment_id" "Should have synced despite completed status"
+}
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 run_test test_strip_plan_marker
@@ -445,6 +502,9 @@ run_test test_skip_no_issue_number
 run_test test_skip_in_sync
 run_test test_sync_all_discovers_local_plans
 run_test test_sync_all_no_plans
+run_test test_sync_all_skips_completed_tasks
+run_test test_sync_all_skips_failed_and_not_planned
+run_test test_explicit_task_id_syncs_completed
 
 print_test_summary
 exit_with_test_result

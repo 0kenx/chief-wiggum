@@ -177,6 +177,31 @@
       }
     },
     {
+      "id": "github-plan-sync",
+      "description": "Sync plan files with GitHub issue comments",
+      "phase": "periodic",
+      "order": 6,
+      "schedule": {
+        "type": "interval",
+        "interval": 120,
+        "jitter": 15,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_orch_github_plan_sync"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      },
+      "circuit_breaker": {
+        "enabled": true,
+        "threshold": 3,
+        "cooldown": 300
+      }
+    },
+    {
       "id": "pr-sync",
       "description": "Sync PR statuses and detect new comments",
       "phase": "periodic",
