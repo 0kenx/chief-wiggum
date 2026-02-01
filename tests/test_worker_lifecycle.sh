@@ -142,7 +142,7 @@ test_resolve_worker_id_no_workers_dir_error() {
 
 test_get_valid_worker_pid_valid_bash_process() {
     # Start a background bash process that stays as bash (not exec'd to another command)
-    bash -c 'while true; do sleep 1; done' &
+    bash -c 'while true; do sleep 1; done' >/dev/null 2>&1 &
     local pid=$!
     local pid_file="$TEST_DIR/test.pid"
     echo "$pid" > "$pid_file"
@@ -201,7 +201,7 @@ test_is_worker_running_true_when_running() {
     mkdir -p "$worker_dir"
 
     # Start a background bash process that stays as bash
-    bash -c 'while true; do sleep 1; done' &
+    bash -c 'while true; do sleep 1; done' >/dev/null 2>&1 &
     local pid=$!
     echo "$pid" > "$worker_dir/agent.pid"
 
@@ -245,7 +245,7 @@ test_cleanup_stale_pid_removes_stale() {
 
 test_cleanup_stale_pid_keeps_running() {
     # Start a background bash process that stays as bash
-    bash -c 'while true; do sleep 1; done' &
+    bash -c 'while true; do sleep 1; done' >/dev/null 2>&1 &
     local pid=$!
     local pid_file="$TEST_DIR/running.pid"
     echo "$pid" > "$pid_file"
@@ -307,7 +307,7 @@ test_scan_active_workers_finds_running() {
     mkdir -p "$worker_dir"
 
     # Start a background bash process that stays as bash
-    bash -c 'while true; do sleep 1; done' &
+    bash -c 'while true; do sleep 1; done' >/dev/null 2>&1 &
     local pid=$!
     echo "$pid" > "$worker_dir/agent.pid"
 
@@ -377,7 +377,7 @@ test_is_worker_running_true_when_resuming() {
     mkdir -p "$worker_dir"
 
     # Start a background bash process that stays as bash
-    bash -c 'while true; do sleep 1; done' &
+    bash -c 'while true; do sleep 1; done' >/dev/null 2>&1 &
     local pid=$!
     echo "$pid" > "$worker_dir/resume.pid"
 
@@ -398,7 +398,7 @@ test_scan_active_workers_finds_resuming() {
     mkdir -p "$worker_dir"
 
     # Start a background bash process that stays as bash
-    bash -c 'while true; do sleep 1; done' &
+    bash -c 'while true; do sleep 1; done' >/dev/null 2>&1 &
     local pid=$!
     echo "$pid" > "$worker_dir/resume.pid"
 

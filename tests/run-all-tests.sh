@@ -115,20 +115,44 @@ run_suite() {
         output_file=$(mktemp)
         local exit_code=0
 
-        # Stream output in real-time: dots for pass, F for fail
-        (
-            set +e
-            set +o pipefail
-            "$script" 2>&1 | while IFS= read -r line; do
-                printf '%s\n' "$line" >> "$output_file"
-                if [[ "$line" == *"✓"* ]]; then
-                    printf "."
-                elif [[ "$line" == *"✗"* ]]; then
-                    printf "F"
-                fi
+        # Run script in background with output to file (no pipe for child
+        # processes to inherit and hold open after the script exits)
+        "$script" > "$output_file" 2>&1 &
+        local script_pid=$!
+
+        # Show real-time progress by polling for assertion markers
+        local prev_pass=0 prev_fail=0
+        while kill -0 "$script_pid" 2>/dev/null; do
+            sleep 0.3
+            local pass fail
+            pass=$(grep -c '✓' "$output_file" 2>/dev/null) || true
+            fail=$(grep -c '✗' "$output_file" 2>/dev/null) || true
+            pass="${pass:-0}"; fail="${fail:-0}"
+            while [ "$prev_pass" -lt "$pass" ]; do
+                printf "."
+                ((++prev_pass))
             done
-            exit "${PIPESTATUS[0]}"
-        ) || exit_code=$?
+            while [ "$prev_fail" -lt "$fail" ]; do
+                printf "F"
+                ((++prev_fail))
+            done
+        done
+
+        wait "$script_pid" 2>/dev/null || exit_code=$?
+
+        # Flush any remaining markers
+        local pass fail
+        pass=$(grep -c '✓' "$output_file" 2>/dev/null) || true
+        fail=$(grep -c '✗' "$output_file" 2>/dev/null) || true
+        pass="${pass:-0}"; fail="${fail:-0}"
+        while [ "$prev_pass" -lt "$pass" ]; do
+            printf "."
+            ((++prev_pass))
+        done
+        while [ "$prev_fail" -lt "$fail" ]; do
+            printf "F"
+            ((++prev_fail))
+        done
 
         end_time=$(date +%s)
         duration=$((end_time - start_time))

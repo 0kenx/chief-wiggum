@@ -808,7 +808,7 @@ _spawn_batch_resolve_worker() {
                     git_state_set "$worker_dir" "failed" "priority-workers._spawn_batch_resolve_worker" "Workspace missing and reconstruction failed, PR status: $merge_status"
                 fi
             fi
-            return 0
+            return 1
         fi
     fi
 
@@ -861,6 +861,7 @@ _spawn_batch_resolve_worker() {
     else
         log_error "Failed to get worker PID for $task_id - agent.pid not created"
         git_state_set "$worker_dir" "failed" "priority-workers.spawn_resolve_workers" "Worker failed to start"
+        return 1
     fi
 }
 

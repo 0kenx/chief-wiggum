@@ -729,13 +729,13 @@ orch_create_orphan_pr_workspaces() {
 # Wrapper for spawn_fix_workers
 #
 # Globals:
-#   RALPH_DIR       - Required
-#   PROJECT_DIR     - Required
-#   PRIORITY_LIMIT  - Optional (default: 2)
+#   RALPH_DIR        - Required
+#   PROJECT_DIR      - Required
+#   FIX_WORKER_LIMIT - Optional (default: 2)
 orch_spawn_fix_workers() {
     local ralph_dir="${RALPH_DIR:-}"
     local project_dir="${PROJECT_DIR:-}"
-    local limit="${PRIORITY_LIMIT:-2}"
+    local limit="${FIX_WORKER_LIMIT:-2}"
 
     [ -n "$ralph_dir" ] || return 1
     [ -n "$project_dir" ] || return 1
@@ -746,13 +746,13 @@ orch_spawn_fix_workers() {
 # Wrapper for spawn_resolve_workers
 #
 # Globals:
-#   RALPH_DIR       - Required
-#   PROJECT_DIR     - Required
-#   PRIORITY_LIMIT  - Optional (default: 2)
+#   RALPH_DIR        - Required
+#   PROJECT_DIR      - Required
+#   FIX_WORKER_LIMIT - Optional (default: 2)
 orch_spawn_resolve_workers() {
     local ralph_dir="${RALPH_DIR:-}"
     local project_dir="${PROJECT_DIR:-}"
-    local limit="${PRIORITY_LIMIT:-2}"
+    local limit="${FIX_WORKER_LIMIT:-2}"
 
     [ -n "$ralph_dir" ] || return 1
     [ -n "$project_dir" ] || return 1
