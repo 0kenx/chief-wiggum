@@ -304,6 +304,7 @@ $plan_section
 * If unsure about intent, preserve BOTH sides rather than dropping code
 $([ "$has_plan" = true ] && echo "* Follow the resolution-plan.md guidance EXACTLY")
 EOF
+    agent_get_memory_context
 }
 
 # User prompt

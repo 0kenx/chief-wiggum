@@ -247,6 +247,7 @@ If changes are fundamentally incompatible:
 
 With explanation of why they cannot be coordinated.
 EOF
+    agent_get_memory_context
 }
 
 # User prompt with batch context

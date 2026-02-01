@@ -721,6 +721,32 @@ echo "$AGENT_PROJECT_DIR"
 echo "$AGENT_TASK_ID"        # Empty string for leaf agents
 ```
 
+### Memory Context
+
+Shell agents can inject project memory (lessons learned from previous task executions) into their system prompts using `agent_get_memory_context()`:
+
+```bash
+# Get formatted memory section (returns empty string if no memory index exists)
+agent_get_memory_context                  # Uses _AGENT_PROJECT_DIR
+agent_get_memory_context "$project_dir"   # Explicit project directory
+```
+
+**Usage in `_get_system_prompt()`:**
+
+```bash
+_get_system_prompt() {
+    local workspace="$1"
+    cat << EOF
+Your system prompt content here...
+EOF
+    agent_get_memory_context
+}
+```
+
+The function echoes to stdout, so placing it after the heredoc naturally appends the memory section to the prompt captured by `$(_get_system_prompt ...)`.
+
+**Note:** Markdown agents get memory automatically via the `{{context_section}}` variable — only shell agents need to call this explicitly.
+
 ### Dependency Sourcing
 
 ```bash

@@ -198,6 +198,7 @@ STATUS: ../reports/comment-status.md (update as you fix)
 * Stay within workspace directory
 * If you disagree with feedback, still address it or explain why not
 EOF
+    agent_get_memory_context
 }
 
 # User prompt callback (unified 4-arg signature)

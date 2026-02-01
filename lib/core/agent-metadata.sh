@@ -71,6 +71,28 @@ agent_get_workspace() { echo "$_AGENT_WORKSPACE"; }
 agent_get_project_dir() { echo "$_AGENT_PROJECT_DIR"; }
 agent_get_task_id() { echo "$_AGENT_TASK_ID"; }
 
+# Get formatted memory context for injection into shell agent prompts
+#
+# Markdown agents get memory automatically via {{context_section}}.
+# Shell agents must call this explicitly in _get_system_prompt().
+#
+# Args:
+#   project_dir - Project root directory (optional, falls back to _AGENT_PROJECT_DIR)
+#
+# Returns: Formatted memory section on stdout, or empty if no memory index exists
+agent_get_memory_context() {
+    local project_dir="${1:-$_AGENT_PROJECT_DIR}"
+    local memory_index="${RALPH_DIR:-$project_dir/.ralph}/memory/INDEX.md"
+    [ -f "$memory_index" ] || return 0
+    cat << EOF
+
+## Project Memory
+
+Review project memory ($memory_index) - Lessons learned from previous task executions.
+Follow links to explore relevant patterns, agent notes, and task analyses.
+EOF
+}
+
 # =============================================================================
 # DEPENDENCY SOURCING
 # =============================================================================
