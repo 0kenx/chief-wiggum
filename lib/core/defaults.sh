@@ -99,7 +99,7 @@ _load_config_cache() {
     fi
 
     # Single jq call extracts all values (performance optimization)
-    # Format: approved_user_ids|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email|fix_worker_limit
+    # Format: approved_user_ids|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email|fix_worker_limit|lr_enabled|lr_max_lines|lr_max_archives
     local extracted
     extracted=$(jq -r '[
         (.review.approved_user_ids // [] | map(tostring) | join(",")),
@@ -109,13 +109,17 @@ _load_config_cache() {
         (.rate_limit.threshold_prompts // 900),
         (.git.author_name // "Ralph Wiggum"),
         (.git.author_email // "ralph@wiggum.cc"),
-        (.workers.fix_worker_limit // 2)
+        (.workers.fix_worker_limit // 2),
+        (.log_rotation.enabled // true),
+        (.log_rotation.max_lines // 10000),
+        (.log_rotation.max_archives // 10)
     ] | @tsv' "$config_file" 2>/dev/null) || true
 
     if [ -n "$extracted" ]; then
         IFS=$'\t' read -r _CACHE_APPROVED_USER_IDS _CACHE_FIX_MAX_ITER _CACHE_FIX_MAX_TURNS \
                          _CACHE_AUTO_COMMIT _CACHE_RATE_LIMIT _CACHE_GIT_NAME _CACHE_GIT_EMAIL \
-                         _CACHE_FIX_WORKER_LIMIT \
+                         _CACHE_FIX_WORKER_LIMIT _CACHE_LOG_ROTATE_ENABLED _CACHE_LOG_ROTATE_LINES \
+                         _CACHE_LOG_ROTATE_MAX_ARCHIVES \
                          <<< "$extracted"
     fi
 
@@ -175,4 +179,22 @@ load_workers_config() {
     WIGGUM_FIX_WORKER_LIMIT="${WIGGUM_FIX_WORKER_LIMIT:-${_CACHE_FIX_WORKER_LIMIT:-}}"
     WIGGUM_FIX_WORKER_LIMIT="${WIGGUM_FIX_WORKER_LIMIT:-2}"
     export WIGGUM_FIX_WORKER_LIMIT
+}
+
+# Load log rotation config from config.json (with env var overrides)
+# Sets WIGGUM_LOG_ROTATE_ENABLED, WIGGUM_LOG_ROTATE_LINES, WIGGUM_LOG_ROTATE_MAX_ARCHIVES
+load_log_rotation_config() {
+    _load_config_cache
+
+    WIGGUM_LOG_ROTATE_ENABLED="${WIGGUM_LOG_ROTATE_ENABLED:-${_CACHE_LOG_ROTATE_ENABLED:-}}"
+    WIGGUM_LOG_ROTATE_LINES="${WIGGUM_LOG_ROTATE_LINES:-${_CACHE_LOG_ROTATE_LINES:-}}"
+    WIGGUM_LOG_ROTATE_MAX_ARCHIVES="${WIGGUM_LOG_ROTATE_MAX_ARCHIVES:-${_CACHE_LOG_ROTATE_MAX_ARCHIVES:-}}"
+
+    # Fallback defaults if config doesn't exist or parsing fails
+    WIGGUM_LOG_ROTATE_ENABLED="${WIGGUM_LOG_ROTATE_ENABLED:-true}"
+    WIGGUM_LOG_ROTATE_LINES="${WIGGUM_LOG_ROTATE_LINES:-10000}"
+    WIGGUM_LOG_ROTATE_MAX_ARCHIVES="${WIGGUM_LOG_ROTATE_MAX_ARCHIVES:-10}"
+    export WIGGUM_LOG_ROTATE_ENABLED
+    export WIGGUM_LOG_ROTATE_LINES
+    export WIGGUM_LOG_ROTATE_MAX_ARCHIVES
 }

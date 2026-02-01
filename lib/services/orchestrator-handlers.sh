@@ -101,6 +101,11 @@ svc_orch_github_issue_sync() {
     orch_github_issue_sync "$@"
 }
 
+# Rotate oversized global log files
+svc_orch_log_rotation() {
+    log_rotation_check_all
+}
+
 # =============================================================================
 # Startup Phase Handlers (Phase 3)
 # =============================================================================

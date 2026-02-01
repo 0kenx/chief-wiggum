@@ -147,7 +147,6 @@ archive_worker() {
     fi
 
     if [ -d "$worker_dir" ]; then
-        # Ensure history directory exists
         mkdir -p "$history_dir"
 
         log "Archiving worker: $worker_name -> .ralph/history/workers/"

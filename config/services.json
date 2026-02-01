@@ -201,6 +201,25 @@
       }
     },
     {
+      "id": "log-rotation",
+      "description": "Rotate oversized global log files",
+      "phase": "periodic",
+      "order": 25,
+      "schedule": {
+        "type": "interval",
+        "interval": 300,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_orch_log_rotation"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      }
+    },
+    {
       "id": "orphan-workspace",
       "description": "Create workspaces for orphaned PRs",
       "phase": "periodic",

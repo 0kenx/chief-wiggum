@@ -167,6 +167,11 @@ main() {
     export LOG_FILE="$RALPH_DIR/logs/orchestrator.log"
     log "Orchestrator log: $LOG_FILE"
 
+    # Initialize log rotation for global logs
+    source "$WIGGUM_HOME/lib/core/log-rotation.sh"
+    load_log_rotation_config
+    log_rotation_init "$RALPH_DIR/logs"
+
     # Load rate limit configuration
     load_rate_limit_config
 
