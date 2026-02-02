@@ -27,7 +27,7 @@ Agents can pass state and data through two scopes: **sequential** (to the next p
 | 1 | **`agent_comm_*` interface** | Unified lookup API. Any agent calls `agent_comm_path(worker_dir, type)` to resolve paths to another agent's result, report, summary, comments, prd, or workspace. | `lib/core/agent-base.sh:943-970` |
 | 2 | **Result file reads by agent name** | `agent_read_subagent_result(worker_dir, agent_name)` and `agent_find_latest_result()` let any agent read any other agent's epoch-named result JSON. | `lib/core/agent-base.sh:1169-1187,687-693` |
 | 3 | **Shared workspace** | All agents in a task share `worker_dir/workspace/` (a git worktree). Code changes committed by one agent are visible to all subsequent agents. | `lib/worker/agent-registry.sh:376-387` |
-| 4 | **Event log (JSONL)** | Append-only stream at `.ralph/logs/events.jsonl`. Any agent can emit events (`emit_task_started`, `emit_agent_completed`, `emit_pr_created`, etc.) and query by type/task/worker. | `lib/utils/event-emitter.sh:92-252` (emit), `271-347` (query) |
+| 4 | **Activity log (JSONL)** | Append-only stream at `.ralph/logs/activity.jsonl`. Any agent can log events via `activity_log(event, worker_id, task_id, extra...)` and query with `jq` by type/task/worker. | `lib/utils/activity-log.sh` |
 | 5 | **Checkpoint files** | Structured JSON at `checkpoints/checkpoint-N.json` containing `files_modified`, `completed_tasks`, `next_steps`, and `prose_summary`. Readable by any agent in the worker. | `lib/core/checkpoint.sh:115-138` |
 | 6 | **Kanban status** | Shared `.ralph/kanban.md` with file-locked status markers (`[=]`, `[x]`, `[*]`, `[P]`, `[N]`). Any agent can read task status set by any other agent. | `lib/core/file-lock.sh` (writes), `lib/tasks/task-parser.sh` (reads) |
 | 7 | **Reports, summaries, and logs** | Markdown reports (`reports/`), iteration summaries (`summaries/`), and conversation logs (`logs/`) in the shared worker directory are readable by any agent. | worker directory convention |
@@ -247,25 +247,24 @@ Events written to `.ralph/logs/events.jsonl`:
 ### Emitting Events
 
 ```bash
-source "$WIGGUM_HOME/lib/utils/event-emitter.sh"
+source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 
-emit_task_started "$task_id" "$worker_id"
-emit_iteration_completed "$worker_id" "$iteration" "$exit_code"
-emit_error "$worker_id" "timeout" "API call exceeded 30s"
-emit_task_completed "$task_id" "$worker_id" "PASS"
+activity_log "task.started" "$worker_id" "$task_id"
+activity_log "task.completed" "$worker_id" "$task_id" "result=PASS"
+activity_log "error" "$worker_id" "" "error_type=timeout" "message=API call exceeded 30s"
 ```
 
 ### Querying Events
 
 ```bash
 # All events for a task
-jq 'select(.task_id == "TASK-001")' .ralph/logs/events.jsonl
+jq 'select(.task_id == "TASK-001")' .ralph/logs/activity.jsonl
 
 # All errors
-jq 'select(.event_type == "error")' .ralph/logs/events.jsonl
+jq 'select(.event == "error")' .ralph/logs/activity.jsonl
 
 # Events in time range
-jq 'select(.timestamp >= "2024-01-15T10:00:00Z")' .ralph/logs/events.jsonl
+jq 'select(.ts >= "2024-01-15T10:00:00Z")' .ralph/logs/activity.jsonl
 ```
 
 ## Kanban State Communication

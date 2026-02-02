@@ -25,7 +25,7 @@ source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/tasks/plan-parser.sh"
 source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
-source "$WIGGUM_HOME/lib/utils/event-emitter.sh"
+source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 
 # Source scheduler module (unified worker management)
 source "$WIGGUM_HOME/lib/scheduler/scheduler.sh"

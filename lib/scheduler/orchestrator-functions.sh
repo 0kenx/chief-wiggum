@@ -668,10 +668,7 @@ _orch_spawn_worker() {
 
     SPAWNED_WORKER_PID=$(cat "$worker_dir/agent.pid")
 
-    # Emit structured event for observability
-    if declare -F emit_task_started > /dev/null 2>&1; then
-        emit_task_started "$task_id" "$SPAWNED_WORKER_ID"
-    fi
+    activity_log "task.started" "$SPAWNED_WORKER_ID" "$task_id"
 
     return 0
 }
@@ -1055,17 +1052,14 @@ _handle_main_worker_completion() {
     log "Worker for $task_id finished"
     scheduler_mark_event
 
-    # Emit structured event for observability
-    if declare -F emit_task_completed > /dev/null 2>&1; then
-        local _gate_result="UNKNOWN"
-        local _result_file
-        _result_file=$(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | sort -r | head -1)
-        if [ -n "${_result_file:-}" ] && [ -f "$_result_file" ]; then
-            _gate_result=$(jq -r '.outputs.gate_result // "UNKNOWN"' "$_result_file" 2>/dev/null)
-            _gate_result="${_gate_result:-UNKNOWN}"
-        fi
-        emit_task_completed "$task_id" "$(basename "$worker_dir")" "$_gate_result"
+    local _gate_result="UNKNOWN"
+    local _result_file
+    _result_file=$(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | sort -r | head -1)
+    if [ -n "${_result_file:-}" ] && [ -f "$_result_file" ]; then
+        _gate_result=$(jq -r '.outputs.gate_result // "UNKNOWN"' "$_result_file" 2>/dev/null)
+        _gate_result="${_gate_result:-UNKNOWN}"
     fi
+    activity_log "task.completed" "$(basename "$worker_dir")" "$task_id" "result=$_gate_result"
 
     # Collect deterministic stats (fast, synchronous)
     source "$WIGGUM_HOME/lib/memory/memory.sh"

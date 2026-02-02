@@ -10,7 +10,6 @@ source "$WIGGUM_HOME/lib/core/platform.sh"
 # Consolidates duplicate flock-based append implementations from:
 #   - activity-log.sh
 #   - audit-logger.sh
-#   - event-emitter.sh
 
 # Append content to a file with flock protection
 #

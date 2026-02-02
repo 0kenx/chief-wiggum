@@ -147,17 +147,17 @@ test_start "Checkpoint creation"
     grep -q '"iteration": 0' "$worker_dir/checkpoints/smoke-test/checkpoint-0.json"
 ) && test_pass || test_fail "Checkpoint not created"
 
-# Test 10: Event emission
-test_start "Event emission"
+# Test 10: Activity logging
+test_start "Activity logging"
 (
-    source "$WIGGUM_HOME/lib/utils/event-emitter.sh"
+    source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 
-    events_init "."
-    emit_task_started "TASK-001" "worker-TASK-001-12345"
+    activity_init "."
+    activity_log "task.started" "worker-TASK-001-12345" "TASK-001"
 
-    [ -f ".ralph/logs/events.jsonl" ] && \
-    grep -q "task.started" ".ralph/logs/events.jsonl"
-) && test_pass || test_fail "Event not emitted"
+    [ -f ".ralph/logs/activity.jsonl" ] && \
+    grep -q "task.started" ".ralph/logs/activity.jsonl"
+) && test_pass || test_fail "Activity log not written"
 
 # Test 11: Logger functions
 test_start "Logger functions work"
