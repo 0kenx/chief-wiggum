@@ -40,7 +40,7 @@ Options:
 Examples:
   wiggum inspect worker TASK-001
   wiggum inspect pipeline
-  wiggum inspect pipeline config/pipeline.json
+  wiggum inspect pipeline config/pipelines/default.json
   wiggum inspect agents
   wiggum inspect activity
   wiggum inspect activity TASK-001
@@ -192,10 +192,10 @@ cmd_pipeline() {
         fi
     elif [ -f "$RALPH_DIR/pipeline.json" ]; then
         file="$RALPH_DIR/pipeline.json"
-    elif [ -f "config/pipeline.json" ]; then
-        file="config/pipeline.json"
-    elif [ -f "$WIGGUM_HOME/config/pipeline.json" ]; then
-        file="$WIGGUM_HOME/config/pipeline.json"
+    elif [ -f "config/pipelines/default.json" ]; then
+        file="config/pipelines/default.json"
+    elif [ -f "$WIGGUM_HOME/config/pipelines/default.json" ]; then
+        file="$WIGGUM_HOME/config/pipelines/default.json"
     else
         echo "No pipeline configuration found" >&2
         exit 1

@@ -470,28 +470,28 @@ PIPE
 
 test_resolve_project_default() {
     # Create the project default pipeline config
-    # Save any existing config/pipeline.json
+    # Save any existing config/pipelines/default.json
     local backup=""
-    if [ -f "$WIGGUM_HOME/config/pipeline.json" ]; then
-        backup=$(cat "$WIGGUM_HOME/config/pipeline.json")
+    if [ -f "$WIGGUM_HOME/config/pipelines/default.json" ]; then
+        backup=$(cat "$WIGGUM_HOME/config/pipelines/default.json")
     fi
 
-    mkdir -p "$WIGGUM_HOME/config"
-    cat > "$WIGGUM_HOME/config/pipeline.json" << 'PIPE'
+    mkdir -p "$WIGGUM_HOME/config/pipelines"
+    cat > "$WIGGUM_HOME/config/pipelines/default.json" << 'PIPE'
 {"name": "project-default", "steps": [{"id": "s1", "agent": "a1"}]}
 PIPE
 
     local result
     result=$(pipeline_resolve "$TEST_DIR" "TASK-001" "")
 
-    assert_equals "$WIGGUM_HOME/config/pipeline.json" "$result" \
-        "Should resolve project default config/pipeline.json"
+    assert_equals "$WIGGUM_HOME/config/pipelines/default.json" "$result" \
+        "Should resolve project default config/pipelines/default.json"
 
     # Restore original
     if [ -n "$backup" ]; then
-        echo "$backup" > "$WIGGUM_HOME/config/pipeline.json"
+        echo "$backup" > "$WIGGUM_HOME/config/pipelines/default.json"
     else
-        rm -f "$WIGGUM_HOME/config/pipeline.json"
+        rm -f "$WIGGUM_HOME/config/pipelines/default.json"
     fi
 }
 
@@ -501,10 +501,10 @@ test_resolve_returns_empty_for_builtin_fallback() {
     local isolated_dir
     isolated_dir=$(mktemp -d)
 
-    # Temporarily move config/pipeline.json if it exists
+    # Temporarily move config/pipelines/default.json if it exists
     local had_default=0
-    if [ -f "$WIGGUM_HOME/config/pipeline.json" ]; then
-        mv "$WIGGUM_HOME/config/pipeline.json" "$WIGGUM_HOME/config/pipeline.json.bak"
+    if [ -f "$WIGGUM_HOME/config/pipelines/default.json" ]; then
+        mv "$WIGGUM_HOME/config/pipelines/default.json" "$WIGGUM_HOME/config/pipelines/default.json.bak"
         had_default=1
     fi
 
@@ -516,7 +516,7 @@ test_resolve_returns_empty_for_builtin_fallback() {
 
     # Restore
     if [ "$had_default" -eq 1 ]; then
-        mv "$WIGGUM_HOME/config/pipeline.json.bak" "$WIGGUM_HOME/config/pipeline.json"
+        mv "$WIGGUM_HOME/config/pipelines/default.json.bak" "$WIGGUM_HOME/config/pipelines/default.json"
     fi
     rm -rf "$isolated_dir"
 }

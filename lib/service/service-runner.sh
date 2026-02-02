@@ -438,7 +438,7 @@ _run_service_pipeline() {
         "$_RUNNER_RALPH_DIR/pipelines/${pipeline_name}.json"
         "$_RUNNER_RALPH_DIR/pipeline.json"
         "$WIGGUM_HOME/config/pipelines/${pipeline_name}.json"
-        "$WIGGUM_HOME/config/pipeline.json"
+        "$WIGGUM_HOME/config/pipelines/default.json"
     )
 
     for path in "${search_paths[@]}"; do

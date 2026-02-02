@@ -309,7 +309,7 @@ pipeline_load_builtin_defaults() {
 # Resolve the pipeline config file path using priority order:
 #   1. CLI flag (--pipeline <name>) -> config/pipelines/<name>.json or .ralph/pipelines/<name>.json
 #   2. Per-task override -> .ralph/pipelines/<task-id>.json
-#   3. Project default -> config/pipeline.json
+#   3. Project default -> config/pipelines/default.json
 #   4. Built-in fallback (returns empty string, caller uses pipeline_load_builtin_defaults)
 #
 # Args:
@@ -349,7 +349,7 @@ pipeline_resolve() {
     fi
 
     # 3. Project default
-    local default_path="$WIGGUM_HOME/config/pipeline.json"
+    local default_path="$WIGGUM_HOME/config/pipelines/default.json"
     if [ -f "$default_path" ]; then
         echo "$default_path"
         return 0

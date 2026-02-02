@@ -80,7 +80,7 @@ Backend-agnostic execution layer. See `docs/RUNTIME-SCHEMA.md` for the full spec
 
 ### Pipeline Engine
 
-Jump-based state machine defined in `config/pipeline.json`. Steps have `on_result` handlers (PASS/FAIL/FIX/SKIP) controlling flow via jump targets: `self`, `prev`, `next`, `abort`, or step ID.
+Jump-based state machine defined in `config/pipelines/default.json`. Steps have `on_result` handlers (PASS/FAIL/FIX/SKIP) controlling flow via jump targets: `self`, `prev`, `next`, `abort`, or step ID.
 
 Default pipeline: planning → execution (supervised) → summary → audit → audit-fix → test → docs → validation
 
@@ -121,7 +121,7 @@ Each worker operates in `.ralph/workers/worker-TASK-XXX-<timestamp>/` with:
 
 ### Configuration
 
-- `config/pipeline.json` - Default pipeline definition
+- `config/pipelines/default.json` - Default pipeline definition
 - `config/agents.json` - Agent registry with iteration/turn limits and per-agent result_mappings
 - `.ralph/config.json` - Project-specific overrides
 - `.ralph/pipeline.json` - Project pipeline override

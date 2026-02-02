@@ -256,7 +256,7 @@ Events are logged to `activity.jsonl` in NDJSON format:
 
 ### Pipeline Configuration
 
-`config/pipeline.json` defines the agent sequence:
+`config/pipelines/default.json` defines the agent sequence:
 
 ```json
 {
@@ -285,7 +285,7 @@ Override per-project in `.ralph/pipeline.json` or per-task in `.ralph/pipelines/
 
 Configuration follows a precedence hierarchy (later overrides earlier):
 
-1. **Defaults** (`config/pipeline.json`, `config/agents.json`)
+1. **Defaults** (`config/pipelines/default.json`, `config/agents.json`)
 2. **Project overrides** (`.ralph/config.json`, `.ralph/pipeline.json`)
 3. **Task-specific overrides** (`.ralph/pipelines/<TASK-ID>.json`)
 4. **Environment variables** (`WIGGUM_*` prefix)
@@ -387,7 +387,7 @@ wiggum inspect worker TASK-001
 
 # Show pipeline configuration
 wiggum inspect pipeline
-wiggum inspect pipeline config/pipeline.json
+wiggum inspect pipeline config/pipelines/default.json
 
 # List available agents with configs
 wiggum inspect agents
@@ -427,7 +427,7 @@ source lib/pipeline/pipeline-loader.sh
 source lib/pipeline/pipeline-runner.sh
 
 # Load a pipeline
-pipeline_load config/pipeline.json
+pipeline_load config/pipelines/default.json
 
 # Inspect loaded state
 echo "Steps: $(pipeline_step_count)"

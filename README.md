@@ -112,7 +112,7 @@ Workers are fully isolated and can run in parallel without conflicts.
 
 ### Pipeline
 
-Customize the agent pipeline in `config/pipeline.json`. See [docs/PIPELINE-SCHEMA.md](docs/PIPELINE-SCHEMA.md).
+Customize the agent pipeline in `config/pipelines/default.json`. See [docs/PIPELINE-SCHEMA.md](docs/PIPELINE-SCHEMA.md).
 
 ### Project Settings
 

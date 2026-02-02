@@ -82,7 +82,7 @@ The resume process:
   4. Launches a fresh system.task-worker from the decided step
 
 Resume Steps:
-  Steps are loaded dynamically from the pipeline config (config/pipeline.json
+  Steps are loaded dynamically from the pipeline config (config/pipelines/default.json
   or .ralph/pipeline.json). The LLM decides which step to resume from based
   on its analysis of the previous run. Common steps in the default pipeline:
     planning, execution, summary, audit, test, docs, validation

@@ -15,7 +15,7 @@ Agents can pass state and data through two scopes: **sequential** (to the next p
 | # | Mechanism | How It Works | Key Location |
 |---|-----------|-------------|--------------|
 | 1 | **Gate result files** | Each agent writes `outputs.gate_result` (PASS/FAIL/FIX/SKIP) to its epoch-named result JSON. The pipeline runner reads this to decide whether to continue, skip, or trigger a fix loop. | `lib/pipeline/pipeline-runner.sh:444` |
-| 2 | **Step enablement (`enabled_by`)** | A pipeline step declares `"enabled_by": "ENV_VAR"` in `config/pipeline.json`. The step is skipped if the environment variable is not set or empty. | `lib/pipeline/pipeline-runner.sh:390-399` |
+| 2 | **Step enablement (`enabled_by`)** | A pipeline step declares `"enabled_by": "ENV_VAR"` in `config/pipelines/default.json`. The step is skipped if the environment variable is not set or empty. | `lib/pipeline/pipeline-runner.sh:390-399` |
 | 3 | **Environment variable inheritance** | Parent exports context vars (`PIPELINE_PLAN_FILE`, `PIPELINE_RESUME_INSTRUCTIONS`, `WIGGUM_STEP_ID`, etc.) that sub-agents inherit via `run_sub_agent()`. | `lib/agents/system/task-worker.sh`, `lib/pipeline/pipeline-runner.sh` |
 | 4 | **Git state globals** | Git operations set shell globals (`GIT_COMMIT_BRANCH`, `GIT_PR_URL`, `GIT_SAFETY_CHECKPOINT_SHA`) consumed by subsequent steps in the same process. | `lib/git/git-operations.sh:72,209,287` |
 | 5 | **Fix-retry loop** | When an agent returns `FIX`, the pipeline invokes a nested fix agent, then re-runs the original agent to verify. State flows: audit result → fix agent → re-audit. | `lib/pipeline/pipeline-runner.sh:247+` (`_run_inline_agent`) |
