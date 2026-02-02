@@ -360,7 +360,15 @@ svc_orch_task_spawner() {
             log "Smart routing: $task_id -> $_complexity (pipeline=${_rt_pipeline:-default}, plan=$_rt_plan_mode)"
         fi
 
-        if ! spawn_worker "$task_id"; then
+        local spawn_rc=0
+        spawn_worker "$task_id" || spawn_rc=$?
+        if [ "$spawn_rc" -eq 2 ]; then
+            # Deferred - worker exists and is resumable, revert kanban to pending
+            update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" " " || true
+            export WIGGUM_PIPELINE="$_saved_pipeline"
+            export WIGGUM_PLAN_MODE="$_saved_plan_mode"
+            continue
+        elif [ "$spawn_rc" -ne 0 ]; then
             log_error "Failed to spawn worker for $task_id"
             update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
             export WIGGUM_PIPELINE="$_saved_pipeline"

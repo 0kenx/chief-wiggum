@@ -913,8 +913,9 @@ spawn_worker() {
             # Process not running - check if it's resumable
             if ! _is_terminal_failure "$existing_dir"; then
                 # Worker is resumable - let resume logic handle it
-                log "Worker for $task_id is resumable, skipping spawn"
-                return 1
+                # Return 2 (deferred) so caller can distinguish from actual failure
+                log "Worker for $task_id is resumable, deferring to resume logic"
+                return 2
             fi
             # Terminal failure - clean up and retry fresh
             log "Cleaning up terminal-failure worker for $task_id: $(basename "$existing_dir")"
@@ -1278,12 +1279,18 @@ _schedule_resume_workers() {
 
         # Run wiggum resume in background, passing through config
         # --quiet suppresses interactive output
+        # Wrapper writes exit code to .resume-exit-code so the parent process
+        # can retrieve it (the resume PID is not a direct child when this
+        # function runs inside a periodic-service subshell, so wait(2) fails).
         (
-            cd "$PROJECT_DIR" && \
+            cd "$PROJECT_DIR" || exit 1
+            _rc=0
             "$WIGGUM_HOME/bin/wiggum-resume" "$worker_id" --quiet \
                 --max-iters "$MAX_ITERATIONS" \
                 --max-turns "$MAX_TURNS" \
-                ${WIGGUM_PIPELINE:+--pipeline "$WIGGUM_PIPELINE"}
+                ${WIGGUM_PIPELINE:+--pipeline "$WIGGUM_PIPELINE"} || _rc=$?
+            echo "$_rc" > "$worker_dir/.resume-exit-code"
+            exit "$_rc"
         ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
         local resume_pid=$!
 
@@ -1291,7 +1298,16 @@ _schedule_resume_workers() {
         # Resume runs LLM analysis (resume-decide) before launching the worker
         # subprocess, so we cannot wait synchronously — it blocks 30+ seconds
         # per worker and delays _main_loop startup.
+        #
+        # Persist to disk so the parent process can ingest entries even when
+        # this function runs inside a periodic-service subshell (where
+        # in-memory _PENDING_RESUMES updates are lost on exit).
         _PENDING_RESUMES[$resume_pid]="$worker_dir|$task_id|$worker_type"
+        local _resume_pending="$RALPH_DIR/orchestrator/resume-pending"
+        {
+            flock -x 200
+            echo "$resume_pid|$worker_dir|$task_id|$worker_type" >> "$_resume_pending"
+        } 200>"$_resume_pending.lock"
         if [[ "$worker_type" == "fix" || "$worker_type" == "resolve" ]]; then
             ((++pending_priority_count))
         else
@@ -1307,6 +1323,29 @@ _schedule_resume_workers() {
 # launched by _schedule_resume_workers() have finished, and if so, registers
 # the resulting worker into the pool.
 _poll_pending_resumes() {
+    # Ingest entries persisted to disk by _schedule_resume_workers.
+    # This is the primary mechanism when the function runs inside a
+    # periodic-service subshell (where in-memory updates are lost).
+    local _resume_pending="$RALPH_DIR/orchestrator/resume-pending"
+    if [ -s "$_resume_pending" ]; then
+        local _rp_lines=""
+        {
+            flock -x 200
+            _rp_lines=$(cat "$_resume_pending")
+            : > "$_resume_pending"
+        } 200>"$_resume_pending.lock"
+
+        local _rp_line
+        while IFS= read -r _rp_line; do
+            [ -n "$_rp_line" ] || continue
+            local _rp_pid _rp_wdir _rp_tid _rp_wtype
+            IFS='|' read -r _rp_pid _rp_wdir _rp_tid _rp_wtype <<< "$_rp_line"
+            # Skip if already tracked
+            [ -z "${_PENDING_RESUMES[$_rp_pid]+x}" ] || continue
+            _PENDING_RESUMES[$_rp_pid]="$_rp_wdir|$_rp_tid|$_rp_wtype"
+        done <<< "$_rp_lines"
+    fi
+
     [ ${#_PENDING_RESUMES[@]} -gt 0 ] || return 0
 
     local pid
@@ -1316,15 +1355,28 @@ _poll_pending_resumes() {
             continue
         fi
 
-        # Process finished — get exit code
-        local resume_exit=0
-        wait "$pid" 2>/dev/null || resume_exit=$?
-
         # Parse metadata
         local entry="${_PENDING_RESUMES[$pid]}"
         unset '_PENDING_RESUMES[$pid]'
         local worker_dir task_id worker_type
         IFS='|' read -r worker_dir task_id worker_type <<< "$entry"
+
+        # Get exit code from file written by the resume wrapper.
+        # wait(2) cannot be used because the resume PID is not a direct
+        # child when _schedule_resume_workers ran in a subshell.
+        local resume_exit=1
+        if [ -f "$worker_dir/.resume-exit-code" ]; then
+            resume_exit=$(cat "$worker_dir/.resume-exit-code")
+            resume_exit="${resume_exit:-1}"
+            rm -f "$worker_dir/.resume-exit-code"
+        else
+            # Fallback: try wait in case this was a direct child
+            local _wait_rc=0
+            wait "$pid" 2>/dev/null || _wait_rc=$?
+            if [ "$_wait_rc" -ne 127 ]; then
+                resume_exit="$_wait_rc"
+            fi
+        fi
 
         case "$resume_exit" in
             0)
