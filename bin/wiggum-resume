@@ -390,6 +390,13 @@ do_resume() {
     # === Launch system.task-worker ===
     _msg "Launching system.task-worker from step: $resume_step"
 
+    # Clean up stale agent.pid from resume-decide's run_agent call and reset
+    # registry state so the parent EXIT trap doesn't delete the new PID file
+    # created by the setsid subprocess.
+    rm -f "$worker_dir/agent.pid"
+    _AGENT_REGISTRY_IS_TOP_LEVEL=false
+    _AGENT_RUNNER_DIR=""
+
     mkdir -p "$RALPH_DIR/logs"
 
     # Launch agent in background using setsid to create a new session/process group.
@@ -483,8 +490,8 @@ _read_resume_decision() {
         resume_pipeline=$(jq -r '.pipeline // ""' "$worker_dir/resume-decision.json")
         resume_step_id=$(jq -r '.resume_step // ""' "$worker_dir/resume-decision.json")
         # Normalize null to empty
-        [ "$resume_pipeline" = "null" ] && resume_pipeline=""
-        [ "$resume_step_id" = "null" ] && resume_step_id=""
+        if [[ "$resume_pipeline" == "null" ]]; then resume_pipeline=""; fi
+        if [[ "$resume_step_id" == "null" ]]; then resume_step_id=""; fi
     else
         # Backward compat: old resume-step.txt
         local raw
