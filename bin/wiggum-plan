@@ -55,7 +55,7 @@ Notes:
   - The task must exist in .ralph/kanban.md
   - This runs in the foreground (blocking)
   - Plans are stored in .ralph/plans/
-  - Use 'wiggum start' to execute the task after planning
+  - Use 'wiggum worker start' to execute the task after planning
 
 EOF
 }
@@ -133,7 +133,7 @@ do_plan() {
         echo ""
         echo "Next steps:"
         echo "  cat .ralph/plans/${task_id}.md  # Review the plan"
-        echo "  wiggum start $task_id           # Start task execution"
+        echo "  wiggum worker start $task_id           # Start task execution"
     else
         log_error "Planning failed for task $task_id (exit_code=$result)"
         activity_log "plan.failed" "$worker_id" "$task_id" "exit_code=$result"

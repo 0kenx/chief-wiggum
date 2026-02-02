@@ -448,7 +448,7 @@ github_plan_sync_all() {
 # Top-Level Dispatcher
 # =============================================================================
 
-# Main entry point for plan sync (called from wiggum-gh)
+# Main entry point for plan sync (called from wiggum-github)
 #
 # Args:
 #   ralph_dir - Path to .ralph directory

@@ -326,20 +326,22 @@ test_poll_handles_defer_exit_code() {
 test_spawn_worker_returns_2_for_resumable() {
     local task_id="TST-001"
 
-    # Create a mock wiggum-start that returns EXIT_WORKER_ALREADY_EXISTS
+    # Create a mock wiggum-worker that returns EXIT_WORKER_ALREADY_EXISTS
     local mock_bin="$TEST_DIR/mock-bin"
     mkdir -p "$mock_bin"
-    cat > "$mock_bin/wiggum-start" <<'SCRIPT'
+    cat > "$mock_bin/wiggum-worker" <<'SCRIPT'
 #!/usr/bin/env bash
+# Mock wiggum-worker: handle subcommand (start/stop/kill/resume/fix/merge)
+subcmd="${1:-}"; shift 2>/dev/null || true
 exit 15  # EXIT_WORKER_ALREADY_EXISTS
 SCRIPT
-    chmod +x "$mock_bin/wiggum-start"
+    chmod +x "$mock_bin/wiggum-worker"
 
     # Override WIGGUM_HOME/bin to point to our mock
     local saved_home="$WIGGUM_HOME"
     WIGGUM_HOME="$TEST_DIR/mock-wiggum"
     mkdir -p "$WIGGUM_HOME/bin"
-    cp "$mock_bin/wiggum-start" "$WIGGUM_HOME/bin/wiggum-start"
+    cp "$mock_bin/wiggum-worker" "$WIGGUM_HOME/bin/wiggum-worker"
 
     # Create a worker dir that looks resumable (not terminal)
     local worker_dir="$RALPH_DIR/workers/worker-$task_id-12345"
@@ -359,14 +361,16 @@ SCRIPT
 test_spawn_worker_returns_1_for_running_worker() {
     local task_id="TST-002"
 
-    # Create a mock wiggum-start that returns EXIT_WORKER_ALREADY_EXISTS
+    # Create a mock wiggum-worker that returns EXIT_WORKER_ALREADY_EXISTS
     WIGGUM_HOME="$TEST_DIR/mock-wiggum"
     mkdir -p "$WIGGUM_HOME/bin"
-    cat > "$WIGGUM_HOME/bin/wiggum-start" <<'SCRIPT'
+    cat > "$WIGGUM_HOME/bin/wiggum-worker" <<'SCRIPT'
 #!/usr/bin/env bash
+# Mock wiggum-worker: handle subcommand (start/stop/kill/resume/fix/merge)
+subcmd="${1:-}"; shift 2>/dev/null || true
 exit 15  # EXIT_WORKER_ALREADY_EXISTS
 SCRIPT
-    chmod +x "$WIGGUM_HOME/bin/wiggum-start"
+    chmod +x "$WIGGUM_HOME/bin/wiggum-worker"
 
     # Create a worker dir with a PID that IS still running (use our own PID)
     local worker_dir="$RALPH_DIR/workers/worker-$task_id-12345"

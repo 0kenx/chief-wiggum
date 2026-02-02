@@ -2,7 +2,7 @@
 # pr-comments.sh - PR comment fetching and filtering
 #
 # Provides functions for syncing and filtering PR comments for review.
-# Used by `wiggum review task <patterns> sync` command.
+# Used by `wiggum pr comments <ID> sync` command.
 set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"

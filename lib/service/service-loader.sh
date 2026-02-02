@@ -1280,7 +1280,7 @@ service_load_builtin_defaults() {
       "id": "pr-sync",
       "groups": ["pr-management"],
       "schedule": { "type": "interval", "interval": 180, "jitter": 30, "run_on_startup": true },
-      "execution": { "type": "command", "command": "wiggum-review sync" }
+      "execution": { "type": "command", "command": "wiggum-pr sync" }
     },
     {
       "id": "pr-optimizer",

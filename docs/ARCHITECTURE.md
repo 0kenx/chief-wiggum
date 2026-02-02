@@ -6,24 +6,21 @@ This document describes the internal architecture of Chief Wiggum for developers
 
 ```
 chief-wiggum/
-├── bin/                    # CLI entry points (17 commands)
+├── bin/                    # CLI entry points (15 commands)
 │   ├── wiggum              # Main dispatcher
 │   ├── wiggum-clean        # Cleanup utility
 │   ├── wiggum-doctor       # Pre-flight health checks
+│   ├── wiggum-github       # GitHub integration
 │   ├── wiggum-init         # Project initialization
-│   ├── wiggum-inspect      # Worker/pipeline inspection
-│   ├── wiggum-kill         # Force kill workers (SIGKILL)
+│   ├── wiggum-inspect      # Worker/pipeline inspection + log conversion
 │   ├── wiggum-monitor      # Real-time log viewer / TUI
 │   ├── wiggum-plan         # Read-only implementation planning
-│   ├── wiggum-resume       # Resume stopped workers
-│   ├── wiggum-review       # PR/task review management
+│   ├── wiggum-pr           # PR management (list, sync, create, merge, etc.)
 │   ├── wiggum-run          # Orchestrator (continuous loop)
 │   ├── wiggum-service      # Service management CLI
-│   ├── wiggum-start        # Single worker spawner
 │   ├── wiggum-status       # Worker status display
-│   ├── wiggum-stop         # Graceful worker stop (SIGTERM)
-│   ├── wiggum-util         # Utility subcommands
-│   └── wiggum-validate     # Kanban validator
+│   ├── wiggum-validate     # Kanban validator
+│   └── wiggum-worker       # Worker lifecycle (start, stop, kill, resume, fix)
 ├── lib/
 │   ├── agents/             # Agent implementations
 │   │   ├── system/         # Core system agents
@@ -746,7 +743,7 @@ Services are defined in `config/services.json` (v2.0):
       "phase": "periodic",
       "order": 10,
       "schedule": { "type": "interval", "interval": 180, "run_on_startup": true },
-      "execution": { "type": "command", "command": "wiggum-review sync" }
+      "execution": { "type": "command", "command": "wiggum-pr sync" }
     }
   ]
 }
@@ -766,7 +763,7 @@ Services are defined in `config/services.json` (v2.0):
 | Type | Description | Example |
 |------|-------------|---------|
 | `function` | Call a bash function | `{"type": "function", "function": "svc_orch_pool_ingest"}` |
-| `command` | Run shell command | `{"type": "command", "command": "wiggum-review sync"}` |
+| `command` | Run shell command | `{"type": "command", "command": "wiggum-pr sync"}` |
 
 ### Conditions
 

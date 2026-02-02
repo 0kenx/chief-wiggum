@@ -66,7 +66,7 @@ agent_run() {
     # Verify comments file exists
     if [ ! -f "$comments_file" ]; then
         log_error "Comments file not found: $comments_file"
-        log_error "Run 'wiggum review task <pattern> sync' first"
+        log_error "Run 'wiggum pr comments <pattern> sync' first"
         agent_log_complete "$worker_dir" 1 "$start_time"
         agent_write_result "$worker_dir" "FAIL" '{"push_succeeded":false}' '["Comments file not found"]'
         return 1

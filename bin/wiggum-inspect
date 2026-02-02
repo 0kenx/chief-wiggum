@@ -27,6 +27,7 @@ Commands:
   agents                List available agents with configs
   activity [pattern]    Show activity log (global or per-worker)
   step <pattern>        Show current pipeline step for worker
+  log <target>          Convert JSONL iteration logs to markdown
 
 Options:
   -v, --verbose         Verbose output (same as default)
@@ -45,6 +46,10 @@ Examples:
   wiggum inspect activity
   wiggum inspect activity TASK-001
   wiggum inspect step TASK-001
+  wiggum inspect log TASK-030                            # Latest log for task
+  wiggum inspect log TASK-030 -a                         # All logs for task
+  wiggum inspect log iteration-1.jsonl                   # Convert specific file
+  wiggum inspect log TASK-030 -o review.md               # Output to file
 
 EOF
 }
@@ -374,6 +379,153 @@ cmd_step() {
     fi
 }
 
+# --- log (convert-log from wiggum-util) ---
+
+# Find iteration log files for a worker pattern
+_log_find_logs() {
+    local pattern="$1"
+
+    if [ ! -d "$RALPH_DIR/workers" ]; then
+        echo "No workers directory found at $RALPH_DIR/workers" >&2
+        return 1
+    fi
+
+    local matches=()
+    for dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -d "$dir" ] || continue
+        local dirname
+        dirname=$(basename "$dir")
+        if [[ "$dirname" =~ $pattern ]]; then
+            matches+=("$dir")
+        fi
+    done
+
+    if [ ${#matches[@]} -eq 0 ]; then
+        echo "No workers found matching: $pattern" >&2
+        return 1
+    fi
+
+    if [ ${#matches[@]} -gt 1 ]; then
+        echo "Multiple workers match '$pattern':" >&2
+        for m in "${matches[@]}"; do
+            echo "  $(basename "$m")" >&2
+        done
+        echo "Please be more specific." >&2
+        return 1
+    fi
+
+    local worker_dir="${matches[0]}"
+
+    local logs=()
+    for log in "$worker_dir"/iteration-*.jsonl; do
+        [ -f "$log" ] && logs+=("$log")
+    done
+
+    if [ ${#logs[@]} -eq 0 ]; then
+        echo "No iteration logs found in $(basename "$worker_dir")" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${logs[@]}" | sort -t'-' -k2 -n
+}
+
+cmd_log() {
+    local output="" all=false target=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--output)
+                output="$2"
+                shift 2
+                ;;
+            -a|--all)
+                all=true
+                shift
+                ;;
+            -h|--help)
+                cat << 'LOGEOF'
+wiggum inspect log - Convert JSONL iteration logs to markdown
+
+Usage: wiggum inspect log [options] <target>
+
+Targets:
+  <file.jsonl>        Convert a specific JSONL log file
+  <pattern>           Find and convert logs for workers matching pattern
+
+Options:
+  -o, --output FILE   Write output to FILE (default: stdout)
+  -a, --all           Convert all iteration logs for matched worker
+  -h, --help          Show this help message
+
+Examples:
+  wiggum inspect log iteration-1.jsonl             # Convert specific file
+  wiggum inspect log TASK-030                      # Latest log for TASK-030
+  wiggum inspect log TASK-030 -a                   # All logs for TASK-030
+  wiggum inspect log TASK-030 -o review.md         # Output to file
+
+LOGEOF
+                exit $EXIT_OK
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit $EXIT_USAGE
+                ;;
+            *)
+                if [ -z "$target" ]; then
+                    target="$1"
+                else
+                    echo "Unexpected argument: $1"
+                    exit $EXIT_USAGE
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$target" ]; then
+        echo "No target specified."
+        echo "Usage: wiggum inspect log [options] <target>"
+        exit $EXIT_USAGE
+    fi
+
+    local converter="$WIGGUM_HOME/lib/utils/log-converter.sh"
+
+    if [ ! -f "$converter" ]; then
+        echo "ERROR: log-converter.sh not found at $converter" >&2
+        exit $EXIT_ERROR
+    fi
+
+    # Determine input files
+    local files
+    if [ -f "$target" ]; then
+        files=("$target")
+    else
+        mapfile -t files < <(_log_find_logs "$target")
+    fi
+
+    # If not --all, only use the latest log
+    if [ "$all" = false ] && [ ${#files[@]} -gt 1 ]; then
+        files=("${files[-1]}")
+    fi
+
+    # Convert
+    for file in "${files[@]}"; do
+        if [ ${#files[@]} -gt 1 ]; then
+            echo "--- Converting: $(basename "$file") ---" >&2
+        fi
+
+        if [ -n "$output" ]; then
+            if [ ${#files[@]} -gt 1 ]; then
+                bash "$converter" "$file" >> "$output"
+            else
+                bash "$converter" "$file" "$output"
+            fi
+        else
+            bash "$converter" "$file"
+        fi
+    done
+}
+
 # Global options
 JSON_OUTPUT=false
 LINES_COUNT=20
@@ -455,6 +607,9 @@ case "$COMMAND" in
             exit $EXIT_USAGE
         fi
         cmd_step "${ARGS[0]}"
+        ;;
+    log)
+        cmd_log "${ARGS[@]}"
         ;;
     *)
         echo "Unknown command: $COMMAND" >&2

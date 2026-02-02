@@ -2,7 +2,7 @@
 # git-operations.sh - Git commit and PR creation for workers
 #
 # Provides functions for creating commits and pull requests from worker workspaces.
-# Used by lib/worker.sh and bin/wiggum-resume for consistent git operations.
+# Used by lib/worker.sh and lib/worker/cmd-resume.sh for consistent git operations.
 set -euo pipefail
 
 source "$WIGGUM_HOME/lib/core/logger.sh"

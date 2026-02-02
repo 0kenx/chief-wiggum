@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# wiggum-gh - CLI for GitHub issue sync
+# wiggum-github - CLI for GitHub issue sync
 #
 # Usage:
-#   wiggum gh                         Full sync cycle (down + up)
-#   wiggum gh down                    Pull issues -> kanban only
-#   wiggum gh up                      Push kanban -> GitHub only
-#   wiggum gh sync up <TASK-ID|all>   Create GitHub issues for untracked tasks
-#   wiggum gh plan sync [TASK-ID]     Sync plan files with GitHub issue comments
-#   wiggum gh status                  Show sync state summary
-#   wiggum gh --dry-run               Show planned changes without writing
+#   wiggum github                         Full sync cycle (down + up)
+#   wiggum github down                    Pull issues -> kanban only
+#   wiggum github up                      Push kanban -> GitHub only
+#   wiggum github sync up <TASK-ID|all>   Create GitHub issues for untracked tasks
+#   wiggum github plan-sync [TASK-ID]     Sync plan files with GitHub issue comments
+#   wiggum github status                  Show sync state summary
+#   wiggum github --dry-run               Show planned changes without writing
 set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
@@ -22,38 +22,38 @@ source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 
 show_help() {
     cat << EOF
-wiggum gh - Sync GitHub issues with local kanban
+wiggum github - Sync GitHub issues with local kanban
 
-Usage: wiggum gh [command] [options]
+Usage: wiggum github [command] [options]
 
 Commands:
   (none)                       Full sync cycle (down + up)
   down                         Pull GitHub issues to local kanban only
   up                           Push local kanban status to GitHub only
   sync up <TASK-ID|all> [-y]   Create GitHub issues for untracked kanban tasks
-  plan sync [TASK-ID]          Sync plan files with GitHub issue comments
+  plan-sync [TASK-ID]          Sync plan files with GitHub issue comments
   status                       Show sync state summary
 
 Options:
   --dry-run              Show planned changes without writing
-  --force up|down        Resolve plan sync conflicts (up=local wins, down=remote wins)
+  --force up|down        Resolve plan-sync conflicts (up=local wins, down=remote wins)
   -y                     Skip confirmation prompt (for sync up)
   -h, --help             Show this help
 
 Examples:
-  wiggum gh                              # Full sync
-  wiggum gh down                         # Import new issues
-  wiggum gh up                           # Push status changes
-  wiggum gh sync up TASK-333             # Create issue for one task
-  wiggum gh sync up all                  # Create issues for all untracked
-  wiggum gh sync up all -y               # Skip confirmation
-  wiggum gh plan sync                    # Sync all plans
-  wiggum gh plan sync TASK-001           # Sync one task's plan
-  wiggum gh plan sync --dry-run          # Preview plan sync changes
-  wiggum gh plan sync --force up         # Push local plans (resolve conflicts)
-  wiggum gh plan sync --force down       # Pull remote plans (resolve conflicts)
-  wiggum gh --dry-run                    # Preview changes
-  wiggum gh status                       # Show state
+  wiggum github                              # Full sync
+  wiggum github down                         # Import new issues
+  wiggum github up                           # Push status changes
+  wiggum github sync up TASK-333             # Create issue for one task
+  wiggum github sync up all                  # Create issues for all untracked
+  wiggum github sync up all -y               # Skip confirmation
+  wiggum github plan-sync                    # Sync all plans
+  wiggum github plan-sync TASK-001           # Sync one task's plan
+  wiggum github plan-sync --dry-run          # Preview plan-sync changes
+  wiggum github plan-sync --force up         # Push local plans (resolve conflicts)
+  wiggum github plan-sync --force down       # Pull remote plans (resolve conflicts)
+  wiggum github --dry-run                    # Preview changes
+  wiggum github status                       # Show state
 
 Configuration:
   Set in .ralph/config.json or config/config.json under github.issue_sync.
@@ -96,7 +96,7 @@ main() {
                 shift
                 ;;
             plan)
-                # Handle "plan sync [TASK-ID] [--force up|down]"
+                # Handle "plan-sync [TASK-ID] [--force up|down]"
                 shift
                 if [[ $# -gt 0 ]] && [[ "$1" == "sync" ]]; then
                     command="plan-sync"
@@ -121,7 +121,7 @@ main() {
                         esac
                     done
                 else
-                    echo "Error: Unknown plan subcommand. Use 'plan sync [TASK-ID]'" >&2
+                    echo "Error: Unknown plan subcommand. Use 'plan-sync [TASK-ID]'" >&2
                     exit $EXIT_USAGE
                 fi
                 ;;
@@ -136,7 +136,7 @@ main() {
                         shift
                     else
                         echo "Error: 'sync up' requires a task ID or 'all'" >&2
-                        echo "Usage: wiggum gh sync up <TASK-ID|all> [-y]" >&2
+                        echo "Usage: wiggum github sync up <TASK-ID|all> [-y]" >&2
                         exit $EXIT_USAGE
                     fi
                 else

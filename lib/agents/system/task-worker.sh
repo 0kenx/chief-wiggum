@@ -443,7 +443,7 @@ _update_kanban_status() {
     fi
 
     if [ "$final_status" = "COMPLETE" ]; then
-        # If PR was created, mark as Pending Approval [P] - wiggum review sync will mark [x] when merged
+        # If PR was created, mark as Pending Approval [P] - wiggum pr sync will mark [x] when merged
         # If no PR (gh CLI unavailable), mark as complete [x] directly
         if [ -n "$pr_url" ] && [ "$pr_url" != "N/A" ]; then
             log "Marking task $task_id as pending approval [P] in kanban (PR: $pr_url)"

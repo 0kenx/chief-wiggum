@@ -987,7 +987,7 @@ agent_run() {
 ```
 
 - `max_iterations` / `max_turns`: Originate from CLI flags (`--max-iters`, `--max-turns`)
-  passed to `wiggum start`, `wiggum run`, or `wiggum resume`, and flow through
+  passed to `wiggum worker start`, `wiggum run`, or `wiggum worker resume`, and flow through
   `run_agent()` in agent-registry.sh.
 - `start_from_step`: Which pipeline phase to begin from (used for resuming
   interrupted workers). Valid values match the `TASK_PIPELINE` array:

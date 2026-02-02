@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# wiggum resume - Resume a stopped worker using LLM-driven step decision
+# lib/worker/cmd-resume.sh - Resume command logic for wiggum worker
 #
-# Usage:
-#   wiggum resume <id>        Resume a previously stopped worker
-#   wiggum resume <id> -f     Force resume, clearing violation status
+# Provides: do_resume(), _read_resume_decision(), _handle_complete(), _handle_abort(), _handle_defer()
+# Sourced by: bin/wiggum-worker
 
-set -euo pipefail
+[ -n "${_CMD_RESUME_LOADED:-}" ] && return 0
+_CMD_RESUME_LOADED=1
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
-source "$WIGGUM_HOME/lib/core/bin-common.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/utils/audit-logger.sh"
@@ -21,11 +20,6 @@ source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
 source "$WIGGUM_HOME/lib/core/resume-state.sh"
-
-# Default configuration
-MAX_ITERATIONS=20
-MAX_TURNS=50
-QUIET_MODE=false
 
 # Check if a step completed (has a result file) vs was interrupted (no result)
 #
@@ -65,60 +59,6 @@ _get_current_step() {
 # Output message respecting quiet mode
 _msg() {
     [ "$QUIET_MODE" = "true" ] || echo "$@"
-}
-
-show_help() {
-    cat << EOF
-wiggum resume - Resume a stopped worker
-
-Usage:
-  wiggum resume <id>        Resume a previously stopped worker
-  wiggum resume <id> -f     Force resume, clearing violation status
-
-The resume process:
-  1. Converts worker logs to readable conversation format
-  2. Runs an LLM agent to analyze what happened and decide the resume step
-  3. Archives previous run artifacts (workspace is preserved)
-  4. Launches a fresh system.task-worker from the decided step
-
-Resume Steps:
-  Steps are loaded dynamically from the pipeline config (config/pipelines/default.json
-  or .ralph/pipeline.json). The LLM decides which step to resume from based
-  on its analysis of the previous run. Common steps in the default pipeline:
-    planning, execution, summary, audit, test, docs, validation
-
-Worker ID Resolution:
-  Worker IDs can be partial as long as they match exactly one worker:
-  - 1891712              (timestamp)
-  - K-030                (partial task ID)
-  - TASK-030             (task ID)
-  - worker-TASK-030-1891712  (full ID)
-
-Options:
-  --max-iters N   Maximum iterations per worker (default: 20)
-  --max-turns N   Maximum turns per Claude session (default: 50)
-  --pipeline NAME Pipeline config to use (from config/pipelines/ or config/)
-  -f              Force resume, clearing any workspace violation status.
-                  Use this after manually resolving violations.
-  -v, --verbose   Verbose output (same as default)
-  -vv             Debug output (detailed diagnostics)
-  -vvv            Trace output (very detailed tracing)
-  -q, --quiet     Quiet mode (warnings and errors only)
-  -h, --help      Show this help message
-
-Resume Logic:
-  - If the current step has a result file (step completed), the resume-decide
-    agent analyzes logs to determine the correct resume point
-  - If the current step has no result file (step was interrupted mid-execution),
-    resumes directly from that step without LLM analysis
-
-Examples:
-  wiggum resume TASK-030            # Resume worker for TASK-030
-  wiggum resume 1891712             # Resume worker by timestamp
-  wiggum resume TASK-030 -f         # Force resume after fixing violations
-  wiggum resume TASK-030 --pipeline fast  # Resume using fast pipeline
-
-EOF
 }
 
 # Resume a stopped worker
@@ -209,7 +149,7 @@ do_resume() {
                 echo "  3. Manually inspect $worker_dir/workspace for issues"
                 echo ""
                 echo "To force resume (clears violation status):"
-                echo "  wiggum resume $worker_id -f"
+                echo "  wiggum worker resume $worker_id -f"
                 echo ""
                 exit $EXIT_ERROR
             fi
@@ -277,7 +217,7 @@ do_resume() {
 
     # Update resume state with this attempt
     resume_state_increment "$worker_dir" "$decision" "$resume_pipeline" "$resume_step_id" \
-        "Resume attempt via wiggum-resume"
+        "Resume attempt via wiggum worker resume"
 
     # Route by decision
     case "$decision" in
@@ -400,7 +340,7 @@ do_resume() {
     mkdir -p "$RALPH_DIR/logs"
 
     # Launch agent in background using setsid to create a new session/process group.
-    # This prevents SIGINT from the parent (wiggum resume) from killing the worker.
+    # This prevents SIGINT from the parent (wiggum worker resume) from killing the worker.
     #
     # Security: Pass variables via environment exports, not string interpolation.
     # This prevents command injection if any variable contains shell metacharacters.
@@ -676,88 +616,3 @@ _handle_defer() {
     exit $EXIT_RESUME_DEFER
 }
 
-# Main
-main() {
-    # Parse verbose flags first
-    parse_verbose_flags "$@"
-    set -- "${WIGGUM_REMAINING_ARGS[@]}"
-
-    # Map LOG_LEVEL=WARN to QUIET_MODE for backward compatibility
-    if [[ "${LOG_LEVEL:-}" == "WARN" ]]; then
-        QUIET_MODE=true
-    fi
-
-    local force_mode=false
-    local target=""
-
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -h|--help)
-                show_help
-                exit $EXIT_OK
-                ;;
-            -f)
-                force_mode=true
-                shift
-                ;;
-            --max-iters)
-                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
-                    echo "Error: --max-iters requires a number argument"
-                    exit $EXIT_USAGE
-                fi
-                MAX_ITERATIONS="$2"
-                shift 2
-                ;;
-            --max-turns)
-                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
-                    echo "Error: --max-turns requires a number argument"
-                    exit $EXIT_USAGE
-                fi
-                MAX_TURNS="$2"
-                shift 2
-                ;;
-            --pipeline)
-                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
-                    echo "Error: --pipeline requires a name argument"
-                    exit $EXIT_USAGE
-                fi
-                export WIGGUM_PIPELINE="$2"
-                shift 2
-                ;;
-            -*)
-                echo "Unknown option: $1"
-                show_help
-                exit $EXIT_USAGE
-                ;;
-            *)
-                if [ -z "$target" ]; then
-                    target="$1"
-                else
-                    echo "Unexpected argument: $1"
-                    exit $EXIT_USAGE
-                fi
-                shift
-                ;;
-        esac
-    done
-
-    # Load configuration
-    load_rate_limit_config
-    load_resume_config
-
-    # Require target
-    if [ -z "$target" ]; then
-        echo "Error: Worker ID required"
-        echo "Usage: wiggum resume <id> [-f]"
-        exit $EXIT_USAGE
-    fi
-
-    # Resolve worker directory
-    local worker_dir
-    worker_dir=$(resolve_worker_id "$RALPH_DIR" "$target") || exit $EXIT_ERROR
-
-    do_resume "$worker_dir" "$force_mode"
-}
-
-main "$@"

@@ -6,13 +6,13 @@
 #   1       - Generic/unspecified error
 #   2       - Usage/argument error
 #   3-5     - Init errors (wiggum-init)
-#   10-19   - Worker start errors (wiggum start)
+#   10-19   - Worker start errors (wiggum worker start)
 #   20-29   - Run/orchestration errors (wiggum-run)
 #   30-39   - Validation errors (wiggum-validate)
-#   40-49   - Review errors (wiggum-review)
+#   40-49   - PR errors (wiggum-pr)
 #   50-55   - Clean errors (wiggum-clean)
 #   56-63   - Agent errors (agent lifecycle)
-#   65-68   - Resume decision codes (wiggum-resume)
+#   65-68   - Resume decision codes (wiggum worker resume)
 #   70-79   - Claude service errors
 #   128+N   - Terminated by signal N (standard convention)
 set -euo pipefail

@@ -198,7 +198,7 @@
       },
       "execution": {
         "type": "command",
-        "command": "wiggum-review sync"
+        "command": "wiggum-pr sync"
       },
       "concurrency": {
         "max_instances": 1,

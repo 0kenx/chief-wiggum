@@ -520,7 +520,7 @@ pr_merge_gather_all() {
         [ -n "$pr_number" ] && [ "$pr_number" != "null" ] || continue
 
         # Sync PR comments
-        "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" sync 2>/dev/null || true
+        "$WIGGUM_HOME/bin/wiggum-pr" comments "$task_id" sync 2>/dev/null || true
 
         # Check if PR is already merged on GitHub (sync may have detected this)
         local pr_state

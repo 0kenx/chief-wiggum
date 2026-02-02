@@ -89,7 +89,7 @@ test_legacy_bare_step_id() {
     echo "execution" > "$TEST_WORKER_DIR/resume-step.txt"
     rm -f "$TEST_WORKER_DIR/resume-decision.json"
 
-    # Simulate the parsing logic from wiggum-resume
+    # Simulate the parsing logic from wiggum-worker resume
     local raw decision="" resume_pipeline="" resume_step_id=""
     raw=$(cat "$TEST_WORKER_DIR/resume-step.txt" 2>/dev/null || echo "ABORT")
     raw=$(echo "$raw" | tr -d '[:space:]')

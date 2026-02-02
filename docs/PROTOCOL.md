@@ -345,7 +345,7 @@ The violation monitor checks for:
 cat .ralph/logs/violations.log
 
 # Force resume after manual fix
-wiggum resume TASK-001 -f
+wiggum worker resume TASK-001 -f
 ```
 
 ## Best Practices

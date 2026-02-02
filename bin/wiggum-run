@@ -141,7 +141,7 @@ Behavior:
 
 Task resumption:
   - WIP tasks [=] with stopped workers are auto-resumed (if no worker is running)
-  - Failed tasks [*] wait for manual intervention (use 'wiggum resume/retry')
+  - Failed tasks [*] wait for manual intervention (use 'wiggum worker resume')
   - Pending tasks [ ] with existing PRs go through fix pipeline (sync→fix→push→merge)
 
 Logging:

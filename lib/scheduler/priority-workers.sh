@@ -277,7 +277,7 @@ _verify_task_merged() {
 # Check for tasks needing fixes and spawn fix workers
 #
 # Collects tasks from two sources:
-# 1. orchestrator/tasks-needing-fix.txt (populated by wiggum-review sync for fresh comments)
+# 1. orchestrator/tasks-needing-fix.txt (populated by wiggum pr sync for fresh comments)
 # 2. Worker directories with needs_fix git state (fallback for stuck tasks)
 #
 # Tasks are sorted by dependency depth (descending) so that tasks which
@@ -409,10 +409,10 @@ spawn_fix_workers() {
 
         log "Spawning fix worker for $task_id..."
 
-        # Call wiggum-review task fix synchronously (it returns immediately after async launch)
+        # Call wiggum worker fix synchronously (it returns immediately after async launch)
         (
             cd "$project_dir" || exit 1
-            "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" fix 2>&1 | \
+            "$WIGGUM_HOME/bin/wiggum-worker" fix "$task_id" 2>&1 | \
                 sed "s/^/  [fix-$task_id] /"
         )
 
@@ -737,10 +737,10 @@ _spawn_simple_resolve_worker() {
 
     log "Spawning simple conflict resolver for $task_id..."
 
-    # Call wiggum-review task resolve asynchronously
+    # Call wiggum pr resolve asynchronously
     (
         cd "$project_dir" || exit 1
-        "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" resolve 2>&1 | \
+        "$WIGGUM_HOME/bin/wiggum-pr" resolve "$task_id" 2>&1 | \
             sed "s/^/  [resolve-$task_id] /"
     ) &
     local shell_pid=$!
@@ -838,10 +838,10 @@ _spawn_batch_resolve_worker() {
     log "Spawning batch resolver for $task_id (batch: $batch_id, position $((position + 1)) of $total)..."
 
     # Launch worker using multi-pr-resolve pipeline
-    # wiggum-start daemonizes the worker - we track via agent.pid
+    # wiggum-worker start daemonizes the worker - we track via agent.pid
     (
         cd "$project_dir" || exit 1
-        "$WIGGUM_HOME/bin/wiggum-start" --worker-dir "$worker_dir" \
+        "$WIGGUM_HOME/bin/wiggum-worker" start --worker-dir "$worker_dir" \
             --pipeline multi-pr-resolve --quiet 2>&1 | \
             sed "s/^/  [batch-resolve-$task_id] /"
     )
@@ -936,7 +936,7 @@ create_orphan_pr_workspaces() {
         fi
 
         # Also fetch fresh comments
-        "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" sync 2>/dev/null || true
+        "$WIGGUM_HOME/bin/wiggum-pr" comments "$task_id" sync 2>/dev/null || true
 
         # Queue for fix processing
         echo "$task_id" >> "$ralph_dir/orchestrator/tasks-needing-fix.txt"
@@ -1089,8 +1089,8 @@ handle_resolve_worker_completion() {
 
         (
             cd "$project_dir" || exit 1
-            "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" commit 2>&1 | sed "s/^/  [commit-$task_id] /"
-            "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" push 2>&1 | sed "s/^/  [push-$task_id] /"
+            "$WIGGUM_HOME/bin/wiggum-pr" commit "$task_id" 2>&1 | sed "s/^/  [commit-$task_id] /"
+            "$WIGGUM_HOME/bin/wiggum-pr" push "$task_id" 2>&1 | sed "s/^/  [push-$task_id] /"
         )
 
         # Remove from conflict queue (ralph_dir already computed above)

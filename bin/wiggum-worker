@@ -1,0 +1,590 @@
+#!/usr/bin/env bash
+# wiggum worker - Worker lifecycle management
+#
+# Unified dispatcher for worker start, stop, kill, resume, fix, and merge commands.
+#
+# Usage:
+#   wiggum worker start <ID> [opts]      Start a new worker
+#   wiggum worker stop [<ID>|all]        Stop worker(s) gracefully
+#   wiggum worker stop orchestrator      Stop the orchestrator process
+#   wiggum worker kill [<ID>|all]        Force kill worker(s)
+#   wiggum worker resume <ID> [-f]       Resume a stopped worker
+#   wiggum worker fix <ID> [--quick]     Fix PR review comments
+#   wiggum worker merge <ID>             Merge a task's PR
+
+set -euo pipefail
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+source "$WIGGUM_HOME/lib/core/bin-common.sh"
+
+# Default configuration (shared across subcommands)
+MAX_ITERATIONS=20
+MAX_TURNS=50
+QUIET_MODE=false
+FOREGROUND_MODE=false
+QUICK_MODE=false
+
+# Map LOG_LEVEL=WARN to QUIET_MODE for backward compatibility
+if [[ "${LOG_LEVEL:-}" == "WARN" ]]; then
+    QUIET_MODE=true
+fi
+
+show_help() {
+    cat << 'EOF'
+wiggum worker - Worker lifecycle management
+
+Usage: wiggum worker <action> [options]
+
+Actions:
+  start <ID> [opts]      Start a new worker for the specified task
+  stop [<ID>|all]        Stop worker(s) gracefully (SIGTERM)
+  stop orchestrator      Stop the orchestrator process
+  kill [<ID>|all]        Force kill worker(s) (SIGKILL)
+  resume <ID> [-f]       Resume a stopped worker
+  fix <ID> [--quick]     Fix PR review comments
+  merge <ID>             Merge a task's PR
+
+Start Options:
+  --max-iters N          Maximum iterations per worker (default: 20)
+  --max-turns N          Maximum turns per Claude session (default: 50)
+  --agent-type T         Agent type to use (default: system.task-worker)
+  --pipeline NAME        Pipeline config to use
+  --worker-dir DIR       Use existing worker directory
+  -f, --foreground       Run in foreground (blocking)
+  plan                   Run plan-mode agent before execution
+
+Resume Options:
+  --max-iters N          Maximum iterations per worker (default: 20)
+  --max-turns N          Maximum turns per Claude session (default: 50)
+  --pipeline NAME        Pipeline config to use
+  -f                     Force resume, clearing violation status
+
+Fix Options:
+  --quick                Quick fix without test verification
+
+Global Options:
+  -v, --verbose          Verbose output (same as default)
+  -vv                    Debug output (detailed diagnostics)
+  -vvv                   Trace output (very detailed tracing)
+  -q, --quiet            Quiet mode (warnings and errors only)
+  -h, --help             Show this help message
+
+Examples:
+  wiggum worker start TASK-030              # Start worker for TASK-030
+  wiggum worker start TASK-030 plan         # Start with planning phase
+  wiggum worker stop                        # Stop all workers
+  wiggum worker stop TASK-030               # Stop specific worker
+  wiggum worker stop orchestrator           # Stop the orchestrator
+  wiggum worker kill all                    # Force kill all workers
+  wiggum worker resume TASK-030             # Resume stopped worker
+  wiggum worker resume TASK-030 -f          # Force resume after fixing violations
+  wiggum worker fix TASK-030                # Fix PR comments (with tests)
+  wiggum worker fix TASK-030 --quick        # Quick fix (no tests)
+  wiggum worker merge TASK-030              # Merge the task's PR
+
+EOF
+}
+
+# ── stop action ──────────────────────────────────────────────────────────────
+
+_stop_orchestrator() {
+    local orchestrator_lock="$RALPH_DIR/orchestrator/orchestrator.pid"
+
+    if [ ! -f "$orchestrator_lock" ]; then
+        echo "No orchestrator process running"
+        exit $EXIT_OK
+    fi
+
+    local orchestrator_pid
+    orchestrator_pid=$(cat "$orchestrator_lock" 2>/dev/null)
+
+    if ! [[ "$orchestrator_pid" =~ ^[0-9]+$ ]]; then
+        echo "Invalid orchestrator PID, cleaning lock file"
+        rm -f "$orchestrator_lock"
+        exit $EXIT_OK
+    fi
+
+    if kill -0 "$orchestrator_pid" 2>/dev/null; then
+        if ps -p "$orchestrator_pid" -o args= 2>/dev/null | grep -q "wiggum-run"; then
+            echo "Stopping orchestrator (PID: $orchestrator_pid)..."
+            kill -TERM "$orchestrator_pid"
+            echo "Orchestrator stopped"
+        else
+            echo "Process $orchestrator_pid is not wiggum-run (PID reused?)"
+            rm -f "$orchestrator_lock"
+        fi
+    else
+        echo "Orchestrator process not running, cleaning stale lock"
+        rm -f "$orchestrator_lock"
+    fi
+    exit $EXIT_OK
+}
+
+do_stop() {
+    source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
+
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+        cat << 'EOF'
+wiggum worker stop - Stop workers or orchestrator
+
+Usage:
+  wiggum worker stop                 Stop all workers
+  wiggum worker stop <id>            Stop specific worker by ID/pattern
+  wiggum worker stop orchestrator    Stop the orchestrator process
+
+EOF
+        exit $EXIT_OK
+    fi
+
+    # No arguments = stop all workers
+    if [ $# -eq 0 ]; then
+        if [ ! -d "$RALPH_DIR/workers" ]; then
+            echo "No wiggum workers found"
+            exit $EXIT_OK
+        fi
+
+        echo "Stopping all workers..."
+        terminate_all_workers "$RALPH_DIR" TERM 10
+
+        if [ "$TERMINATE_ALL_FAILED" -gt 0 ]; then
+            echo "Warning: $TERMINATE_ALL_FAILED workers did not stop gracefully, force killing..."
+            force_kill_remaining_workers "$RALPH_DIR" > /dev/null
+        fi
+
+        echo "Stopped $TERMINATE_ALL_COUNT workers"
+        exit $EXIT_OK
+    fi
+
+    local target="$1"
+
+    # Special target: orchestrator
+    if [ "$target" = "orchestrator" ]; then
+        _stop_orchestrator
+    fi
+
+    # Resolve worker ID pattern
+    local worker_dir
+    worker_dir=$(resolve_worker_id "$RALPH_DIR" "$target") || exit $EXIT_ERROR
+
+    if terminate_single_worker "$worker_dir" TERM 30; then
+        echo "Worker $TERMINATE_WORKER_ID stopped successfully"
+    else
+        echo "Warning: Worker did not stop gracefully within 30s"
+        echo "Use 'wiggum worker kill $TERMINATE_WORKER_ID' to force terminate"
+        exit 1
+    fi
+}
+
+# ── kill action ──────────────────────────────────────────────────────────────
+
+do_kill() {
+    source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
+
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+        cat << 'EOF'
+wiggum worker kill - Force kill workers (SIGKILL)
+
+Usage:
+  wiggum worker kill all             Force kill all workers
+  wiggum worker kill <id>            Force kill specific worker by ID/pattern
+
+Note:
+  This sends SIGKILL (signal 9) which cannot be caught or ignored.
+  Use 'wiggum worker stop' for graceful termination when possible.
+
+EOF
+        exit $EXIT_OK
+    fi
+
+    if [ $# -eq 0 ]; then
+        echo "Error: Missing argument. Use 'wiggum worker kill all' or 'wiggum worker kill <id>'" >&2
+        exit $EXIT_USAGE
+    fi
+
+    local target="$1"
+
+    # "all" = kill all workers
+    if [[ "$target" == "all" ]]; then
+        if [ ! -d "$RALPH_DIR/workers" ]; then
+            echo "No wiggum workers found"
+            exit $EXIT_OK
+        fi
+
+        echo "Force killing all workers..."
+        terminate_all_workers "$RALPH_DIR" KILL 1
+        echo "Killed $TERMINATE_ALL_COUNT workers"
+        exit $EXIT_OK
+    fi
+
+    # Resolve worker ID pattern
+    local worker_dir
+    worker_dir=$(resolve_worker_id "$RALPH_DIR" "$target") || exit $EXIT_ERROR
+
+    if terminate_single_worker "$worker_dir" KILL 1; then
+        echo "Worker $TERMINATE_WORKER_ID killed"
+    else
+        echo "Error: Failed to kill worker $TERMINATE_WORKER_ID"
+        exit 1
+    fi
+}
+
+# ── start action arg parsing ─────────────────────────────────────────────────
+
+do_start_cmd() {
+    source "$WIGGUM_HOME/lib/core/exit-codes.sh"
+    source "$WIGGUM_HOME/lib/core/logger.sh"
+    source "$WIGGUM_HOME/lib/core/file-lock.sh"
+    source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
+    source "$WIGGUM_HOME/lib/utils/audit-logger.sh"
+    source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
+    source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
+    source "$WIGGUM_HOME/lib/github/issue-sync.sh"
+    source "$WIGGUM_HOME/lib/core/defaults.sh"
+    source "$WIGGUM_HOME/lib/worker/cmd-start.sh"
+
+    local task_id_arg=""
+    local agent_type="system.task-worker"
+    local worker_dir_arg=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat << 'EOF'
+wiggum worker start - Start a new worker for a task
+
+Usage:
+  wiggum worker start <id>               Start a new worker
+  wiggum worker start <id> plan          Start with planning phase first
+
+Options:
+  --max-iters N     Maximum iterations per worker (default: 20)
+  --max-turns N     Maximum turns per Claude session (default: 50)
+  --agent-type T    Agent type to use (default: system.task-worker)
+  --pipeline NAME   Pipeline config to use
+  --worker-dir DIR  Use existing worker directory
+  -f, --foreground  Run in foreground (blocking)
+  -h, --help        Show this help message
+
+EOF
+                exit $EXIT_OK
+                ;;
+            --max-iters)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --max-iters requires a number argument"
+                    exit $EXIT_USAGE
+                fi
+                MAX_ITERATIONS="$2"
+                shift 2
+                ;;
+            --max-turns)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --max-turns requires a number argument"
+                    exit $EXIT_USAGE
+                fi
+                MAX_TURNS="$2"
+                shift 2
+                ;;
+            --agent-type)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --agent-type requires an argument"
+                    exit $EXIT_USAGE
+                fi
+                agent_type="$2"
+                shift 2
+                ;;
+            --pipeline)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --pipeline requires a name argument"
+                    exit $EXIT_USAGE
+                fi
+                export WIGGUM_PIPELINE="$2"
+                shift 2
+                ;;
+            --worker-dir)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --worker-dir requires a path argument"
+                    exit $EXIT_USAGE
+                fi
+                worker_dir_arg="$2"
+                shift 2
+                ;;
+            -f|--foreground)
+                FOREGROUND_MODE=true
+                shift
+                ;;
+            plan)
+                export WIGGUM_PLAN_MODE=true
+                echo "Using plan mode"
+                shift
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit $EXIT_USAGE
+                ;;
+            *)
+                if [ -z "$task_id_arg" ]; then
+                    task_id_arg="$1"
+                else
+                    echo "Unexpected argument: $1"
+                    exit $EXIT_USAGE
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Task ID is required unless --worker-dir is provided
+    if [ -z "$task_id_arg" ] && [ -z "$worker_dir_arg" ]; then
+        echo "Error: Task ID required (or use --worker-dir for existing worker)"
+        echo "Usage: wiggum worker start <TASK-ID> [plan] [--max-iters N] [--max-turns N] [--pipeline NAME]"
+        echo "       wiggum worker start --worker-dir <DIR> --pipeline <NAME>"
+        exit $EXIT_USAGE
+    fi
+
+    # Set globals used by do_start
+    AGENT_TYPE="$agent_type"
+    WORKER_DIR="$worker_dir_arg"
+
+    do_start "$task_id_arg"
+}
+
+# ── resume action arg parsing ────────────────────────────────────────────────
+
+do_resume_cmd() {
+    source "$WIGGUM_HOME/lib/worker/cmd-resume.sh"
+
+    local force_mode=false
+    local target=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat << 'EOF'
+wiggum worker resume - Resume a stopped worker
+
+Usage:
+  wiggum worker resume <id>        Resume a previously stopped worker
+  wiggum worker resume <id> -f     Force resume, clearing violation status
+
+Options:
+  --max-iters N   Maximum iterations per worker (default: 20)
+  --max-turns N   Maximum turns per Claude session (default: 50)
+  --pipeline NAME Pipeline config to use
+  -f              Force resume, clearing any workspace violation status
+  -h, --help      Show this help message
+
+EOF
+                exit $EXIT_OK
+                ;;
+            -f)
+                force_mode=true
+                shift
+                ;;
+            --max-iters)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --max-iters requires a number argument"
+                    exit $EXIT_USAGE
+                fi
+                MAX_ITERATIONS="$2"
+                shift 2
+                ;;
+            --max-turns)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --max-turns requires a number argument"
+                    exit $EXIT_USAGE
+                fi
+                MAX_TURNS="$2"
+                shift 2
+                ;;
+            --pipeline)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --pipeline requires a name argument"
+                    exit $EXIT_USAGE
+                fi
+                export WIGGUM_PIPELINE="$2"
+                shift 2
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit $EXIT_USAGE
+                ;;
+            *)
+                if [ -z "$target" ]; then
+                    target="$1"
+                else
+                    echo "Unexpected argument: $1"
+                    exit $EXIT_USAGE
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Load configuration
+    source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
+    source "$WIGGUM_HOME/lib/core/resume-state.sh"
+    load_rate_limit_config
+    load_resume_config
+
+    # Require target
+    if [ -z "$target" ]; then
+        echo "Error: Worker ID required"
+        echo "Usage: wiggum worker resume <id> [-f]"
+        exit $EXIT_USAGE
+    fi
+
+    # Resolve worker directory
+    source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
+    local worker_dir
+    worker_dir=$(resolve_worker_id "$RALPH_DIR" "$target") || exit $EXIT_ERROR
+
+    do_resume "$worker_dir" "$force_mode"
+}
+
+# ── fix action arg parsing ───────────────────────────────────────────────────
+
+do_fix_cmd() {
+    source "$WIGGUM_HOME/lib/worker/cmd-fix.sh"
+
+    local task_id_arg=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat << 'EOF'
+wiggum worker fix - Fix PR review comments
+
+Usage:
+  wiggum worker fix <ID>           Fix with test verification (default)
+  wiggum worker fix <ID> --quick   Quick fix without test verification
+
+Options:
+  --quick           Quick fix mode (no pipeline, no test verification)
+  -f, --foreground  Run in foreground (blocking)
+  -h, --help        Show this help message
+
+EOF
+                exit $EXIT_OK
+                ;;
+            --quick)
+                QUICK_MODE=true
+                shift
+                ;;
+            -f|--foreground)
+                FOREGROUND_MODE=true
+                shift
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit $EXIT_USAGE
+                ;;
+            *)
+                if [ -z "$task_id_arg" ]; then
+                    task_id_arg="$1"
+                else
+                    echo "Unexpected argument: $1"
+                    exit $EXIT_USAGE
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$task_id_arg" ]; then
+        echo "Error: Task ID required"
+        echo "Usage: wiggum worker fix <TASK-ID> [--quick]"
+        exit $EXIT_USAGE
+    fi
+
+    do_worker_fix "$task_id_arg"
+}
+
+# ── merge action arg parsing ────────────────────────────────────────────────
+
+do_merge_cmd() {
+    source "$WIGGUM_HOME/lib/worker/cmd-merge.sh"
+
+    local task_id_arg=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat << 'EOF'
+wiggum worker merge - Merge a task's PR
+
+Usage:
+  wiggum worker merge <ID>         Attempt to merge the task's PR
+
+This is a synchronous operation. Reports conflicts or errors if merge fails.
+
+EOF
+                exit $EXIT_OK
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit $EXIT_USAGE
+                ;;
+            *)
+                if [ -z "$task_id_arg" ]; then
+                    task_id_arg="$1"
+                else
+                    echo "Unexpected argument: $1"
+                    exit $EXIT_USAGE
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$task_id_arg" ]; then
+        echo "Error: Task ID required"
+        echo "Usage: wiggum worker merge <TASK-ID>"
+        exit $EXIT_USAGE
+    fi
+
+    do_start_merge "$task_id_arg"
+}
+
+# ── main dispatcher ──────────────────────────────────────────────────────────
+
+main() {
+    # Parse verbose flags first
+    parse_verbose_flags "$@"
+    set -- "${WIGGUM_REMAINING_ARGS[@]}"
+
+    # Map LOG_LEVEL=WARN to QUIET_MODE for backward compatibility
+    if [[ "${LOG_LEVEL:-}" == "WARN" ]]; then
+        QUIET_MODE=true
+    fi
+
+    if [ $# -eq 0 ]; then
+        show_help
+        exit $EXIT_USAGE
+    fi
+
+    local action="$1"
+    shift
+
+    case "$action" in
+        start)   do_start_cmd "$@" ;;
+        stop)    do_stop "$@" ;;
+        kill)    do_kill "$@" ;;
+        resume)  do_resume_cmd "$@" ;;
+        fix)     do_fix_cmd "$@" ;;
+        merge)   do_merge_cmd "$@" ;;
+        -h|--help|help)
+            show_help
+            exit $EXIT_OK
+            ;;
+        *)
+            echo "Unknown worker action: $action" >&2
+            echo ""
+            show_help
+            exit $EXIT_USAGE
+            ;;
+    esac
+}
+
+main "$@"

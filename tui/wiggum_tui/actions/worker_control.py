@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def stop_worker(worker_id: str) -> bool:
-    """Stop a worker gracefully via wiggum stop.
+    """Stop a worker gracefully via wiggum worker stop.
 
     Args:
         worker_id: Worker ID (e.g., worker-TASK-001-123456).
@@ -16,9 +16,9 @@ def stop_worker(worker_id: str) -> bool:
     """
     try:
         result = subprocess.run(
-            ["wiggum", "stop", worker_id],
+            ["wiggum", "worker", "stop", worker_id],
             capture_output=True,
-            timeout=35,  # wiggum stop has 30s internal timeout
+            timeout=35,  # wiggum worker stop has 30s internal timeout
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -26,7 +26,7 @@ def stop_worker(worker_id: str) -> bool:
 
 
 def kill_worker(worker_id: str) -> bool:
-    """Kill a worker forcefully via wiggum kill.
+    """Kill a worker forcefully via wiggum worker kill.
 
     Args:
         worker_id: Worker ID (e.g., worker-TASK-001-123456).
@@ -36,7 +36,7 @@ def kill_worker(worker_id: str) -> bool:
     """
     try:
         result = subprocess.run(
-            ["wiggum", "kill", worker_id],
+            ["wiggum", "worker", "kill", worker_id],
             capture_output=True,
             timeout=10,
         )

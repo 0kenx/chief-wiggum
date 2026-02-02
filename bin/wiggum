@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Chief Wiggum - Worker launcher and manager
+# Chief Wiggum - Autonomous Worker Orchestration
 set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
@@ -7,79 +7,57 @@ WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/verbose-flags.sh"
 
+# Print deprecation warning and forward
+_deprecated() {
+    local old="$1" new="$2"
+    echo "Warning: 'wiggum $old' is deprecated, use 'wiggum $new' instead." >&2
+}
+
 show_help() {
-    cat << EOF
+    cat << 'EOF'
 Chief Wiggum - Autonomous Worker Orchestration
 
 Usage: wiggum [flags] <command> [options]
 
-Commands:
-  init                Initialize .ralph/ directory in current project
-  validate            Validate kanban.md format and structure
-  run                 Orchestrate workers for incomplete tasks
-  status              Show status of workers and tasks
-  monitor             Monitor worker logs in real-time
-  doctor              Check environment setup and dependencies
+Setup & Health:
+  init                Initialize .ralph/ directory
+  validate            Validate kanban.md format
+  doctor              Check environment setup
+
+Core Workflow:
+  run                 Orchestrate workers for tasks
+  plan <ID>           Create implementation plan
+  status              Show worker/task status
+  monitor             Monitor workers in real-time
 
 Worker Management:
-  stop [<id>]         Stop worker(s) gracefully (SIGTERM)
-  stop orchestrator   Stop the orchestrator process
-  kill [<id>]         Force kill worker(s) (SIGKILL)
-  start <TASK-ID>     Manually start a worker for a task
-  resume <id> [-f]    Resume a previously stopped worker
+  worker start <ID>   Start a new worker
+  worker stop [<ID>]  Stop worker(s) gracefully
+  worker kill <ID>    Force kill worker(s)
+  worker resume <ID>  Resume a stopped worker
+  worker fix <ID>     Fix PR review comments
+  worker merge <ID>   Merge a task's PR
 
-Planning:
-  plan <TASK-ID>      Create implementation plan for a task (read-only)
+Pull Requests:
+  pr list             List open worker PRs
+  pr sync             Sync PR status and comments
+  pr view <PR#>       View a PR with diff
+  pr merge <PR#>      Merge a specific PR
+  pr create <ID>      Create PR for worker branch
+  pr resolve <ID>     Resolve merge conflicts
 
-Cleanup & Review:
-  clean <target>      Clean up worktrees and worker directories
-  review              Review and manage worker Pull Requests
+Cleanup & Debug:
+  clean <target>      Clean workspaces/logs/tasks
+  inspect <target>    Debug workers, pipelines, agents
 
-Utilities:
-  util convert-log    Convert JSONL iteration logs to markdown
-  service             Manage orchestrator services (list, status, run, stop)
-  gh                  Sync GitHub issues with local kanban
-
-Run Options:
-  --max-workers N     Maximum concurrent workers (default: 4)
+Integration:
+  github <action>     Sync GitHub issues with kanban
+  service <action>    Manage orchestrator services
 
 Global Flags:
-  -v, --verbose       Verbose output (same as default)
-  -vv                 Debug output (detailed diagnostics)
-  -vvv                Trace output (very detailed tracing)
-  -q, --quiet         Quiet mode (warnings and errors only)
+  -v/--verbose  -vv  -vvv  -q/--quiet
 
-Examples:
-  wiggum init                   # Initialize project
-  wiggum validate               # Validate kanban.md before running
-  wiggum run                    # Start orchestration (max 4 workers)
-  wiggum run --max-workers 8    # Start with max 8 workers
-  wiggum status                 # Show worker status
-  wiggum monitor                # Monitor worker output
-
-  wiggum stop                   # Stop all workers
-  wiggum stop TASK-030          # Stop specific worker
-  wiggum stop orchestrator      # Stop the orchestrator
-  wiggum kill TASK-030          # Force kill specific worker
-  wiggum start TASK-040         # Manually start worker for task
-  wiggum resume TASK-030        # Resume stopped worker
-  wiggum resume TASK-030 -f     # Force resume after fixing violations
-
-  wiggum clean TASK-030         # Clean up specific worker
-  wiggum clean all              # Clean up all workers
-  wiggum review list            # List open PRs
-
-  wiggum util convert-log TASK-030   # Convert iteration logs to markdown
-
-Behavior:
-  - Wiggum assigns pending tasks [ ] to workers
-  - Tasks are marked in-progress [=] when assigned
-  - Workers mark tasks complete [x] when done
-  - Wiggum waits until all tasks are complete
-  - New workers spawn as old ones finish (up to max)
-
-For more help on specific commands:
-  wiggum <command> --help
+Run 'wiggum <command> --help' for details.
 
 EOF
 }
@@ -103,6 +81,7 @@ main() {
     shift
 
     case "$command" in
+        # Unchanged
         init)
             exec "$WIGGUM_HOME/bin/wiggum-init" "$@"
             ;;
@@ -112,23 +91,8 @@ main() {
         run)
             exec "$WIGGUM_HOME/bin/wiggum-run" "$@"
             ;;
-        stop)
-            exec "$WIGGUM_HOME/bin/wiggum-stop" "$@"
-            ;;
-        kill)
-            exec "$WIGGUM_HOME/bin/wiggum-kill" "$@"
-            ;;
-        start)
-            exec "$WIGGUM_HOME/bin/wiggum-start" "$@"
-            ;;
         plan)
             exec "$WIGGUM_HOME/bin/wiggum-plan" "$@"
-            ;;
-        resume)
-            exec "$WIGGUM_HOME/bin/wiggum-resume" "$@"
-            ;;
-        clean)
-            exec "$WIGGUM_HOME/bin/wiggum-clean" "$@"
             ;;
         status)
             exec "$WIGGUM_HOME/bin/wiggum-status" "$@"
@@ -136,21 +100,65 @@ main() {
         monitor)
             exec "$WIGGUM_HOME/bin/wiggum-monitor" "$@"
             ;;
-        review)
-            exec "$WIGGUM_HOME/bin/wiggum-review" "$@"
-            ;;
         doctor)
             exec "$WIGGUM_HOME/bin/wiggum-doctor" "$@"
             ;;
-        util)
-            exec "$WIGGUM_HOME/bin/wiggum-util" "$@"
+        clean)
+            exec "$WIGGUM_HOME/bin/wiggum-clean" "$@"
+            ;;
+        inspect)
+            exec "$WIGGUM_HOME/bin/wiggum-inspect" "$@"
             ;;
         service)
             exec "$WIGGUM_HOME/bin/wiggum-service" "$@"
             ;;
-        gh)
-            exec "$WIGGUM_HOME/bin/wiggum-gh" "$@"
+
+        # New groups
+        worker)
+            exec "$WIGGUM_HOME/bin/wiggum-worker" "$@"
             ;;
+        pr)
+            exec "$WIGGUM_HOME/bin/wiggum-pr" "$@"
+            ;;
+        github)
+            exec "$WIGGUM_HOME/bin/wiggum-github" "$@"
+            ;;
+
+        # Deprecated aliases (warn + forward)
+        start)
+            _deprecated "start" "worker start"
+            exec "$WIGGUM_HOME/bin/wiggum-worker" start "$@"
+            ;;
+        stop)
+            _deprecated "stop" "worker stop"
+            exec "$WIGGUM_HOME/bin/wiggum-worker" stop "$@"
+            ;;
+        kill)
+            _deprecated "kill" "worker kill"
+            exec "$WIGGUM_HOME/bin/wiggum-worker" kill "$@"
+            ;;
+        resume)
+            _deprecated "resume" "worker resume"
+            exec "$WIGGUM_HOME/bin/wiggum-worker" resume "$@"
+            ;;
+        review)
+            _deprecated "review" "pr"
+            exec "$WIGGUM_HOME/bin/wiggum-pr" "$@"
+            ;;
+        gh)
+            _deprecated "gh" "github"
+            exec "$WIGGUM_HOME/bin/wiggum-github" "$@"
+            ;;
+        util)
+            _deprecated "util" "inspect"
+            # Translate 'util convert-log' -> 'inspect log'
+            if [ "${1:-}" = "convert-log" ]; then
+                shift
+                exec "$WIGGUM_HOME/bin/wiggum-inspect" log "$@"
+            fi
+            exec "$WIGGUM_HOME/bin/wiggum-inspect" "$@"
+            ;;
+
         -h|--help|help)
             show_help
             exit $EXIT_OK

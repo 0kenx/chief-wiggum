@@ -2,7 +2,7 @@
 # worker-lifecycle.sh - Agent/worker discovery and PID management
 #
 # Provides functions for finding workers/agents, validating PIDs, and managing
-# lifecycle. Used by wiggum-run, wiggum-start, wiggum-stop, etc.
+# lifecycle. Used by wiggum-run, wiggum-worker, etc.
 #
 # Note: All agents use agent.pid for their PID file. Process validation uses
 # the "bash" pattern since agents run via run_agent() in subshells.

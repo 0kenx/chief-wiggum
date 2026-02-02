@@ -150,50 +150,50 @@ test_clean_help_shows_usage() {
 }
 
 # =============================================================================
-# wiggum-start
+# wiggum-worker start
 # =============================================================================
 
-test_start_no_task_id_fails() {
+test_worker_start_no_task_id_fails() {
     local output exit_code
-    output=$(wiggum-start 2>&1) || exit_code=$?
+    output=$(wiggum-worker start 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-start without task ID should exit with EXIT_USAGE ($EXIT_USAGE)"
-    assert_output_contains "$output" "Task ID required" "wiggum-start should report missing task ID"
+        "wiggum-worker start without task ID should exit with EXIT_USAGE ($EXIT_USAGE)"
+    assert_output_contains "$output" "Task ID required" "wiggum-worker start should report missing task ID"
 }
 
-test_start_no_ralph_dir_fails() {
+test_worker_start_no_ralph_dir_fails() {
     local output exit_code
-    output=$(wiggum-start TASK-001 2>&1) || exit_code=$?
+    output=$(wiggum-worker start TASK-001 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_WORKER_NO_RALPH_DIR" "$exit_code" \
-        "wiggum-start without .ralph dir should exit with EXIT_WORKER_NO_RALPH_DIR ($EXIT_WORKER_NO_RALPH_DIR)"
-    assert_output_contains "$output" ".ralph" "wiggum-start should mention .ralph directory"
-    assert_output_contains "$output" "wiggum init" "wiggum-start should suggest running wiggum init"
+        "wiggum-worker start without .ralph dir should exit with EXIT_WORKER_NO_RALPH_DIR ($EXIT_WORKER_NO_RALPH_DIR)"
+    assert_output_contains "$output" ".ralph" "wiggum-worker start should mention .ralph directory"
+    assert_output_contains "$output" "wiggum init" "wiggum-worker start should suggest running wiggum init"
 }
 
-test_start_no_kanban_fails() {
+test_worker_start_no_kanban_fails() {
     # Create .ralph dir but no kanban.md
     mkdir -p .ralph
     local output exit_code
-    output=$(wiggum-start TASK-001 2>&1) || exit_code=$?
+    output=$(wiggum-worker start TASK-001 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_WORKER_NO_KANBAN" "$exit_code" \
-        "wiggum-start without kanban.md should exit with EXIT_WORKER_NO_KANBAN ($EXIT_WORKER_NO_KANBAN)"
-    assert_output_contains "$output" "kanban" "wiggum-start should mention kanban.md"
+        "wiggum-worker start without kanban.md should exit with EXIT_WORKER_NO_KANBAN ($EXIT_WORKER_NO_KANBAN)"
+    assert_output_contains "$output" "kanban" "wiggum-worker start should mention kanban.md"
 }
 
-test_start_help_shows_usage() {
+test_worker_start_help_shows_usage() {
     local output exit_code
-    output=$(wiggum-start --help 2>&1) || exit_code=$?
+    output=$(wiggum-worker start --help 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-start --help should exit 0"
-    assert_output_contains "$output" "Usage:" "wiggum-start --help should show usage"
-    assert_output_contains "$output" "TASK-030" "wiggum-start --help should show task ID example"
+    assert_equals "0" "$exit_code" "wiggum-worker start --help should exit 0"
+    assert_output_contains "$output" "Usage:" "wiggum-worker start --help should show usage"
+    assert_output_contains "$output" "TASK-030" "wiggum-worker start --help should show task ID example"
 }
 
 # =============================================================================
@@ -290,61 +290,61 @@ test_doctor_quiet_mode() {
 }
 
 # =============================================================================
-# wiggum-stop
+# wiggum-worker stop
 # =============================================================================
 
-test_stop_no_ralph_dir_reports_no_workers() {
-    # wiggum-stop without .ralph/workers reports no workers and exits 0
+test_worker_stop_no_ralph_dir_reports_no_workers() {
+    # wiggum-worker stop without .ralph/workers reports no workers and exits 0
     local output exit_code
-    output=$(wiggum-stop 2>&1) || exit_code=$?
+    output=$(wiggum-worker stop 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-stop without workers dir should exit 0"
-    assert_output_contains "$output" "No wiggum workers" "wiggum-stop should report no workers found"
+    assert_equals "0" "$exit_code" "wiggum-worker stop without workers dir should exit 0"
+    assert_output_contains "$output" "No wiggum workers" "wiggum-worker stop should report no workers found"
 }
 
-test_stop_help_shows_usage() {
+test_worker_stop_help_shows_usage() {
     local output exit_code
-    output=$(wiggum-stop --help 2>&1) || exit_code=$?
+    output=$(wiggum-worker stop --help 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-stop --help should exit 0"
-    assert_output_contains "$output" "Usage:" "wiggum-stop --help should show usage"
-    assert_output_contains "$output" "Stop" "wiggum-stop --help should describe stopping"
+    assert_equals "0" "$exit_code" "wiggum-worker stop --help should exit 0"
+    assert_output_contains "$output" "Usage:" "wiggum-worker stop --help should show usage"
+    assert_output_contains "$output" "Stop" "wiggum-worker stop --help should describe stopping"
 }
 
 # =============================================================================
-# wiggum-kill
+# wiggum-worker kill
 # =============================================================================
 
-test_kill_no_args_fails() {
-    # wiggum-kill without arguments should fail with usage error
+test_worker_kill_no_args_fails() {
+    # wiggum-worker kill without arguments should fail with usage error
     local output exit_code
-    output=$(wiggum-kill 2>&1) || exit_code=$?
+    output=$(wiggum-worker kill 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "$EXIT_USAGE" "$exit_code" "wiggum-kill without args should exit with usage error"
-    assert_output_contains "$output" "Missing argument" "wiggum-kill should report missing argument"
+    assert_equals "$EXIT_USAGE" "$exit_code" "wiggum-worker kill without args should exit with usage error"
+    assert_output_contains "$output" "Missing argument" "wiggum-worker kill should report missing argument"
 }
 
-test_kill_all_no_ralph_dir_reports_no_workers() {
-    # wiggum-kill all without .ralph/workers reports no workers and exits 0
+test_worker_kill_all_no_ralph_dir_reports_no_workers() {
+    # wiggum-worker kill all without .ralph/workers reports no workers and exits 0
     local output exit_code
-    output=$(wiggum-kill all 2>&1) || exit_code=$?
+    output=$(wiggum-worker kill all 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-kill all without workers dir should exit 0"
-    assert_output_contains "$output" "No wiggum workers" "wiggum-kill all should report no workers found"
+    assert_equals "0" "$exit_code" "wiggum-worker kill all without workers dir should exit 0"
+    assert_output_contains "$output" "No wiggum workers" "wiggum-worker kill all should report no workers found"
 }
 
-test_kill_help_shows_usage() {
+test_worker_kill_help_shows_usage() {
     local output exit_code
-    output=$(wiggum-kill --help 2>&1) || exit_code=$?
+    output=$(wiggum-worker kill --help 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-kill --help should exit 0"
-    assert_output_contains "$output" "Usage:" "wiggum-kill --help should show usage"
-    assert_output_contains "$output" "Force kill" "wiggum-kill --help should describe force killing"
+    assert_equals "0" "$exit_code" "wiggum-worker kill --help should exit 0"
+    assert_output_contains "$output" "Usage:" "wiggum-worker kill --help should show usage"
+    assert_output_contains "$output" "Force kill" "wiggum-worker kill --help should describe force killing"
 }
 
 # =============================================================================
@@ -384,49 +384,49 @@ test_run_no_kanban_fails() {
 }
 
 # =============================================================================
-# wiggum-review
+# wiggum-pr
 # =============================================================================
 
-test_review_help_shows_usage() {
+test_pr_help_shows_usage() {
     local output exit_code
-    output=$(wiggum-review --help 2>&1) || exit_code=$?
+    output=$(wiggum-pr --help 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-review --help should exit 0"
-    assert_output_contains "$output" "Usage:" "wiggum-review --help should show usage"
-    assert_output_contains "$output" "review" "wiggum-review --help should describe review"
-    assert_output_contains "$output" "list" "wiggum-review --help should list available commands"
-    assert_output_contains "$output" "merge" "wiggum-review --help should mention merge"
+    assert_equals "0" "$exit_code" "wiggum-pr --help should exit 0"
+    assert_output_contains "$output" "Usage:" "wiggum-pr --help should show usage"
+    assert_output_contains "$output" "pr" "wiggum-pr --help should describe pr management"
+    assert_output_contains "$output" "list" "wiggum-pr --help should list available commands"
+    assert_output_contains "$output" "merge" "wiggum-pr --help should mention merge"
 }
 
-test_review_unknown_command_fails() {
+test_pr_unknown_command_fails() {
     local output exit_code
-    output=$(wiggum-review bogus-action 2>&1) || exit_code=$?
+    output=$(wiggum-pr bogus-action 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-review with unknown command should exit with EXIT_USAGE ($EXIT_USAGE)"
-    assert_output_contains "$output" "Unknown command" "wiggum-review should report unknown command"
+        "wiggum-pr with unknown command should exit with EXIT_USAGE ($EXIT_USAGE)"
+    assert_output_contains "$output" "Unknown command" "wiggum-pr should report unknown command"
 }
 
-test_review_pr_no_number_fails() {
+test_pr_view_no_number_fails() {
     local output exit_code
-    output=$(wiggum-review pr 2>&1) || exit_code=$?
+    output=$(wiggum-pr view 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-review pr without number should exit with EXIT_USAGE ($EXIT_USAGE)"
+        "wiggum-pr view without number should exit with EXIT_USAGE ($EXIT_USAGE)"
     assert_output_contains "$output" "PR number required" "Should report PR number required"
 }
 
-test_review_task_no_pattern_fails() {
+test_pr_comments_no_pattern_fails() {
     local output exit_code
-    output=$(wiggum-review task 2>&1) || exit_code=$?
+    output=$(wiggum-pr comments 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     # The command exits non-zero when no task pattern is provided
     assert_not_equals "0" "$exit_code" \
-        "wiggum-review task without pattern should exit non-zero"
+        "wiggum-pr comments without pattern should exit non-zero"
 }
 
 # =============================================================================
@@ -487,46 +487,46 @@ test_plan_invalid_task_id_fails() {
 }
 
 # =============================================================================
-# wiggum-util
+# wiggum-inspect
 # =============================================================================
 
-test_util_no_args_shows_help() {
+test_inspect_no_args_shows_help() {
     local output exit_code
-    output=$(wiggum-util 2>&1) || exit_code=$?
+    output=$(wiggum-inspect 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "$EXIT_USAGE" "$exit_code" "wiggum-util without args should exit with usage error"
-    assert_output_contains "$output" "Usage:" "wiggum-util should show usage"
+    assert_equals "0" "$exit_code" "wiggum-inspect without args should exit 0 (shows help)"
+    assert_output_contains "$output" "Usage:" "wiggum-inspect should show usage"
 }
 
-test_util_help_shows_usage() {
+test_inspect_help_shows_usage() {
     local output exit_code
-    output=$(wiggum-util --help 2>&1) || exit_code=$?
+    output=$(wiggum-inspect --help 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-util --help should exit 0"
-    assert_output_contains "$output" "Usage:" "wiggum-util --help should show usage"
-    assert_output_contains "$output" "convert-log" "wiggum-util --help should list convert-log subcommand"
+    assert_equals "0" "$exit_code" "wiggum-inspect --help should exit 0"
+    assert_output_contains "$output" "Usage:" "wiggum-inspect --help should show usage"
+    assert_output_contains "$output" "log" "wiggum-inspect --help should list log subcommand"
 }
 
-test_util_convert_log_no_target_fails() {
+test_inspect_log_no_target_fails() {
     local output exit_code
-    output=$(wiggum-util convert-log 2>&1) || exit_code=$?
+    output=$(wiggum-inspect log 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-util convert-log without target should exit with EXIT_USAGE ($EXIT_USAGE)"
-    assert_output_contains "$output" "No target specified" "wiggum-util convert-log should report no target"
+        "wiggum-inspect log without target should exit with EXIT_USAGE ($EXIT_USAGE)"
+    assert_output_contains "$output" "No target specified" "wiggum-inspect log should report no target"
 }
 
-test_util_unknown_subcommand_fails() {
+test_inspect_unknown_subcommand_fails() {
     local output exit_code
-    output=$(wiggum-util nonexistent 2>&1) || exit_code=$?
+    output=$(wiggum-inspect nonexistent 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-util with unknown subcommand should exit with EXIT_USAGE ($EXIT_USAGE)"
-    assert_output_contains "$output" "Unknown" "wiggum-util should report unknown subcommand"
+        "wiggum-inspect with unknown subcommand should exit with EXIT_USAGE ($EXIT_USAGE)"
+    assert_output_contains "$output" "Unknown" "wiggum-inspect should report unknown subcommand"
 }
 
 # =============================================================================
@@ -554,36 +554,36 @@ test_monitor_no_ralph_dir_fails() {
 }
 
 # =============================================================================
-# wiggum-resume
+# wiggum-worker resume
 # =============================================================================
 
-test_resume_no_worker_id_fails() {
+test_worker_resume_no_worker_id_fails() {
     local output exit_code
-    output=$(wiggum-resume 2>&1) || exit_code=$?
+    output=$(wiggum-worker resume 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-resume without worker ID should exit with EXIT_USAGE ($EXIT_USAGE)"
-    assert_output_contains "$output" "Worker ID required" "wiggum-resume should report missing worker ID"
+        "wiggum-worker resume without worker ID should exit with EXIT_USAGE ($EXIT_USAGE)"
+    assert_output_contains "$output" "Worker ID required" "wiggum-worker resume should report missing worker ID"
 }
 
-test_resume_help_shows_usage() {
+test_worker_resume_help_shows_usage() {
     local output exit_code
-    output=$(wiggum-resume --help 2>&1) || exit_code=$?
+    output=$(wiggum-worker resume --help 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-resume --help should exit 0"
-    assert_output_contains "$output" "Usage:" "wiggum-resume --help should show usage"
-    assert_output_contains "$output" "resume" "wiggum-resume --help should describe resuming"
+    assert_equals "0" "$exit_code" "wiggum-worker resume --help should exit 0"
+    assert_output_contains "$output" "Usage:" "wiggum-worker resume --help should show usage"
+    assert_output_contains "$output" "resume" "wiggum-worker resume --help should describe resuming"
 }
 
-test_resume_unknown_option_fails() {
+test_worker_resume_unknown_option_fails() {
     local output exit_code
-    output=$(wiggum-resume --bogus 2>&1) || exit_code=$?
+    output=$(wiggum-worker resume --bogus 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
-        "wiggum-resume with unknown option should exit with EXIT_USAGE ($EXIT_USAGE)"
+        "wiggum-worker resume with unknown option should exit with EXIT_USAGE ($EXIT_USAGE)"
     assert_output_contains "$output" "Unknown option" "Should report unknown option"
 }
 
@@ -609,11 +609,11 @@ run_test test_status_help_shows_usage
 run_test test_clean_no_ralph_dir_fails
 run_test test_clean_help_shows_usage
 
-# wiggum-start tests
-run_test test_start_no_task_id_fails
-run_test test_start_no_ralph_dir_fails
-run_test test_start_no_kanban_fails
-run_test test_start_help_shows_usage
+# wiggum-worker start tests
+run_test test_worker_start_no_task_id_fails
+run_test test_worker_start_no_ralph_dir_fails
+run_test test_worker_start_no_kanban_fails
+run_test test_worker_start_help_shows_usage
 
 # wiggum-init tests
 run_test test_init_creates_ralph_directory
@@ -626,25 +626,25 @@ run_test test_doctor_produces_output
 run_test test_doctor_help_shows_usage
 run_test test_doctor_quiet_mode
 
-# wiggum-stop tests
-run_test test_stop_no_ralph_dir_reports_no_workers
-run_test test_stop_help_shows_usage
+# wiggum-worker stop tests
+run_test test_worker_stop_no_ralph_dir_reports_no_workers
+run_test test_worker_stop_help_shows_usage
 
-# wiggum-kill tests
-run_test test_kill_no_args_fails
-run_test test_kill_all_no_ralph_dir_reports_no_workers
-run_test test_kill_help_shows_usage
+# wiggum-worker kill tests
+run_test test_worker_kill_no_args_fails
+run_test test_worker_kill_all_no_ralph_dir_reports_no_workers
+run_test test_worker_kill_help_shows_usage
 
 # wiggum-run tests
 run_test test_run_no_ralph_dir_fails
 run_test test_run_help_shows_usage
 run_test test_run_no_kanban_fails
 
-# wiggum-review tests
-run_test test_review_help_shows_usage
-run_test test_review_unknown_command_fails
-run_test test_review_pr_no_number_fails
-run_test test_review_task_no_pattern_fails
+# wiggum-pr tests
+run_test test_pr_help_shows_usage
+run_test test_pr_unknown_command_fails
+run_test test_pr_view_no_number_fails
+run_test test_pr_comments_no_pattern_fails
 
 # wiggum-plan tests
 run_test test_plan_no_task_id_fails
@@ -653,20 +653,20 @@ run_test test_plan_help_shows_usage
 run_test test_plan_no_kanban_fails
 run_test test_plan_invalid_task_id_fails
 
-# wiggum-util tests
-run_test test_util_no_args_shows_help
-run_test test_util_help_shows_usage
-run_test test_util_convert_log_no_target_fails
-run_test test_util_unknown_subcommand_fails
+# wiggum-inspect tests
+run_test test_inspect_no_args_shows_help
+run_test test_inspect_help_shows_usage
+run_test test_inspect_log_no_target_fails
+run_test test_inspect_unknown_subcommand_fails
 
 # wiggum-monitor tests
 run_test test_monitor_help_shows_usage
 run_test test_monitor_no_ralph_dir_fails
 
-# wiggum-resume tests
-run_test test_resume_no_worker_id_fails
-run_test test_resume_help_shows_usage
-run_test test_resume_unknown_option_fails
+# wiggum-worker resume tests
+run_test test_worker_resume_no_worker_id_fails
+run_test test_worker_resume_help_shows_usage
+run_test test_worker_resume_unknown_option_fails
 
 print_test_summary
 exit_with_test_result

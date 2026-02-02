@@ -228,7 +228,7 @@ svc_orch_init_terminal() {
     if [ -n "$failed_tasks" ]; then
         local failed_count
         failed_count=$(echo "$failed_tasks" | wc -w)
-        log "Found $failed_count failed task(s) - waiting (use 'wiggum resume/retry' to restart):"
+        log "Found $failed_count failed task(s) - waiting (use 'wiggum worker resume' to restart):"
         for task_id in $failed_tasks; do
             echo "  ⏸ $task_id"
         done

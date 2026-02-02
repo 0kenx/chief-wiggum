@@ -5,7 +5,7 @@
 # State file: $worker_dir/resume-state.json
 #
 # Used by:
-#   - bin/wiggum-resume: updates state after each resume decision
+#   - lib/worker/cmd-resume.sh: updates state after each resume decision
 #   - lib/scheduler/scheduler.sh: filters workers by state (terminal, cooling, max attempts)
 set -euo pipefail
 

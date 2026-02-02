@@ -19,7 +19,7 @@
 #   orch_cleanup_fix_workers()         - Clean up fix workers
 #   orch_cleanup_resolve_workers()     - Clean up resolve workers
 #   orch_spawn_ready_tasks()           - Spawn workers for ready tasks
-#   spawn_worker()                     - Spawn worker via wiggum-start
+#   spawn_worker()                     - Spawn worker via wiggum-worker
 #   pre_worker_checks()               - Git pull and conflict checks
 #   _handle_main_worker_completion()   - Main worker completion callback
 #   _handle_fix_worker_completion()    - Fix worker completion callback
@@ -54,9 +54,9 @@ orch_run_periodic_sync() {
 
     [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
 
-    # Call wiggum review sync and capture output
+    # Call wiggum pr sync and capture output
     local sync_output sync_exit=0
-    sync_output=$("$WIGGUM_HOME/bin/wiggum-review" sync 2>&1) || sync_exit=$?
+    sync_output=$("$WIGGUM_HOME/bin/wiggum-pr" sync 2>&1) || sync_exit=$?
 
     if [ $sync_exit -ne 0 ]; then
         log_error "Periodic sync failed"
@@ -640,12 +640,12 @@ _orch_spawn_worker() {
     local ralph_dir="${RALPH_DIR:-}"
 
     local start_output start_exit_code=0
-    start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" \
+    start_output=$("$WIGGUM_HOME/bin/wiggum-worker" start "$task_id" \
         --max-iters "$max_iterations" --max-turns "$max_turns" \
         --agent-type "$agent_type" 2>&1) || start_exit_code=$?
 
     if [ "$start_exit_code" -ne 0 ]; then
-        log_error "wiggum start failed (exit $start_exit_code): $start_output"
+        log_error "wiggum worker start failed (exit $start_exit_code): $start_output"
         return 1
     fi
 
@@ -895,15 +895,15 @@ declare -gA _PENDING_RESUMES=()
 # Tracks background resume-decide processes: pid → "worker_dir|task_id|worker_type"
 declare -gA _PENDING_DECIDES=()
 
-# Spawn a worker for a task using wiggum-start
+# Spawn a worker for a task using wiggum-worker
 # Sets: SPAWNED_WORKER_ID, SPAWNED_WORKER_PID (for caller to use)
 spawn_worker() {
     local task_id="$1"
 
-    # Use wiggum-start to start the worker, capturing exit code
+    # Use wiggum-worker to start the worker, capturing exit code
     local start_output
     local start_exit_code
-    start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" \
+    start_output=$("$WIGGUM_HOME/bin/wiggum-worker" start "$task_id" \
         --max-iters "$MAX_ITERATIONS" --max-turns "$MAX_TURNS" \
         --agent-type "$AGENT_TYPE" 2>&1) || start_exit_code=$?
     start_exit_code=${start_exit_code:-0}
@@ -921,7 +921,7 @@ spawn_worker() {
             if [ -n "$stale_pid" ] && kill -0 "$stale_pid" 2>/dev/null; then
                 # Process is still running, refuse to spawn duplicate
                 log_error "Worker for $task_id is still running (PID: $stale_pid)"
-                log_error "Use 'wiggum stop $task_id' or 'wiggum kill $task_id' first"
+                log_error "Use 'wiggum worker stop $task_id' or 'wiggum worker kill $task_id' first"
                 return 1
             fi
             # Process not running - check if it's resumable
@@ -936,7 +936,7 @@ spawn_worker() {
             rm -rf "$existing_dir"
             # Retry spawning - reset exit code first
             start_exit_code=0
-            start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" \
+            start_output=$("$WIGGUM_HOME/bin/wiggum-worker" start "$task_id" \
                 --max-iters "$MAX_ITERATIONS" --max-turns "$MAX_TURNS" \
                 --agent-type "$AGENT_TYPE" 2>&1) || start_exit_code=$?
         fi
@@ -944,7 +944,7 @@ spawn_worker() {
 
     # Check if spawn succeeded
     if [ "$start_exit_code" -ne 0 ]; then
-        log_error "wiggum start failed (exit $start_exit_code): $start_output"
+        log_error "wiggum worker start failed (exit $start_exit_code): $start_output"
         return 1
     fi
 
@@ -1584,7 +1584,7 @@ _launch_resume_worker() {
 
     log "Launching resume worker for $task_id from step '$resume_step' (index $step_idx)"
 
-    # Launch worker via setsid (same pattern as bin/wiggum-resume)
+    # Launch worker via setsid (same pattern as bin/wiggum-worker resume)
     export _WORKER_WIGGUM_HOME="$WIGGUM_HOME"
     export _WORKER_DIR="$worker_dir"
     export _WORKER_PROJECT_DIR="$PROJECT_DIR"
@@ -1640,7 +1640,7 @@ _launch_resume_worker() {
 
 # Poll background resume processes for completion
 #
-# Called each main-loop iteration. Checks if any wiggum-resume processes
+# Called each main-loop iteration. Checks if any wiggum-worker resume processes
 # launched by _schedule_resume_workers() have finished, and if so, registers
 # the resulting worker into the pool.
 _poll_pending_resumes() {
@@ -1730,7 +1730,7 @@ _poll_pending_resumes() {
                 ;;
             *)
                 # Track the failure so resume_state_max_exceeded() eventually stops retrying.
-                # wiggum-resume only calls resume_state_increment after a successful
+                # wiggum-worker resume only calls resume_state_increment after a successful
                 # resume-decide decision, so crashes before that leave state untouched.
                 local _err_step=""
                 if [[ -f "$worker_dir/pipeline-config.json" ]]; then

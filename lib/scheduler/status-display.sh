@@ -424,8 +424,8 @@ display_final_summary() {
     echo "  - Changelog: .ralph/changelog.md"
     echo ""
     echo "Next steps:"
-    echo "  - Review completed work: wiggum review list"
-    echo "  - Merge PRs: wiggum review merge-all"
+    echo "  - Review completed work: wiggum pr list"
+    echo "  - Merge PRs: wiggum pr merge-all"
     echo "  - Clean up: wiggum clean"
     echo ""
 }

@@ -769,7 +769,7 @@ if [ "$TARGET" = "logs" ]; then
     done
 
     [ ${#running_workers[@]} -gt 0 ] && {
-        echo "ERROR: Cannot clean running workers. Stop them first with 'wiggum stop <id>'."
+        echo "ERROR: Cannot clean running workers. Stop them first with 'wiggum worker stop <id>'."
         echo ""
         echo "Running workers:"
         printf '  %s\n' "${running_workers[@]}"
@@ -825,7 +825,7 @@ if [ "$TARGET" = "archive" ]; then
     done
 
     [ ${#running_workers[@]} -gt 0 ] && {
-        echo "ERROR: Cannot archive running workers. Stop them first with 'wiggum stop <id>'."
+        echo "ERROR: Cannot archive running workers. Stop them first with 'wiggum worker stop <id>'."
         echo ""
         echo "Running workers:"
         printf '  %s\n' "${running_workers[@]}"
@@ -873,7 +873,7 @@ for worker in "${workers_array[@]}"; do
 done
 
 [ ${#running_workers[@]} -gt 0 ] && {
-    echo "ERROR: Cannot clean running workers. Stop them first with 'wiggum stop <id>'."
+    echo "ERROR: Cannot clean running workers. Stop them first with 'wiggum worker stop <id>'."
     echo ""
     echo "Running workers:"
     printf '  %s\n' "${running_workers[@]}"

@@ -106,11 +106,11 @@ test_git_state_set_records_transition_from() {
 }
 
 test_git_state_set_records_agent() {
-    git_state_set "$WORKER_DIR" "needs_fix" "wiggum-review.sync" "Test"
+    git_state_set "$WORKER_DIR" "needs_fix" "wiggum-pr.sync" "Test"
 
     local agent
     agent=$(jq -r '.transitions[0].agent' "$WORKER_DIR/git-state.json")
-    assert_equals "wiggum-review.sync" "$agent" "Should record agent name"
+    assert_equals "wiggum-pr.sync" "$agent" "Should record agent name"
 }
 
 test_git_state_set_records_reason() {
@@ -407,7 +407,7 @@ test_git_state_clear_succeeds_when_no_file() {
 
 test_full_fix_merge_flow() {
     # Simulate the full workflow
-    git_state_set "$WORKER_DIR" "needs_fix" "wiggum-review.sync" "New PR comments detected"
+    git_state_set "$WORKER_DIR" "needs_fix" "wiggum-pr.sync" "New PR comments detected"
     git_state_set_pr "$WORKER_DIR" 42
 
     assert_equals "needs_fix" "$(git_state_get "$WORKER_DIR")" "Initial state"

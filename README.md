@@ -79,9 +79,9 @@ wiggum monitor split   # Split pane per worker
 ### 5. Review
 
 ```bash
-wiggum review list           # List open PRs
-wiggum review pr 123 view    # View specific PR
-wiggum review merge-all      # Merge all worker PRs
+wiggum pr list           # List open PRs
+wiggum pr view 123    # View specific PR
+wiggum pr merge-all      # Merge all worker PRs
 ```
 
 ## Commands
@@ -92,7 +92,7 @@ wiggum review merge-all      # Merge all worker PRs
 | `wiggum run` | Start workers for pending tasks |
 | `wiggum status` | Show worker status overview |
 | `wiggum monitor` | Live log viewer |
-| `wiggum review` | PR management |
+| `wiggum pr` | PR management |
 | `wiggum validate` | Validate kanban format |
 | `wiggum clean` | Remove worker worktrees |
 | `wiggum inspect` | Debug workers, pipelines, agents |

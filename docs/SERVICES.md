@@ -151,7 +151,7 @@ Services are organized into five execution phases:
   },
   "execution": {
     "type": "command",
-    "command": "wiggum-review sync"
+    "command": "wiggum-pr sync"
   },
   "concurrency": {
     "max_instances": 1,
@@ -304,7 +304,7 @@ Execute a shell command.
 ```json
 {
   "type": "command",
-  "command": "wiggum-review sync",
+  "command": "wiggum-pr sync",
   "working_dir": "/path/to/dir"
 }
 ```
