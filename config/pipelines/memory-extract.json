@@ -1,0 +1,16 @@
+{
+  "name": "memory-extract",
+  "description": "Analyze a completed worker and extract patterns into memory",
+  "steps": [
+    {
+      "id": "analyze",
+      "agent": "system.memory-analyst",
+      "max": 1,
+      "readonly": true,
+      "config": {
+        "max_iterations": 1,
+        "max_turns": 20
+      }
+    }
+  ]
+}

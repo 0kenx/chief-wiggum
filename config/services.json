@@ -350,7 +350,7 @@
     },
     {
       "id": "memory-extract",
-      "description": "Run LLM analysis on completed workers to update project memory",
+      "description": "Dispatch pending workers for memory analysis (writes context file)",
       "phase": "periodic",
       "order": 90,
       "schedule": {
@@ -365,6 +365,39 @@
       "concurrency": {
         "max_instances": 1,
         "if_running": "skip"
+      }
+    },
+    {
+      "id": "memory-analyze",
+      "description": "Run memory-analyst pipeline on dispatched worker context",
+      "phase": "periodic",
+      "triggers": {
+        "on_complete": ["memory-extract"]
+      },
+      "condition": {
+        "file_exists": ".ralph/memory/.current-analysis.json"
+      },
+      "execution": {
+        "type": "pipeline",
+        "pipeline": "memory-extract",
+        "workspace": false
+      },
+      "timeout": 600,
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      }
+    },
+    {
+      "id": "memory-analyze-complete",
+      "description": "Post-analysis cleanup: rebuild indexes or re-queue on failure",
+      "phase": "periodic",
+      "triggers": {
+        "on_finish": ["memory-analyze"]
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_memory_analyze_complete"
       }
     },
     {

@@ -8,7 +8,7 @@
     "version": {
       "type": "string",
       "description": "Schema version",
-      "enum": ["1.0", "1.1"]
+      "enum": ["1.0", "1.1", "2.0"]
     },
     "defaults": {
       "$ref": "#/$defs/defaults"
@@ -142,7 +142,11 @@
     },
     "service": {
       "type": "object",
-      "required": ["id", "schedule", "execution"],
+      "required": ["id", "execution"],
+      "anyOf": [
+        { "required": ["schedule"] },
+        { "required": ["triggers"] }
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -168,8 +172,23 @@
           "items": { "type": "string" },
           "description": "Service IDs that must complete successfully before this service runs"
         },
+        "phase": {
+          "type": "string",
+          "description": "Execution phase"
+        },
+        "order": {
+          "type": "integer",
+          "description": "Execution order within phase"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether failure of this service aborts startup"
+        },
         "schedule": {
           "$ref": "#/$defs/schedule"
+        },
+        "triggers": {
+          "$ref": "#/$defs/triggers"
         },
         "execution": {
           "$ref": "#/$defs/execution"
@@ -199,6 +218,28 @@
         },
         "metrics": {
           "$ref": "#/$defs/metrics_config"
+        }
+      },
+      "additionalProperties": false
+    },
+    "triggers": {
+      "type": "object",
+      "description": "Convenience field for service completion hooks. Normalizes to schedule.type=event with trigger array during loading. Only valid when schedule is absent or schedule.type=event.",
+      "properties": {
+        "on_complete": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Service IDs whose successful completion triggers this service (maps to service.succeeded:{id})"
+        },
+        "on_failure": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Service IDs whose failure triggers this service (maps to service.failed:{id})"
+        },
+        "on_finish": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Service IDs whose completion (success or failure) triggers this service (maps to service.completed:{id})"
         }
       },
       "additionalProperties": false
@@ -272,8 +313,19 @@
           "const": "event"
         },
         "trigger": {
-          "type": "string",
-          "description": "Event name that triggers this service (e.g., 'worker.completed', 'scheduling_event')"
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Event name or glob pattern that triggers this service"
+            },
+            {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "Array of event names/patterns - any match triggers the service"
+            }
+          ],
+          "description": "Event trigger(s). Supports exact match and glob suffix (e.g., 'service.completed:*')"
         }
       },
       "additionalProperties": false
@@ -379,6 +431,16 @@
         "pipeline": {
           "type": "string",
           "description": "Pipeline name to execute"
+        },
+        "workspace": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, creates an isolated worker directory per run (.ralph/workers/service-{id}-{ts}/). If false (default), uses lightweight persistent directory (.ralph/services/{id}/)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Environment variables to pass to the pipeline subprocess"
         }
       },
       "additionalProperties": false

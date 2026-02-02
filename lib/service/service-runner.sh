@@ -407,9 +407,42 @@ _run_service_function() {
     return 0
 }
 
+# Resolve workspace directory for a service
+#
+# Two modes based on execution.workspace flag:
+#   workspace: true  -> .ralph/workers/service-{id}-{timestamp}/ (isolated)
+#   workspace: false -> .ralph/services/{id}/ (lightweight, shared across runs)
+#
+# Args:
+#   id        - Service identifier
+#   workspace - "true" for isolated worker dir, "false" for lightweight
+#
+# Returns: workspace directory path via stdout
+_resolve_service_workspace() {
+    local id="$1"
+    local workspace="$2"
+
+    if [ "$workspace" = "true" ]; then
+        # Isolated workspace: new directory per run
+        local timestamp
+        timestamp=$(epoch_now)
+        local worker_dir="$_RUNNER_RALPH_DIR/workers/service-${id}-${timestamp}"
+        mkdir -p "$worker_dir/logs" "$worker_dir/results" "$worker_dir/output"
+        echo "$worker_dir"
+    else
+        # Lightweight workspace: persistent, shared across runs
+        local service_dir="$_RUNNER_RALPH_DIR/services/${id}"
+        mkdir -p "$service_dir/logs" "$service_dir/output"
+        echo "$service_dir"
+    fi
+}
+
 # Run a pipeline-type service
 #
-# Executes a named pipeline using the pipeline runner.
+# Executes a named pipeline using pipeline_load + pipeline_run_all.
+# Supports workspace modes via execution.workspace flag:
+#   workspace: true  -> isolated worker directory per run
+#   workspace: false -> lightweight .ralph/services/{id}/ directory (default)
 #
 # Args:
 #   id            - Service identifier
@@ -436,9 +469,7 @@ _run_service_pipeline() {
     local pipeline_config=""
     local search_paths=(
         "$_RUNNER_RALPH_DIR/pipelines/${pipeline_name}.json"
-        "$_RUNNER_RALPH_DIR/pipeline.json"
         "$WIGGUM_HOME/config/pipelines/${pipeline_name}.json"
-        "$WIGGUM_HOME/config/pipelines/default.json"
     )
 
     for path in "${search_paths[@]}"; do
@@ -454,6 +485,9 @@ _run_service_pipeline() {
         return 1
     fi
 
+    # Determine workspace mode from cache
+    local use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-false}"
+
     # Get limits prefix
     local limits_prefix
     limits_prefix=$(_build_limits_prefix "$limits" "$timeout")
@@ -461,6 +495,20 @@ _run_service_pipeline() {
     # Record start time
     local start_time
     start_time=$(date +%s%3N 2>/dev/null || echo "$(( $(epoch_now) * 1000 ))")
+
+    # Resolve workspace/worker directory before forking
+    local worker_dir
+    worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+
+    # Workspace path: for isolated workspace services, the worker's workspace dir;
+    # for lightweight services, the project directory directly
+    local workspace_path
+    if [ "$use_workspace" = "true" ]; then
+        workspace_path="$worker_dir/workspace"
+        mkdir -p "$workspace_path"
+    else
+        workspace_path="$_RUNNER_PROJECT_DIR"
+    fi
 
     # Run pipeline in background
     (
@@ -473,34 +521,44 @@ _run_service_pipeline() {
         log "Service $id starting (type: pipeline)"
         log_debug "pipeline=$pipeline_name"
         log_debug "config=$pipeline_config"
+        log_debug "worker_dir=$worker_dir"
+        log_debug "workspace=$workspace_path"
 
         export RALPH_DIR="$_RUNNER_RALPH_DIR"
         export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
         export SERVICE_ID="$id"
         export SERVICE_START_TIME="$start_time"
+        export WIGGUM_HOME
 
         activity_log "service.started" "" "" "service=$id" "type=pipeline" "pipeline=$pipeline_name"
 
-        # Source pipeline runner
+        # Source pipeline loader and runner
+        source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
         source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
 
-        # Run the pipeline
-        local _exit_code=0
-        if [ -n "$limits_prefix" ]; then
-            eval "${limits_prefix}pipeline_run '$pipeline_config' '${extra_args[*]}'" || _exit_code=$?
-        else
-            pipeline_run "$pipeline_config" "${extra_args[@]}" || _exit_code=$?
+        # Provide no-op stubs for task-worker functions that pipeline-runner calls.
+        # These are normally provided by task-worker.sh but service pipelines run standalone.
+        _phase_start()              { :; }
+        _phase_end()                { :; }
+        _commit_subagent_changes()  { :; }
+
+        # Load and run the pipeline
+        _exit_code=0
+        pipeline_load "$pipeline_config" || _exit_code=$?
+
+        if [ "$_exit_code" -eq 0 ]; then
+            pipeline_run_all "$worker_dir" "$_RUNNER_PROJECT_DIR" "$workspace_path" "" || _exit_code=$?
         fi
 
         log "Service $id completed (exit_code=$_exit_code)"
         activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
-        exit $_exit_code
+        exit "$_exit_code"
     ) &
 
     local pid=$!
     service_state_mark_started "$id" "$pid"
 
-    log_debug "Service $id (pipeline: $pipeline_name) started (PID: $pid)"
+    log_debug "Service $id (pipeline: $pipeline_name) started (PID: $pid, worker: $worker_dir)"
     return 0
 }
 
@@ -525,18 +583,16 @@ _run_service_agent() {
     local extra_args=("$@")
 
     # Extract agent config from execution
-    local worker_dir max_iterations max_turns monitor_interval
+    local worker_dir max_iterations max_turns monitor_interval use_workspace
     worker_dir=$(echo "$execution" | jq -r '.worker_dir // ""')
     max_iterations=$(echo "$execution" | jq -r '.max_iterations // 20')
     max_turns=$(echo "$execution" | jq -r '.max_turns // 50')
     monitor_interval=$(echo "$execution" | jq -r '.monitor_interval // 30')
+    use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-true}"
 
-    # If no worker_dir specified, create a service-specific worker directory
+    # If no worker_dir specified, resolve based on workspace flag
     if [ -z "$worker_dir" ]; then
-        local timestamp
-        timestamp=$(epoch_now)
-        worker_dir="$_RUNNER_RALPH_DIR/workers/service-${id}-${timestamp}"
-        mkdir -p "$worker_dir/logs" "$worker_dir/results"
+        worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
     fi
 
     # Get limits prefix
@@ -723,12 +779,33 @@ service_run_sync() {
                 log_error "Pipeline config not found: $pipeline_name"
                 exit_code=1
             else
-                source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh" 2>/dev/null || true
-                if declare -F pipeline_run &>/dev/null; then
-                    pipeline_run "$pipeline_config" "${extra_args[@]}"
-                    exit_code=$?
+                # Determine workspace mode
+                local use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-false}"
+                local worker_dir
+                worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+                local workspace_path
+                if [ "$use_workspace" = "true" ]; then
+                    workspace_path="$worker_dir/workspace"
+                    mkdir -p "$workspace_path"
                 else
-                    log_error "Pipeline runner not available"
+                    workspace_path="$_RUNNER_PROJECT_DIR"
+                fi
+
+                source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh" 2>/dev/null || true
+                source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh" 2>/dev/null || true
+
+                # Provide no-op stubs for task-worker functions
+                declare -F _phase_start &>/dev/null || _phase_start() { :; }
+                declare -F _phase_end &>/dev/null || _phase_end() { :; }
+                declare -F _commit_subagent_changes &>/dev/null || _commit_subagent_changes() { :; }
+
+                if declare -F pipeline_load &>/dev/null && declare -F pipeline_run_all &>/dev/null; then
+                    pipeline_load "$pipeline_config" || exit_code=$?
+                    if [ "$exit_code" -eq 0 ]; then
+                        pipeline_run_all "$worker_dir" "$_RUNNER_PROJECT_DIR" "$workspace_path" "" || exit_code=$?
+                    fi
+                else
+                    log_error "Pipeline loader/runner not available"
                     exit_code=1
                 fi
             fi
@@ -746,12 +823,10 @@ service_run_sync() {
                 log_error "Service $id has no agent defined"
                 exit_code=1
             else
-                # Create worker directory if not specified
+                # Create workspace if not specified
                 if [ -z "$worker_dir" ]; then
-                    local timestamp
-                    timestamp=$(epoch_now)
-                    worker_dir="$_RUNNER_RALPH_DIR/workers/service-${id}-${timestamp}"
-                    mkdir -p "$worker_dir/logs" "$worker_dir/results"
+                    local use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-true}"
+                    worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
                 fi
 
                 export RALPH_DIR="$_RUNNER_RALPH_DIR"

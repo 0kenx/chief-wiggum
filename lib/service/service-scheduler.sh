@@ -59,6 +59,10 @@ _SCHED_STARTUP_COMPLETE=false
 _SCHED_LAST_HEALTH_CHECK=0
 _SCHED_HEALTH_CHECK_INTERVAL=30
 
+# Service event recursion safety
+_SERVICE_EVENT_DEPTH=0
+_SERVICE_EVENT_MAX_DEPTH=5
+
 # Per-tick cache of enabled services (avoids repeated jq calls within a tick)
 _SCHED_TICK_ENABLED=""
 
@@ -303,10 +307,40 @@ _cron_service_is_due() {
     return 1
 }
 
-# Trigger event-based services
+# Check if a trigger pattern matches an event
+#
+# Supports:
+#   - Exact match: "service.completed:foo" == "service.completed:foo"
+#   - Glob suffix: "service.completed:*" matches "service.completed:foo"
 #
 # Args:
-#   event - Event name (e.g., "worker.completed", "scheduling_event")
+#   trigger - Trigger pattern (may contain trailing *)
+#   event   - Event name to match against
+#
+# Returns: 0 if matches, 1 otherwise
+_trigger_matches_event() {
+    local trigger="$1"
+    local event="$2"
+
+    # Exact match
+    [[ "$trigger" = "$event" ]] && return 0
+
+    # Glob suffix match
+    if [[ "$trigger" == *'*' ]]; then
+        local prefix="${trigger%\*}"
+        [[ "$event" == "$prefix"* ]] && return 0
+    fi
+
+    return 1
+}
+
+# Trigger event-based services
+#
+# Supports pattern matching in triggers (exact and glob suffix) and
+# array triggers (newline-separated in cache).
+#
+# Args:
+#   event - Event name (e.g., "worker.completed", "service.succeeded:foo")
 #   args  - Optional arguments to pass to service
 service_trigger_event() {
     local event="$1"
@@ -319,29 +353,47 @@ service_trigger_event() {
     enabled_services="${_SCHED_TICK_ENABLED:-$(service_get_enabled)}"
 
     for id in $enabled_services; do
-        local schedule_type trigger
+        local schedule_type
         schedule_type=$(service_get_field "$id" ".schedule.type" "interval")
         [ "$schedule_type" = "event" ] || continue
 
-        trigger=$(service_get_field "$id" ".schedule.trigger" "")
-        if [ "$trigger" = "$event" ]; then
-            # Check conditions and dependencies even for events
-            if ! service_conditions_met "$id"; then
-                log_debug "Event '$event' for service $id skipped (conditions not met)"
-                continue
-            fi
-            if ! service_dependencies_satisfied "$id"; then
-                log_debug "Event '$event' for service $id skipped (dependencies not satisfied)"
-                continue
-            fi
-            if _circuit_breaker_blocks "$id"; then
-                log_debug "Event '$event' for service $id skipped (circuit open)"
-                continue
-            fi
-
-            log_debug "Event '$event' triggered service: $id"
-            _run_service_if_allowed "$id" "${args[@]}"
+        # Get triggers from cache (newline-separated list for array triggers)
+        local triggers_list="${_SVC_CACHE["triggers:${id}"]:-}"
+        if [ -z "$triggers_list" ]; then
+            # Fallback to single trigger field
+            triggers_list=$(service_get_field "$id" ".schedule.trigger" "")
         fi
+
+        [ -n "$triggers_list" ] || continue
+
+        # Check each trigger pattern against the event
+        local matched=false
+        while IFS= read -r trigger_pattern; do
+            [ -n "$trigger_pattern" ] || continue
+            if _trigger_matches_event "$trigger_pattern" "$event"; then
+                matched=true
+                break
+            fi
+        done <<< "$triggers_list"
+
+        [ "$matched" = true ] || continue
+
+        # Check conditions and dependencies even for events
+        if ! service_conditions_met "$id"; then
+            log_debug "Event '$event' for service $id skipped (conditions not met)"
+            continue
+        fi
+        if ! service_dependencies_satisfied "$id"; then
+            log_debug "Event '$event' for service $id skipped (dependencies not satisfied)"
+            continue
+        fi
+        if _circuit_breaker_blocks "$id"; then
+            log_debug "Event '$event' for service $id skipped (circuit open)"
+            continue
+        fi
+
+        log_debug "Event '$event' triggered service: $id"
+        _run_service_if_allowed "$id" "${args[@]}"
     done
 }
 
@@ -475,9 +527,50 @@ _check_completed_services() {
                     log_debug "Service $id failed (exit code: $exit_code)"
                     _handle_service_failure "$id"
                 fi
+
+                # Fire completion events (async services only)
+                _fire_service_completion_events "$id" "$exit_code"
             fi
         fi
     done
+}
+
+# Fire service completion events for chaining
+#
+# Fires three event types for service-to-service completion hooks:
+#   service.completed:{id} - always (success or failure)
+#   service.succeeded:{id} - exit code 0 only
+#   service.failed:{id}    - non-zero exit code only
+#
+# Only async (background/periodic) services fire events — tick/pre/post services
+# do not, preventing unbounded chaining within a single tick.
+#
+# Args:
+#   id        - Service identifier
+#   exit_code - Exit code from service execution
+_fire_service_completion_events() {
+    local id="$1"
+    local exit_code="$2"
+
+    # Recursion safety: prevent unbounded event cascades
+    if [ "$_SERVICE_EVENT_DEPTH" -ge "$_SERVICE_EVENT_MAX_DEPTH" ]; then
+        log_warn "Service event depth limit ($_SERVICE_EVENT_MAX_DEPTH) reached, skipping events for $id"
+        return 0
+    fi
+
+    ((_SERVICE_EVENT_DEPTH++)) || true
+
+    # Always fire completed event
+    service_trigger_event "service.completed:${id}" "$id" "$exit_code"
+
+    # Fire success/failure specific events
+    if [ "$exit_code" -eq 0 ]; then
+        service_trigger_event "service.succeeded:${id}" "$id"
+    else
+        service_trigger_event "service.failed:${id}" "$id" "$exit_code"
+    fi
+
+    ((_SERVICE_EVENT_DEPTH--)) || true
 }
 
 # Handle service failure according to restart policy and circuit breaker

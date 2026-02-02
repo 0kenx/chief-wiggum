@@ -68,7 +68,8 @@ _service_populate_cache() {
             sched_interval sched_jitter run_on_startup phase order timeout \
             cb_enabled cb_cooldown cb_half_open cb_threshold depends_on conc_max \
             conc_if_running conc_priority conc_queue_max cond_file_exists \
-            cond_file_not_exists cond_env_set cond_command has_condition; do
+            cond_file_not_exists cond_env_set cond_command has_condition \
+            sched_triggers exec_workspace; do
         [ -n "$id" ] || continue
 
         _SVC_CACHE_ENABLED+="${_SVC_CACHE_ENABLED:+ }${id}"
@@ -98,6 +99,16 @@ _service_populate_cache() {
         _SVC_CACHE["cond_fne:${id}"]="$cond_file_not_exists"
         _SVC_CACHE["cond_es:${id}"]="$cond_env_set"
         _SVC_CACHE["cond_cmd:${id}"]="$cond_command"
+
+        # Cache trigger patterns as newline-separated list for efficient iteration
+        # Supports both single string trigger and JSON array triggers
+        if [ -n "$sched_triggers" ]; then
+            # Convert space-separated to newline-separated for cache
+            _SVC_CACHE["triggers:${id}"]="${sched_triggers// /$'\n'}"
+        fi
+
+        # Cache workspace flag for execution
+        _SVC_CACHE["exec_workspace:${id}"]="$exec_workspace"
     done < <(_service_jq -r '
         .groups as $groups |
         (.defaults.circuit_breaker.enabled // false) as $default_cb |
@@ -135,7 +146,11 @@ _service_populate_cache() {
             (.condition.file_not_exists // ""),
             (.condition.env_set // ""),
             (.condition.command // ""),
-            (if .condition != null then "true" else "false" end)
+            (if .condition != null then "true" else "false" end),
+            (if .schedule.trigger then
+                (.schedule.trigger | if type == "array" then join(" ") else . end)
+             else "" end),
+            (.execution.workspace // false | tostring)
         ] | join("\u001e")
     ')
 
@@ -224,9 +239,18 @@ service_load() {
         return 1
     fi
 
-    # Validate schedule config exists
+    # Store source for normalization (triggers may replace schedule)
+    _SERVICE_JSON_FILE="$file"
+    _SERVICE_JSON=""
+
+    # Normalize triggers convenience field before validation
+    # Services with `triggers` field get schedule auto-generated
+    _normalize_service_triggers
+
+    # After normalization, validate from the effective config (_SERVICE_JSON or file)
+    # Use _service_jq to query the (possibly normalized) config
     local missing_schedule
-    missing_schedule=$(jq -r '.services | to_entries[] | select(.value.schedule == null) | .value.id // .key' "$file" | head -1)
+    missing_schedule=$(_service_jq -r '.services | to_entries[] | select(.value.schedule == null and .value.triggers == null) | .value.id // .key' | head -1)
     if [ -n "$missing_schedule" ]; then
         log_error "Service '$missing_schedule' missing required 'schedule' field"
         return 1
@@ -234,7 +258,7 @@ service_load() {
 
     # Validate execution config exists
     local missing_execution
-    missing_execution=$(jq -r '.services | to_entries[] | select(.value.execution == null) | .value.id // .key' "$file" | head -1)
+    missing_execution=$(_service_jq -r '.services | to_entries[] | select(.value.execution == null) | .value.id // .key' | head -1)
     if [ -n "$missing_execution" ]; then
         log_error "Service '$missing_execution' missing required 'execution' field"
         return 1
@@ -242,41 +266,41 @@ service_load() {
 
     # Validate schedule types (now includes cron)
     local bad_schedule
-    bad_schedule=$(jq -r '.services[] | select(.schedule.type | . != "interval" and . != "event" and . != "continuous" and . != "cron" and . != "tick") | .id' "$file" | head -1)
+    bad_schedule=$(_service_jq -r '.services[] | select(.schedule.type | . != "interval" and . != "event" and . != "continuous" and . != "cron" and . != "tick") | .id' | head -1)
     if [ -n "$bad_schedule" ]; then
         local sched_type
-        sched_type=$(jq -r --arg id "$bad_schedule" '.services[] | select(.id == $id) | .schedule.type' "$file")
+        sched_type=$(_service_jq -r --arg id "$bad_schedule" '.services[] | select(.id == $id) | .schedule.type')
         log_error "Service '$bad_schedule' has invalid schedule type: '$sched_type' (must be interval, event, continuous, cron, or tick)"
         return 1
     fi
 
     # Validate execution types
     local bad_execution
-    bad_execution=$(jq -r '.services[] | select(.execution.type | . != "command" and . != "function" and . != "pipeline") | .id' "$file" | head -1)
+    bad_execution=$(_service_jq -r '.services[] | select(.execution.type | . != "command" and . != "function" and . != "pipeline") | .id' | head -1)
     if [ -n "$bad_execution" ]; then
         local exec_type
-        exec_type=$(jq -r --arg id "$bad_execution" '.services[] | select(.id == $id) | .execution.type' "$file")
+        exec_type=$(_service_jq -r --arg id "$bad_execution" '.services[] | select(.id == $id) | .execution.type')
         log_error "Service '$bad_execution' has invalid execution type: '$exec_type' (must be command, function, or pipeline)"
         return 1
     fi
 
     # Validate dependencies reference existing services
     local bad_dep
-    bad_dep=$(jq -r '
+    bad_dep=$(_service_jq -r '
         .services | map(.id) as $ids |
         .[] | select(.depends_on != null) |
         .id as $svc | .depends_on[] |
         select(. as $dep | $ids | index($dep) | not) |
         "\($svc) -> \(.)"
-    ' "$file" | head -1)
+    ' | head -1)
     if [ -n "$bad_dep" ]; then
         log_error "Service has invalid dependency: $bad_dep"
         return 1
     fi
 
-    # Store source
-    _SERVICE_JSON_FILE="$file"
-    _SERVICE_JSON=""
+    # Recount after normalization (triggers may have changed services)
+    service_count=$(_service_jq -r '[.services[] | select(.enabled != false)] | length')
+    service_count="${service_count:-0}"
     _SERVICE_COUNT="$service_count"
 
     log "Loaded service config with $service_count services"
@@ -342,6 +366,12 @@ service_load_override() {
         # Merge groups if present
         .groups = (($base.groups // {}) * ($override.groups // {}))
     ' <<< "$base_json"$'\n'"$override_json")
+
+    # Clear file source since we're now using _SERVICE_JSON
+    _SERVICE_JSON_FILE=""
+
+    # Normalize triggers in overridden config
+    _normalize_service_triggers
 
     # Update count (excluding disabled services and disabled groups)
     _SERVICE_COUNT=$(echo "$_SERVICE_JSON" | jq '
@@ -1158,6 +1188,68 @@ service_metrics_enabled() {
     local enabled
     enabled=$(echo "$config" | jq -r '.enabled // true')
     [ "$enabled" = "true" ]
+}
+
+# =============================================================================
+# Triggers Normalization
+# =============================================================================
+
+# Normalize `triggers` convenience field into schedule.type=event + trigger array
+#
+# Converts:
+#   "triggers": { "on_complete": ["X"], "on_failure": ["Y"], "on_finish": ["Z"] }
+# Into:
+#   "schedule": { "type": "event", "trigger": ["service.succeeded:X", "service.failed:Y", "service.completed:Z"] }
+#
+# The `triggers` field is only valid when `schedule` is absent or `schedule.type=event`.
+# After normalization, the `triggers` field is removed from the service definition.
+#
+# Args: none (operates on _SERVICE_JSON or _SERVICE_JSON_FILE)
+#
+# Side effects: Updates _SERVICE_JSON with normalized services
+_normalize_service_triggers() {
+    local json
+    if [ -n "$_SERVICE_JSON" ]; then
+        json="$_SERVICE_JSON"
+    elif [ -n "$_SERVICE_JSON_FILE" ]; then
+        json=$(cat "$_SERVICE_JSON_FILE")
+    else
+        return 0
+    fi
+
+    # Check if any service has a triggers field
+    local has_triggers
+    has_triggers=$(echo "$json" | jq '[.services[] | select(.triggers != null)] | length')
+    has_triggers="${has_triggers:-0}"
+
+    [ "$has_triggers" -gt 0 ] || return 0
+
+    # Normalize: convert triggers into schedule.trigger array, remove triggers field
+    _SERVICE_JSON=$(echo "$json" | jq '
+        .services = [.services[] |
+            if .triggers != null then
+                # Build trigger array from on_complete/on_failure/on_finish
+                (.triggers.on_complete // []) as $on_complete |
+                (.triggers.on_failure // []) as $on_failure |
+                (.triggers.on_finish // []) as $on_finish |
+                (
+                    [$on_complete[] | "service.succeeded:\(.)"] +
+                    [$on_failure[] | "service.failed:\(.)"] +
+                    [$on_finish[] | "service.completed:\(.)"]
+                ) as $trigger_list |
+                # Set schedule to event type with trigger array
+                .schedule = {
+                    "type": "event",
+                    "trigger": $trigger_list
+                } |
+                # Remove triggers field
+                del(.triggers)
+            else
+                .
+            end
+        ]
+    ')
+    _SERVICE_JSON_FILE=""
 }
 
 # =============================================================================

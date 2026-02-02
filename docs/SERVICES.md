@@ -88,14 +88,15 @@ Service configuration uses JSON Schema draft 2020-12. The full schema is at `con
 
 ## Service Definition
 
-Each service requires `id`, `schedule`, and `execution` fields.
+Each service requires `id`, `execution`, and either `schedule` or `triggers`.
 
 ### Required Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique identifier (pattern: `^[a-z][a-z0-9_-]*$`) |
-| `schedule` | object | When to run the service |
+| `schedule` | object | When to run the service (required unless `triggers` is set) |
+| `triggers` | object | Completion hooks from other services (alternative to `schedule`) |
 | `execution` | object | How to run the service |
 
 ### Optional Fields
@@ -215,24 +216,49 @@ Run based on cron expressions.
 
 ### Event Schedule
 
-Run when a named event is triggered.
+Run when a named event is triggered. Supports exact match, glob suffix patterns, and array triggers.
 
 ```json
 {
   "type": "event",
-  "trigger": "worker.completed"
+  "trigger": "service.succeeded:memory-extract"
+}
+```
+
+Array form (any match triggers the service):
+
+```json
+{
+  "type": "event",
+  "trigger": ["service.succeeded:svc-a", "service.succeeded:svc-b"]
+}
+```
+
+Glob suffix matching:
+
+```json
+{
+  "type": "event",
+  "trigger": "service.completed:*"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `type` | const | Yes | Must be `"event"` |
-| `trigger` | string | Yes | Event name that triggers execution |
+| `trigger` | string or array | Yes | Event name/pattern or array of event names/patterns |
+
+**Trigger Matching Rules**:
+- Exact match: `"service.completed:foo"` matches only `"service.completed:foo"`
+- Glob suffix: `"service.completed:*"` matches any `"service.completed:..."` event
+- Array: `["event-a", "event-b"]` matches if any element matches
 
 **Common Events**:
 - `worker.completed` - A worker finished execution
 - `scheduling_event` - Scheduler tick occurred
-- `pr.merged` - A PR was merged
+- `service.completed:{id}` - Service completed (success or failure)
+- `service.succeeded:{id}` - Service completed successfully (exit 0)
+- `service.failed:{id}` - Service failed (non-zero exit)
 - Custom events via `service_trigger_event()`
 
 ### Continuous Schedule
@@ -311,19 +337,31 @@ Call a Bash function.
 
 ### Pipeline Execution
 
-Execute a named pipeline.
+Execute a named pipeline using `pipeline_load` + `pipeline_run_all`.
 
 ```json
 {
   "type": "pipeline",
-  "pipeline": "security-audit"
+  "pipeline": "memory-extract",
+  "workspace": false,
+  "env": {
+    "MEMORY_DIR": ".ralph/memory"
+  }
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | const | Yes | Must be `"pipeline"` |
-| `pipeline` | string | Yes | Pipeline name to execute |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | const | Yes | - | Must be `"pipeline"` |
+| `pipeline` | string | Yes | - | Pipeline name to execute |
+| `workspace` | boolean | No | `false` | Create isolated worker directory per run |
+| `env` | object | No | - | Environment variables to pass to pipeline subprocess |
+
+Pipeline config is resolved from (first match):
+1. `.ralph/pipelines/{name}.json`
+2. `config/pipelines/{name}.json`
+
+The pipeline runner provides no-op stubs for task-worker functions (`_phase_start`, `_phase_end`, `_commit_subagent_changes`) that the pipeline runner calls but are normally provided by task-worker.sh.
 
 ### Agent Execution
 
@@ -374,6 +412,183 @@ Execute an agent directly via the agent registry.
   }
 }
 ```
+
+---
+
+## Service Completion Events
+
+When an async (background/periodic) service finishes, the scheduler fires three event types:
+
+| Event | Fired When | Example |
+|-------|------------|---------|
+| `service.completed:{id}` | Always (success or failure) | `service.completed:memory-extract` |
+| `service.succeeded:{id}` | Exit code 0 only | `service.succeeded:memory-extract` |
+| `service.failed:{id}` | Non-zero exit code only | `service.failed:memory-extract` |
+
+**Only async services fire events.** Tick/pre/post services do not fire completion events, preventing unbounded chaining within a single tick.
+
+**Recursion safety**: Each triggered service starts as a background process and is detected on the next tick cycle, providing natural temporal bounding. Additionally, a depth counter (`_SERVICE_EVENT_DEPTH`, max 5) prevents event cascades.
+
+---
+
+## Service Chaining with `triggers`
+
+The `triggers` field provides a convenience syntax for service-to-service completion hooks. It normalizes to `schedule.type=event` with the appropriate trigger array during loading.
+
+```json
+{
+  "id": "memory-analyze",
+  "triggers": {
+    "on_complete": ["memory-extract"],
+    "on_failure": ["error-handler"],
+    "on_finish": ["cleanup"]
+  },
+  "execution": { "type": "pipeline", "pipeline": "memory-extract" }
+}
+```
+
+### Trigger Types
+
+| Field | Maps To | Description |
+|-------|---------|-------------|
+| `on_complete` | `service.succeeded:{id}` | Triggered when upstream completes successfully |
+| `on_failure` | `service.failed:{id}` | Triggered when upstream fails |
+| `on_finish` | `service.completed:{id}` | Triggered on any completion (success or failure) |
+
+Each field accepts an array of service IDs. Multiple IDs means "trigger on any of these".
+
+### Example: Three-Service Chain
+
+```json
+[
+  {
+    "id": "extract",
+    "schedule": { "type": "interval", "interval": 300 },
+    "execution": { "type": "function", "function": "svc_extract" }
+  },
+  {
+    "id": "analyze",
+    "triggers": { "on_complete": ["extract"] },
+    "condition": { "file_exists": ".ralph/context.json" },
+    "execution": { "type": "pipeline", "pipeline": "analyze" }
+  },
+  {
+    "id": "cleanup",
+    "triggers": { "on_finish": ["analyze"] },
+    "execution": { "type": "function", "function": "svc_cleanup" }
+  }
+]
+```
+
+Flow: `extract` (interval) -> `analyze` (on extract success + condition) -> `cleanup` (always after analyze)
+
+### Validation
+
+- `triggers` is only valid when `schedule` is absent
+- `triggers` and `schedule` are mutually exclusive in the service definition
+- During loading, `triggers` is normalized to `schedule.type=event` + `schedule.trigger=[...]` and removed
+
+---
+
+## Service Workspace Modes
+
+Services can operate in two workspace modes, controlled by the `execution.workspace` flag:
+
+### Lightweight Mode (default, `workspace: false`)
+
+```
+.ralph/services/{id}/
+├── logs/
+└── output/
+```
+
+- Persistent directory shared across runs
+- Created once, reused for all invocations
+- Pipeline workspace path = project directory (read-only pattern)
+- For analysis, monitoring, or read-only services
+
+### Isolated Workspace Mode (`workspace: true`)
+
+```
+.ralph/workers/service-{id}-{timestamp}/
+├── workspace/      (pipeline workspace or git worktree)
+├── logs/
+├── results/
+└── output/
+```
+
+- New directory per run (epoch-named to prevent collisions)
+- Same pattern as task worker directories
+- For services that modify code, need git isolation, or produce per-run artifacts
+
+### Configuration
+
+```json
+{
+  "execution": {
+    "type": "pipeline",
+    "pipeline": "security-scan",
+    "workspace": true
+  }
+}
+```
+
+Both pipeline and agent execution types respect the `workspace` flag. Function and command types are unaffected.
+
+---
+
+## Pipeline Services
+
+Pipeline services run multi-step agent pipelines defined in JSON config files. This is the recommended pattern for AI-powered services (memory analysis, pattern extraction, etc.).
+
+### Defining a Pipeline Service
+
+```json
+{
+  "id": "memory-analyze",
+  "triggers": { "on_complete": ["memory-extract"] },
+  "condition": { "file_exists": ".ralph/memory/.current-analysis.json" },
+  "execution": {
+    "type": "pipeline",
+    "pipeline": "memory-extract",
+    "workspace": false
+  },
+  "timeout": 600
+}
+```
+
+### Pipeline Config
+
+Pipeline configs live in `config/pipelines/` or `.ralph/pipelines/`:
+
+```json
+{
+  "name": "memory-extract",
+  "description": "Analyze a completed worker and extract patterns",
+  "steps": [
+    {
+      "id": "analyze",
+      "agent": "system.memory-analyst",
+      "max": 1,
+      "config": { "max_iterations": 1, "max_turns": 20 }
+    }
+  ]
+}
+```
+
+### Pipeline-First Pattern
+
+For services that need AI reasoning, prefer the pipeline pattern over direct agent execution:
+
+1. **Dispatch service** (function, interval): Prepares context, writes input file
+2. **Pipeline service** (pipeline, triggered): Runs agent(s) to process context
+3. **Completion service** (function, triggered): Post-processes results, rebuilds indexes
+
+This pattern provides:
+- Declarative agent configuration via pipeline JSON
+- Natural service chaining via completion events
+- Condition-gated execution (skip pipeline if no input)
+- Separation of dispatch, execution, and cleanup
 
 ---
 
