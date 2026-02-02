@@ -64,6 +64,9 @@ AGING_FACTOR=7         # Scheduling events per priority level promotion
 SIBLING_WIP_PENALTY=20000  # Fixed-point penalty when sibling is WIP (20000 = 2.0)
 PLAN_BONUS=15000           # Fixed-point bonus for tasks with plans (15000 = 1.5)
 DEP_BONUS_PER_TASK=7000    # Fixed-point bonus per task blocked (7000 = 0.7)
+RESUME_INITIAL_BONUS=20000 # Fixed-point bonus for fresh resume tasks (20000 = 2.0)
+RESUME_FAIL_PENALTY=8000   # Fixed-point penalty per failed resume attempt (8000 = 0.8)
+RESUME_MIN_RETRY_INTERVAL=30  # Minimum seconds between resume retries
 WIGGUM_RUN_MODE="default"  # default | fix-only | merge-only | resume-only
 WIGGUM_NO_RESUME=false     # --no-resume: disable resume-workers, resume-poll
 WIGGUM_NO_FIX=false        # --no-fix: disable fix-workers, multi-pr-planner
@@ -193,6 +196,9 @@ main() {
     # CLI --fix-agents takes precedence over config
     FIX_WORKER_LIMIT="${FIX_WORKER_LIMIT:-$WIGGUM_FIX_WORKER_LIMIT}"
 
+    # Load resume queue configuration (initial_bonus, fail_penalty, min_retry_interval)
+    load_resume_queue_config
+
     # Initialize activity log
     activity_init "$PROJECT_DIR"
 
@@ -227,10 +233,10 @@ main() {
     if [[ "$WIGGUM_NO_RESUME" == "true" ]]; then
         _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
             .services |= map(
-                if .id == "resume-workers" or .id == "resume-poll"
+                if .id == "resume-poll"
                 then .enabled = false
                 else . end)')
-        log "--no-resume: disabled resume-workers, resume-poll services"
+        log "--no-resume: disabled resume-poll service, resume items excluded from unified queue"
         _no_flags_applied=true
     fi
     if [[ "$WIGGUM_NO_FIX" == "true" ]]; then
@@ -273,11 +279,12 @@ main() {
     export WIGGUM_NO_RESUME WIGGUM_NO_FIX WIGGUM_NO_MERGE WIGGUM_NO_SYNC
     export FIX_WORKER_LIMIT FIX_WORKER_TIMEOUT RESOLVE_WORKER_TIMEOUT
     export AGING_FACTOR SIBLING_WIP_PENALTY PLAN_BONUS DEP_BONUS_PER_TASK
+    export RESUME_INITIAL_BONUS RESUME_FAIL_PENALTY RESUME_MIN_RETRY_INTERVAL
     export MAX_SKIP_RETRIES PID_WAIT_TIMEOUT
 
     # Startup phase (sequential, synchronous)
     # Runs: validate-kanban, init-scheduler, preflight-git, preflight-ssh,
-    #       preflight-gh, restore-workers, resume-workers, init-terminal
+    #       preflight-gh, restore-workers, init-terminal
     if ! service_scheduler_run_phase "startup"; then
         log_error "Startup phase failed, aborting"
         exit 1

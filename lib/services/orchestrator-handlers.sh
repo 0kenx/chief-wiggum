@@ -131,7 +131,8 @@ svc_orch_validate_kanban() {
 # Initialize scheduler and detect dependency cycles
 svc_orch_init_scheduler() {
     scheduler_init "$RALPH_DIR" "$PROJECT_DIR" \
-        "$AGING_FACTOR" "$SIBLING_WIP_PENALTY" "$PLAN_BONUS" "$DEP_BONUS_PER_TASK"
+        "$AGING_FACTOR" "$SIBLING_WIP_PENALTY" "$PLAN_BONUS" "$DEP_BONUS_PER_TASK" \
+        "$RESUME_INITIAL_BONUS" "$RESUME_FAIL_PENALTY"
 
     log "Checking for dependency cycles..."
     scheduler_detect_cycles || true
@@ -201,11 +202,6 @@ svc_orch_preflight_gh() {
 # Restore active workers from existing worker directories
 svc_orch_restore_workers() {
     scheduler_restore_workers
-}
-
-# Resume stopped WIP workers
-svc_orch_resume_workers() {
-    _schedule_resume_workers
 }
 
 # Initialize terminal header display
@@ -302,89 +298,167 @@ svc_orch_scheduler_tick() {
     scheduler_tick
 }
 
-# Spawn workers for ready tasks
+# Spawn workers for ready tasks and resume candidates from unified queue
 svc_orch_task_spawner() {
-    [[ "$WIGGUM_RUN_MODE" == "default" ]] || return 0
+    local pending_main_count=0
+    local pending_priority_count=0
 
-    for task_id in $SCHED_READY_TASKS; do
-        if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
-            case "$SCHED_SKIP_REASON" in
-                at_capacity) break ;;
-                file_conflict)
-                    local -A _temp_workers=()
-                    _build_workers() {
-                        local pid="$1" type="$2" tid="$3"
-                        [ "$type" = "main" ] && _temp_workers[$pid]="$tid"
-                    }
-                    pool_foreach "main" _build_workers
-                    local conflicts
-                    conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
-                    log "Deferring $task_id - file conflict: $conflicts"
-                    ;;
-                *) ;;
-            esac
-            continue
-        fi
+    while IFS='|' read -r _pri work_type task_id worker_dir worker_type resume_step; do
+        [ -n "$task_id" ] || continue
 
-        if ! pre_worker_checks; then
-            log_error "Pre-worker checks failed for $task_id - skipping this task"
-            continue
-        fi
+        # Run-mode filtering
+        case "$WIGGUM_RUN_MODE" in
+            default)     ;;  # allow all work types
+            resume-only)
+                [ "$work_type" = "resume" ] || continue
+                ;;
+            fix-only)
+                if [ "$work_type" = "resume" ]; then
+                    [[ "$worker_type" =~ ^(fix|resolve)$ ]] || continue
+                else
+                    continue  # no new tasks in fix-only mode
+                fi
+                ;;
+            merge-only)
+                if [ "$work_type" = "resume" ]; then
+                    [ "$worker_type" = "resolve" ] || continue
+                else
+                    continue  # no new tasks in merge-only mode
+                fi
+                ;;
+            *)  continue ;;
+        esac
 
-        local task_priority
-        task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
-
-        log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
-        if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
-            log_error "Failed to mark $task_id as in-progress"
-            scheduler_increment_skip "$task_id"
-            local skip_count
-            skip_count=$(scheduler_get_skip_count "$task_id")
-            log "Task $task_id skip count: $skip_count/$MAX_SKIP_RETRIES"
-            if [ "$skip_count" -ge "$MAX_SKIP_RETRIES" ]; then
-                log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive kanban failures"
+        # Capacity check (shared between new and resume)
+        if [[ "$worker_type" =~ ^(fix|resolve)$ ]]; then
+            local fix_count resolve_count total_priority
+            fix_count=$(pool_count "fix")
+            resolve_count=$(pool_count "resolve")
+            total_priority=$((fix_count + resolve_count + pending_priority_count))
+            if [ "$total_priority" -ge "$FIX_WORKER_LIMIT" ]; then
+                continue  # skip this item, might have main-type items later
             fi
-            continue
+        else
+            local main_count
+            main_count=$(pool_count "main")
+            if [ "$((main_count + pending_main_count))" -ge "$MAX_WORKERS" ]; then
+                break  # at main capacity, stop processing
+            fi
         fi
 
-        # Smart routing
-        local _saved_pipeline="${WIGGUM_PIPELINE:-}"
-        local _saved_plan_mode="${WIGGUM_PLAN_MODE:-false}"
-        if [ "${WIGGUM_SMART_MODE:-false}" = "true" ]; then
-            local _complexity _routing _rt_pipeline _rt_plan_mode
-            _complexity=$(smart_assess_complexity "$RALPH_DIR/kanban.md" "$task_id")
-            _routing=$(smart_get_routing "$_complexity")
-            IFS='|' read -r _rt_pipeline _rt_plan_mode <<< "$_routing"
-            export WIGGUM_PIPELINE="$_rt_pipeline"
-            export WIGGUM_PLAN_MODE="$_rt_plan_mode"
-            log "Smart routing: $task_id -> $_complexity (pipeline=${_rt_pipeline:-default}, plan=$_rt_plan_mode)"
-        fi
+        if [ "$work_type" = "new" ]; then
+            # --- New task spawn logic ---
 
-        local spawn_rc=0
-        spawn_worker "$task_id" || spawn_rc=$?
-        if [ "$spawn_rc" -eq 2 ]; then
-            # Deferred - worker exists and is resumable, revert kanban to pending
-            update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" " " || true
+            if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
+                case "$SCHED_SKIP_REASON" in
+                    at_capacity) break ;;
+                    file_conflict)
+                        local -A _temp_workers=()
+                        _build_workers() {
+                            local pid="$1" type="$2" tid="$3"
+                            [ "$type" = "main" ] && _temp_workers[$pid]="$tid"
+                        }
+                        pool_foreach "main" _build_workers
+                        local conflicts
+                        conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
+                        log "Deferring $task_id - file conflict: $conflicts"
+                        ;;
+                    *) ;;
+                esac
+                continue
+            fi
+
+            if ! pre_worker_checks; then
+                log_error "Pre-worker checks failed for $task_id - skipping this task"
+                continue
+            fi
+
+            local task_priority
+            task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
+
+            log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
+            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
+                log_error "Failed to mark $task_id as in-progress"
+                scheduler_increment_skip "$task_id"
+                local skip_count
+                skip_count=$(scheduler_get_skip_count "$task_id")
+                log "Task $task_id skip count: $skip_count/$MAX_SKIP_RETRIES"
+                if [ "$skip_count" -ge "$MAX_SKIP_RETRIES" ]; then
+                    log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive kanban failures"
+                fi
+                continue
+            fi
+
+            # Smart routing
+            local _saved_pipeline="${WIGGUM_PIPELINE:-}"
+            local _saved_plan_mode="${WIGGUM_PLAN_MODE:-false}"
+            if [ "${WIGGUM_SMART_MODE:-false}" = "true" ]; then
+                local _complexity _routing _rt_pipeline _rt_plan_mode
+                _complexity=$(smart_assess_complexity "$RALPH_DIR/kanban.md" "$task_id")
+                _routing=$(smart_get_routing "$_complexity")
+                IFS='|' read -r _rt_pipeline _rt_plan_mode <<< "$_routing"
+                export WIGGUM_PIPELINE="$_rt_pipeline"
+                export WIGGUM_PLAN_MODE="$_rt_plan_mode"
+                log "Smart routing: $task_id -> $_complexity (pipeline=${_rt_pipeline:-default}, plan=$_rt_plan_mode)"
+            fi
+
+            local spawn_rc=0
+            spawn_worker "$task_id" || spawn_rc=$?
+            if [ "$spawn_rc" -eq 2 ]; then
+                # Deferred - worker exists and is resumable, revert kanban to pending
+                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" " " || true
+                export WIGGUM_PIPELINE="$_saved_pipeline"
+                export WIGGUM_PLAN_MODE="$_saved_plan_mode"
+                continue
+            elif [ "$spawn_rc" -ne 0 ]; then
+                log_error "Failed to spawn worker for $task_id"
+                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
+                export WIGGUM_PIPELINE="$_saved_pipeline"
+                export WIGGUM_PLAN_MODE="$_saved_plan_mode"
+                continue
+            fi
+
             export WIGGUM_PIPELINE="$_saved_pipeline"
             export WIGGUM_PLAN_MODE="$_saved_plan_mode"
-            continue
-        elif [ "$spawn_rc" -ne 0 ]; then
-            log_error "Failed to spawn worker for $task_id"
-            update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
-            export WIGGUM_PIPELINE="$_saved_pipeline"
-            export WIGGUM_PLAN_MODE="$_saved_plan_mode"
-            continue
+
+            pool_add "$SPAWNED_WORKER_PID" "main" "$task_id"
+            scheduler_mark_event
+            scheduler_remove_from_aging "$task_id"
+            audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
+            log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
+            ((++pending_main_count))
+        else
+            # --- Resume task launch logic ---
+
+            # Check task is still pending or in-progress
+            local task_status
+            task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$task_id")
+            case "$task_status" in
+                " "|"=") ;;
+                *)
+                    log_debug "Skipping resume of $task_id - task status is '$task_status'"
+                    continue
+                    ;;
+            esac
+
+            # Mark as in-progress if pending
+            if [ "$task_status" = " " ]; then
+                if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
+                    log_error "Failed to mark $task_id as in-progress for resume"
+                    continue
+                fi
+            fi
+
+            log "Initiating resume for $task_id (pipeline at: '$resume_step')"
+            _launch_resume_background "$worker_dir" "$task_id" "$worker_type"
+
+            if [[ "$worker_type" =~ ^(fix|resolve)$ ]]; then
+                ((++pending_priority_count))
+            else
+                ((++pending_main_count))
+            fi
         fi
-
-        export WIGGUM_PIPELINE="$_saved_pipeline"
-        export WIGGUM_PLAN_MODE="$_saved_plan_mode"
-
-        pool_add "$SPAWNED_WORKER_PID" "main" "$task_id"
-        scheduler_mark_event
-        scheduler_remove_from_aging "$task_id"
-        audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
-        log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
-    done
+    done <<< "$SCHED_UNIFIED_QUEUE"
 }
 
 # Decay skip counts (every 180 ticks)

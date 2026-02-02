@@ -38,11 +38,14 @@ declare -g _SCHED_AGING_FACTOR=7
 declare -g _SCHED_SIBLING_WIP_PENALTY=20000
 declare -g _SCHED_PLAN_BONUS=15000
 declare -g _SCHED_DEP_BONUS_PER_TASK=7000
+declare -g _SCHED_RESUME_INITIAL_BONUS=20000
+declare -g _SCHED_RESUME_FAIL_PENALTY=8000
 
 # Scheduler state (updated by scheduler_tick)
 declare -g SCHED_READY_TASKS=""
 declare -g SCHED_BLOCKED_TASKS=""
 declare -g SCHED_PENDING_TASKS=""
+declare -g SCHED_UNIFIED_QUEUE=""
 declare -g SCHED_SCHEDULING_EVENT=false
 
 # Cyclic tasks tracking (task_id -> error type)
@@ -54,12 +57,14 @@ declare -gA _SCHED_SKIP_TASKS=()
 # Initialize the scheduler
 #
 # Args:
-#   ralph_dir            - Ralph directory path
-#   project_dir          - Project directory path
-#   aging_factor         - Aging factor for priority calculation (default: 7)
-#   sibling_wip_penalty  - Penalty when sibling is WIP (default: 20000)
-#   plan_bonus           - Bonus for tasks with plans (default: 15000)
-#   dep_bonus_per_task   - Bonus per blocking task (default: 7000)
+#   ralph_dir              - Ralph directory path
+#   project_dir            - Project directory path
+#   aging_factor           - Aging factor for priority calculation (default: 7)
+#   sibling_wip_penalty    - Penalty when sibling is WIP (default: 20000)
+#   plan_bonus             - Bonus for tasks with plans (default: 15000)
+#   dep_bonus_per_task     - Bonus per blocking task (default: 7000)
+#   resume_initial_bonus   - Initial priority bonus for resume tasks (default: 20000)
+#   resume_fail_penalty    - Priority penalty per failed resume attempt (default: 8000)
 scheduler_init() {
     _SCHED_RALPH_DIR="$1"
     _SCHED_PROJECT_DIR="$2"
@@ -67,6 +72,8 @@ scheduler_init() {
     _SCHED_SIBLING_WIP_PENALTY="${4:-20000}"
     _SCHED_PLAN_BONUS="${5:-15000}"
     _SCHED_DEP_BONUS_PER_TASK="${6:-7000}"
+    _SCHED_RESUME_INITIAL_BONUS="${7:-20000}"
+    _SCHED_RESUME_FAIL_PENALTY="${8:-8000}"
 
     _SCHED_READY_SINCE_FILE="$_SCHED_RALPH_DIR/orchestrator/task-ready-since"
 
@@ -80,6 +87,7 @@ scheduler_init() {
     SCHED_READY_TASKS=""
     SCHED_BLOCKED_TASKS=""
     SCHED_PENDING_TASKS=""
+    SCHED_UNIFIED_QUEUE=""
     SCHED_SCHEDULING_EVENT=false
     _SCHED_CYCLIC_TASKS=()
     _SCHED_SKIP_TASKS=()
@@ -175,6 +183,9 @@ scheduler_tick() {
 
     SCHED_BLOCKED_TASKS=$(get_blocked_tasks "$_SCHED_RALPH_DIR/kanban.md")
     SCHED_PENDING_TASKS=$(get_todo_tasks "$_SCHED_RALPH_DIR/kanban.md")
+
+    # Build unified queue merging new tasks and resume candidates
+    SCHED_UNIFIED_QUEUE=$(get_unified_work_queue)
 
     # Mark scheduling event when task lists change (ensures first-tick display)
     if [ "$SCHED_READY_TASKS" != "$prev_ready" ] || [ "$SCHED_BLOCKED_TASKS" != "$prev_blocked" ]; then
@@ -439,6 +450,8 @@ scheduler_get_ready_since_file() { echo "$_SCHED_READY_SINCE_FILE"; }
 scheduler_get_aging_factor() { echo "$_SCHED_AGING_FACTOR"; }
 scheduler_get_plan_bonus() { echo "$_SCHED_PLAN_BONUS"; }
 scheduler_get_dep_bonus_per_task() { echo "$_SCHED_DEP_BONUS_PER_TASK"; }
+scheduler_get_resume_initial_bonus() { echo "$_SCHED_RESUME_INITIAL_BONUS"; }
+scheduler_get_resume_fail_penalty() { echo "$_SCHED_RESUME_FAIL_PENALTY"; }
 
 # Check if worker hit terminal failure (last pipeline step + FAIL result)
 #
@@ -537,6 +550,142 @@ get_resumable_workers() {
 
         echo "$worker_dir $task_id $current_step $worker_type"
     done
+}
+
+# Build a unified work queue merging new tasks and resume candidates
+#
+# Each line is: effective_pri|work_type|task_id|worker_dir|worker_type|resume_step
+#   work_type: "new" or "resume"
+#   For new tasks: worker_dir, worker_type, resume_step are empty
+#   For resume tasks: all fields populated
+#
+# Sorted by effective_pri ascending (lower = higher priority).
+# Respects WIGGUM_NO_RESUME to exclude resume items.
+#
+# Returns: sorted queue lines on stdout
+get_unified_work_queue() {
+    local kanban="$_SCHED_RALPH_DIR/kanban.md"
+    local no_resume="${WIGGUM_NO_RESUME:-false}"
+
+    # Collect all metadata once for priority lookups
+    local all_metadata
+    all_metadata=$(_get_cached_metadata "$kanban")
+
+    local reverse_graph
+    reverse_graph=$(_build_reverse_dep_graph "$all_metadata")
+
+    local queue=""
+
+    # --- New tasks ---
+    # SCHED_READY_TASKS is already sorted by get_ready_tasks() but we need
+    # the effective priority values to merge with resume tasks.
+    # Re-compute effective priority for each ready task.
+    for task_id in $SCHED_READY_TASKS; do
+        local priority
+        priority=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
+
+        local effective_pri
+        if [ -f "$_SCHED_READY_SINCE_FILE" ]; then
+            local iters_waiting
+            iters_waiting=$(awk -F'|' -v t="$task_id" '$1 == t { print $2 }' "$_SCHED_READY_SINCE_FILE")
+            iters_waiting=${iters_waiting:-0}
+            effective_pri=$(get_effective_priority "$priority" "$iters_waiting" "$_SCHED_AGING_FACTOR")
+        else
+            case "$priority" in
+                CRITICAL) effective_pri=0 ;;
+                HIGH)     effective_pri=10000 ;;
+                MEDIUM)   effective_pri=20000 ;;
+                LOW)      effective_pri=30000 ;;
+                *)        effective_pri=20000 ;;
+            esac
+        fi
+
+        # Apply sibling penalty
+        if [ "$_SCHED_SIBLING_WIP_PENALTY" -gt 0 ]; then
+            local penalty
+            penalty=$(get_sibling_penalty "$kanban" "$task_id" "$all_metadata" "$_SCHED_SIBLING_WIP_PENALTY")
+            effective_pri=$(( effective_pri + penalty ))
+        fi
+
+        # Plan bonus
+        if [ "$_SCHED_PLAN_BONUS" -gt 0 ]; then
+            if task_has_plan "$_SCHED_RALPH_DIR" "$task_id"; then
+                effective_pri=$(( effective_pri - _SCHED_PLAN_BONUS ))
+            fi
+        fi
+
+        # Dependency depth bonus
+        if [ "$_SCHED_DEP_BONUS_PER_TASK" -gt 0 ]; then
+            local dep_depth
+            dep_depth=$(_bfs_count_from_graph "$reverse_graph" "$task_id")
+            effective_pri=$(( effective_pri - dep_depth * _SCHED_DEP_BONUS_PER_TASK ))
+        fi
+
+        [ "$effective_pri" -lt 0 ] && effective_pri=0
+
+        queue+="${effective_pri}|new|${task_id}|||"$'\n'
+    done
+
+    # --- Resume tasks ---
+    if [ "$no_resume" != "true" ]; then
+        local resumable
+        resumable=$(get_resumable_workers "$_SCHED_RALPH_DIR")
+
+        while read -r worker_dir task_id current_step worker_type; do
+            [ -n "$worker_dir" ] || continue
+
+            # Base priority from kanban
+            local priority
+            priority=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
+            local effective_pri
+            case "$priority" in
+                CRITICAL) effective_pri=0 ;;
+                HIGH)     effective_pri=10000 ;;
+                MEDIUM)   effective_pri=20000 ;;
+                LOW)      effective_pri=30000 ;;
+                *)        effective_pri=20000 ;;
+            esac
+
+            # Dependency depth bonus
+            if [ "$_SCHED_DEP_BONUS_PER_TASK" -gt 0 ]; then
+                local dep_depth
+                dep_depth=$(_bfs_count_from_graph "$reverse_graph" "$task_id")
+                effective_pri=$(( effective_pri - dep_depth * _SCHED_DEP_BONUS_PER_TASK ))
+            fi
+
+            # Pipeline progress bonus (up to 5000 for workers close to completion)
+            if [ -f "$worker_dir/pipeline-config.json" ]; then
+                local step_idx step_count
+                step_idx=$(jq -r '.current.step_idx // 0' "$worker_dir/pipeline-config.json" 2>/dev/null)
+                step_count=$(jq -r '.steps | length' "$worker_dir/pipeline-config.json" 2>/dev/null)
+                step_idx="${step_idx:-0}"
+                step_count="${step_count:-1}"
+                if [ "$step_count" -gt 0 ]; then
+                    local progress_bonus=$(( step_idx * 5000 / step_count ))
+                    effective_pri=$(( effective_pri - progress_bonus ))
+                fi
+            fi
+
+            # Resume initial bonus (makes fresh resumes compete well)
+            effective_pri=$(( effective_pri - _SCHED_RESUME_INITIAL_BONUS ))
+
+            # Failure penalty (each failed attempt degrades priority)
+            local attempt_count
+            attempt_count=$(resume_state_attempts "$worker_dir")
+            if [ "$attempt_count" -gt 0 ]; then
+                effective_pri=$(( effective_pri + attempt_count * _SCHED_RESUME_FAIL_PENALTY ))
+            fi
+
+            [ "$effective_pri" -lt 0 ] && effective_pri=0
+
+            queue+="${effective_pri}|resume|${task_id}|${worker_dir}|${worker_type}|${current_step}"$'\n'
+        done <<< "$resumable"
+    fi
+
+    # Sort by effective_pri ascending and output
+    if [ -n "$queue" ]; then
+        echo "$queue" | LC_ALL=C sort -t'|' -k1,1n | sed '/^$/d'
+    fi
 }
 
 # Write scheduler state to JSON file

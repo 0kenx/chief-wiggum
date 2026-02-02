@@ -27,7 +27,7 @@
 #   _handle_resolve_worker_completion() - Resolve worker completion callback
 #   _handle_resolve_worker_timeout()   - Resolve worker timeout callback
 #   _spawn_next_batch_worker()         - Batch queue continuation
-#   _schedule_resume_workers()         - Resume stopped WIP workers
+#   _launch_resume_background()        - Launch resume process in background
 #   _poll_pending_resumes()            - Poll background resume processes
 # =============================================================================
 
@@ -1129,192 +1129,56 @@ _handle_resolve_worker_timeout() {
     handle_resolve_worker_timeout "$worker_dir" "$task_id" "$RESOLVE_WORKER_TIMEOUT"
 }
 
-# Sort resumable workers by priority so dependency-critical workers
-# get resumed before others.
+# Launch a resume process in background (non-blocking)
 #
-# Without sorting, workers are iterated in filesystem (alphabetical) order,
-# which causes starvation: the same early-alphabet workers always fill
-# capacity while workers that unblock pending tasks never get a turn.
-#
-# Sort criteria (lower score = higher priority):
-#   1. Dependency depth bonus: workers blocking more pending tasks score lower
-#   2. Pipeline progress: workers closer to completion score lower
-#   3. Task priority: CRITICAL < HIGH < MEDIUM < LOW
+# Starts wiggum-resume for a worker in background, tracks the PID in
+# _PENDING_RESUMES and persists to disk for cross-process ingestion.
 #
 # Args:
-#   resumable - Output from get_resumable_workers()
-#               (lines of: worker_dir task_id current_step worker_type)
+#   worker_dir  - Worker directory path
+#   task_id     - Task identifier
+#   worker_type - Worker type (main, fix, resolve)
 #
-# Returns: Same format, sorted by priority
-_prioritize_resumable_workers() {
-    local resumable="$1"
-    local kanban="$RALPH_DIR/kanban.md"
-    local dep_bonus="${DEP_BONUS_PER_TASK:-7000}"
+# Side effects:
+#   - Writes to _PENDING_RESUMES associative array
+#   - Appends to $RALPH_DIR/orchestrator/resume-pending disk file
+_launch_resume_background() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local worker_type="$3"
 
-    local all_metadata
-    all_metadata=$(_get_cached_metadata "$kanban")
+    local worker_id
+    worker_id=$(basename "$worker_dir")
 
-    local reverse_graph
-    reverse_graph=$(_build_reverse_dep_graph "$all_metadata")
+    # Run wiggum resume in background, passing through config
+    # --quiet suppresses interactive output
+    # Wrapper writes exit code to .resume-exit-code so the parent process
+    # can retrieve it (the resume PID is not a direct child when this
+    # function runs inside a periodic-service subshell, so wait(2) fails).
+    (
+        cd "$PROJECT_DIR" || exit 1
+        _rc=0
+        "$WIGGUM_HOME/bin/wiggum-resume" "$worker_id" --quiet \
+            --max-iters "$MAX_ITERATIONS" \
+            --max-turns "$MAX_TURNS" \
+            ${WIGGUM_PIPELINE:+--pipeline "$WIGGUM_PIPELINE"} || _rc=$?
+        echo "$_rc" > "$worker_dir/.resume-exit-code"
+        exit "$_rc"
+    ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+    local resume_pid=$!
 
-    while read -r worker_dir task_id current_step worker_type; do
-        [ -n "$worker_dir" ] || continue
+    # Track resume process for non-blocking polling in main loop.
+    # Persist to disk so the parent process can ingest entries even when
+    # this function runs inside a periodic-service subshell (where
+    # in-memory _PENDING_RESUMES updates are lost on exit).
+    _PENDING_RESUMES[$resume_pid]="$worker_dir|$task_id|$worker_type"
+    local _resume_pending="$RALPH_DIR/orchestrator/resume-pending"
+    {
+        flock -x 200
+        echo "$resume_pid|$worker_dir|$task_id|$worker_type" >> "$_resume_pending"
+    } 200>"$_resume_pending.lock"
 
-        # Base priority from kanban
-        local priority effective_pri
-        priority=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
-        case "$priority" in
-            CRITICAL) effective_pri=0 ;;
-            HIGH)     effective_pri=10000 ;;
-            MEDIUM)   effective_pri=20000 ;;
-            LOW)      effective_pri=30000 ;;
-            *)        effective_pri=20000 ;;
-        esac
-
-        # Dependency depth bonus (more tasks blocked = higher priority)
-        local dep_depth
-        dep_depth=$(_bfs_count_from_graph "$reverse_graph" "$task_id")
-        effective_pri=$(( effective_pri - dep_depth * dep_bonus ))
-
-        # Pipeline progress bonus (closer to completion = higher priority)
-        if [ -f "$worker_dir/pipeline-config.json" ]; then
-            local step_idx step_count
-            step_idx=$(jq -r '.current.step_idx // 0' "$worker_dir/pipeline-config.json" 2>/dev/null)
-            step_count=$(jq -r '.steps | length' "$worker_dir/pipeline-config.json" 2>/dev/null)
-            step_idx="${step_idx:-0}"
-            step_count="${step_count:-1}"
-            # Bonus of up to 5000 (0.5 in fixed-point) for pipeline progress
-            if [ "$step_count" -gt 0 ]; then
-                local progress_bonus=$(( step_idx * 5000 / step_count ))
-                effective_pri=$(( effective_pri - progress_bonus ))
-            fi
-        fi
-
-        # Floor at 0
-        [ "$effective_pri" -lt 0 ] && effective_pri=0
-
-        printf '%d|%s %s %s %s\n' "$effective_pri" "$worker_dir" "$task_id" "$current_step" "$worker_type"
-    done <<< "$resumable" | LC_ALL=C sort -t'|' -k1,1n | cut -d'|' -f2-
-}
-
-# Schedule resume of stopped workers
-#
-# Called once at startup to resume any stopped workers before starting new
-# tasks. Delegates to `wiggum resume` which handles the logic of determining
-# whether to use LLM analysis (step completed) or direct resume (interrupted).
-#
-# Skips workers that:
-#   - Are terminal failures (last step + FAIL)
-#   - Are at capacity (MAX_WORKERS)
-#   - Have tasks no longer pending/in-progress
-_schedule_resume_workers() {
-    local resumable
-    resumable=$(get_resumable_workers "$RALPH_DIR")
-    [ -n "$resumable" ] || return 0
-
-    # Sort by priority so dependency-critical workers get slots first
-    resumable=$(_prioritize_resumable_workers "$resumable")
-
-    log "Checking for stopped workers to resume..."
-
-    local pending_main_count=0
-    local pending_priority_count=0
-
-    while read -r worker_dir task_id current_step worker_type; do
-        [ -n "$worker_dir" ] || continue
-
-        # Skip workers not applicable to the current run mode
-        if [[ "$WIGGUM_RUN_MODE" != "default" && "$WIGGUM_RUN_MODE" != "resume-only" && "$worker_type" != "fix" && "$worker_type" != "resolve" ]]; then
-            log_debug "Skipping resume of main worker $task_id ($WIGGUM_RUN_MODE mode)"
-            continue
-        fi
-        if [[ "$WIGGUM_RUN_MODE" == "merge-only" && "$worker_type" == "fix" ]]; then
-            log_debug "Skipping resume of fix worker $task_id (merge-only mode)"
-            continue
-        fi
-
-        # Check capacity based on worker type
-        if [[ "$worker_type" == "fix" || "$worker_type" == "resolve" ]]; then
-            local fix_count resolve_count total_priority
-            fix_count=$(pool_count "fix")
-            resolve_count=$(pool_count "resolve")
-            total_priority=$((fix_count + resolve_count + pending_priority_count))
-            if [ "$total_priority" -ge "$FIX_WORKER_LIMIT" ]; then
-                log "Priority workers at capacity ($total_priority/$FIX_WORKER_LIMIT) - deferring resume of $task_id"
-                continue
-            fi
-        else
-            local main_count
-            main_count=$(pool_count "main")
-            if [ "$((main_count + pending_main_count))" -ge "$MAX_WORKERS" ]; then
-                log "At capacity ($((main_count + pending_main_count))/$MAX_WORKERS) - deferring remaining resumes"
-                break
-            fi
-        fi
-
-        # Check task is still pending or in-progress
-        local task_status
-        task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$task_id")
-        case "$task_status" in
-            " "|"=") ;;
-            *)
-                log_debug "Skipping resume of $task_id - task status is '$task_status'"
-                continue
-                ;;
-        esac
-
-        # Mark as in-progress if pending
-        if [ "$task_status" = " " ]; then
-            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
-                log_error "Failed to mark $task_id as in-progress"
-                continue
-            fi
-        fi
-
-        # Resume the worker via wiggum resume (handles interrupted vs completed logic)
-        # Note: resume-decide may determine a different starting step based on analysis
-        log "Initiating resume for $task_id (pipeline at: '$current_step')"
-        local worker_id
-        worker_id=$(basename "$worker_dir")
-
-        # Run wiggum resume in background, passing through config
-        # --quiet suppresses interactive output
-        # Wrapper writes exit code to .resume-exit-code so the parent process
-        # can retrieve it (the resume PID is not a direct child when this
-        # function runs inside a periodic-service subshell, so wait(2) fails).
-        (
-            cd "$PROJECT_DIR" || exit 1
-            _rc=0
-            "$WIGGUM_HOME/bin/wiggum-resume" "$worker_id" --quiet \
-                --max-iters "$MAX_ITERATIONS" \
-                --max-turns "$MAX_TURNS" \
-                ${WIGGUM_PIPELINE:+--pipeline "$WIGGUM_PIPELINE"} || _rc=$?
-            echo "$_rc" > "$worker_dir/.resume-exit-code"
-            exit "$_rc"
-        ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
-        local resume_pid=$!
-
-        # Track resume process for non-blocking polling in main loop.
-        # Resume runs LLM analysis (resume-decide) before launching the worker
-        # subprocess, so we cannot wait synchronously — it blocks 30+ seconds
-        # per worker and delays _main_loop startup.
-        #
-        # Persist to disk so the parent process can ingest entries even when
-        # this function runs inside a periodic-service subshell (where
-        # in-memory _PENDING_RESUMES updates are lost on exit).
-        _PENDING_RESUMES[$resume_pid]="$worker_dir|$task_id|$worker_type"
-        local _resume_pending="$RALPH_DIR/orchestrator/resume-pending"
-        {
-            flock -x 200
-            echo "$resume_pid|$worker_dir|$task_id|$worker_type" >> "$_resume_pending"
-        } 200>"$_resume_pending.lock"
-        if [[ "$worker_type" == "fix" || "$worker_type" == "resolve" ]]; then
-            ((++pending_priority_count))
-        else
-            ((++pending_main_count))
-        fi
-        log "Resume process launched for $task_id (resume PID: $resume_pid)"
-    done <<< "$resumable"
+    log "Resume process launched for $task_id (resume PID: $resume_pid)"
 }
 
 # Poll background resume processes for completion
@@ -1427,10 +1291,14 @@ _poll_pending_resumes() {
                         "exit_code=$resume_exit reason=max_attempts_exceeded"
                     scheduler_mark_event
                 else
-                    resume_state_set_cooldown "$worker_dir" 120
-                    log_error "Resume failed for $task_id (exit code: $resume_exit) — will retry after cooldown"
+                    # Short cooldown to prevent same-tick retry; priority
+                    # degradation is automatic via attempt_count in
+                    # get_unified_work_queue().
+                    local _min_retry="${RESUME_MIN_RETRY_INTERVAL:-30}"
+                    resume_state_set_cooldown "$worker_dir" "$_min_retry"
+                    log_error "Resume failed for $task_id (exit code: $resume_exit) — will retry after ${_min_retry}s cooldown"
                     activity_log "worker.resume_error" "$(basename "$worker_dir")" "$task_id" \
-                        "exit_code=$resume_exit cooldown=120"
+                        "exit_code=$resume_exit cooldown=$_min_retry"
                 fi
                 ;;
         esac

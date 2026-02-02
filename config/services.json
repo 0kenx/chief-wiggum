@@ -80,21 +80,6 @@
       }
     },
     {
-      "id": "resume-workers",
-      "description": "Resume stopped WIP workers periodically",
-      "phase": "periodic",
-      "order": 65,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_resume_workers"
-      }
-    },
-    {
       "id": "memory-load",
       "description": "Initialize memory directory structure on startup",
       "phase": "startup",
@@ -425,16 +410,13 @@
     },
     {
       "id": "task-spawner",
-      "description": "Spawn workers for ready tasks",
+      "description": "Spawn workers for ready tasks and resume candidates",
       "phase": "post",
       "order": 45,
       "schedule": { "type": "tick" },
       "execution": {
         "type": "function",
         "function": "svc_orch_task_spawner"
-      },
-      "condition": {
-        "env_equals": { "WIGGUM_RUN_MODE": "default" }
       }
     },
     {

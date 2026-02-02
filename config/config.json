@@ -70,7 +70,10 @@
   },
   "resume": {
     "max_attempts": 5,
-    "cooldown_seconds": 3600
+    "cooldown_seconds": 3600,
+    "initial_bonus": 20000,
+    "fail_penalty": 8000,
+    "min_retry_interval": 30
   },
   "review": {
     "approved_user_ids": [123998984,124862625,124581466,175728472],

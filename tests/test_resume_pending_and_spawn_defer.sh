@@ -452,10 +452,10 @@ test_poll_error_exit_sets_cooldown() {
     [[ "$inc_call" == *"|ERROR|"* ]] && has_error="true"
     assert_equals "true" "$has_error" "Should increment with ERROR decision"
 
-    # Verify cooldown was set to 120s
+    # Verify cooldown was set (uses RESUME_MIN_RETRY_INTERVAL, default 30s)
     local has_cooldown="false"
-    [[ "$_RESUME_COOLDOWN_SET" == *"|120" ]] && has_cooldown="true"
-    assert_equals "true" "$has_cooldown" "Should set 120s cooldown"
+    [[ "$_RESUME_COOLDOWN_SET" == *"|30" ]] && has_cooldown="true"
+    assert_equals "true" "$has_cooldown" "Should set 30s cooldown (RESUME_MIN_RETRY_INTERVAL default)"
 
     # Verify resume_error activity was logged
     local found=false
