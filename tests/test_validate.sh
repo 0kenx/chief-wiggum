@@ -397,6 +397,123 @@ test_cleanup_sections_reports_all_collapsed() {
 }
 
 # =============================================================================
+# Cleanup with ## Level Headings Tests
+# =============================================================================
+
+test_cleanup_h2_sections_collapses_across_sections() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cat > "$tmp_dir/kanban.md" << 'EOF'
+# Kanban Board
+
+## TASKS
+
+- [P] **[TASK-001]** Pending approval task
+  - Description: Awaiting review
+  - Priority: HIGH
+  - Dependencies: none
+
+## Feature Work
+
+- [x] **[TASK-002]** Completed feature
+  - Description: Feature is done
+  - Priority: HIGH
+  - Dependencies: none
+
+- [ ] **[TASK-003]** Pending feature
+  - Description: Not started
+  - Priority: MEDIUM
+  - Dependencies: TASK-002
+
+## Bug Fixes
+
+- [x] **[TASK-004]** Fixed bug
+  - Description: Bug resolved
+  - Priority: CRITICAL
+  - Dependencies: none
+
+- [x] **[TASK-005]** Another fixed bug
+  - Description: Also resolved
+  - Priority: HIGH
+  - Dependencies: none
+EOF
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+    local exit_code=$?
+
+    assert_equals "0" "$exit_code" "Cleanup should exit 0 with ## sections"
+    # Completed blocks should be gone
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-002]**" "TASK-002 block should be collapsed"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-004]**" "TASK-004 block should be collapsed"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-005]**" "TASK-005 block should be collapsed"
+    # Section headings preserved
+    assert_file_contains "$tmp_dir/kanban.md" "## Feature Work" "Feature Work heading should be preserved"
+    assert_file_contains "$tmp_dir/kanban.md" "## Bug Fixes" "Bug Fixes heading should be preserved"
+    # Per-section done comments
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-002 -->" "Feature section should have done comment"
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-004, TASK-005 -->" "Bug Fixes section should have done comment"
+    # Non-completed tasks remain
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-001]**" "TASK-001 (pending approval) should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-003]**" "TASK-003 (pending) should remain"
+    # Report collapsed count
+    assert_output_contains "$output" "Collapsed 3 completed task(s)" "Should report 3 collapsed tasks"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_mixed_h2_h3_sections() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cat > "$tmp_dir/kanban.md" << 'EOF'
+# Kanban Board
+
+## TASKS
+
+- [ ] **[TASK-001]** Top-level task
+  - Description: Before any sub-section
+  - Priority: HIGH
+  - Dependencies: none
+
+## Spec Compliance
+
+### Critical
+
+- [x] **[TASK-002]** Critical spec task
+  - Description: Spec compliance work
+  - Priority: CRITICAL
+  - Dependencies: none
+
+### Medium
+
+- [x] **[TASK-003]** Medium spec task
+  - Description: Less urgent spec work
+  - Priority: MEDIUM
+  - Dependencies: TASK-002
+
+- [ ] **[TASK-004]** Pending spec task
+  - Description: Not started
+  - Priority: MEDIUM
+  - Dependencies: TASK-002
+EOF
+
+    "$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" >/dev/null 2>&1
+
+    # ## and ### headings both preserved
+    assert_file_contains "$tmp_dir/kanban.md" "## Spec Compliance" "## heading should be preserved"
+    assert_file_contains "$tmp_dir/kanban.md" "### Critical" "### heading should be preserved"
+    assert_file_contains "$tmp_dir/kanban.md" "### Medium" "### heading should be preserved"
+    # Tasks collapsed per section
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-002]**" "TASK-002 should be collapsed"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-003]**" "TASK-003 should be collapsed"
+    # Non-completed preserved
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-001]**" "TASK-001 (pending) should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-004]**" "TASK-004 (pending) should remain"
+
+    rm -rf "$tmp_dir"
+}
+
+# =============================================================================
 # Run All Tests
 # =============================================================================
 
@@ -426,6 +543,8 @@ run_test test_cleanup_sections_collapses_per_section
 run_test test_cleanup_sections_all_completed_in_section
 run_test test_cleanup_sections_no_headings_still_works
 run_test test_cleanup_sections_reports_all_collapsed
+run_test test_cleanup_h2_sections_collapses_across_sections
+run_test test_cleanup_mixed_h2_h3_sections
 
 print_test_summary
 exit_with_test_result
