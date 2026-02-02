@@ -187,34 +187,43 @@ test_scheduler_skip_count_starts_at_zero() {
 
 test_scheduler_increment_skip() {
     scheduler_increment_skip "TASK-001"
-    scheduler_increment_skip "TASK-001"
 
     local count
     count=$(scheduler_get_skip_count "TASK-001")
-    assert_equals "2" "$count" "Skip count should be 2"
+    assert_equals "1" "$count" "First skip should set count to 1"
+
+    scheduler_increment_skip "TASK-001"
+    count=$(scheduler_get_skip_count "TASK-001")
+    assert_equals "2" "$count" "Second skip should double to 2"
 }
 
 # =============================================================================
-# scheduler_decay_skip_counts() Tests
+# Skip cooldown self-decrement Tests
 # =============================================================================
 
-test_scheduler_decay_skip_counts() {
+test_scheduler_skip_cooldown_decrements() {
+    # Set skip count to 2 via two increments (1 -> 2)
     scheduler_increment_skip "TASK-001"
     scheduler_increment_skip "TASK-001"
-    scheduler_decay_skip_counts
+
+    # scheduler_can_spawn_task should skip and decrement
+    SCHED_SKIP_REASON=""
+    scheduler_can_spawn_task "TASK-001" 10 || true
 
     local count
     count=$(scheduler_get_skip_count "TASK-001")
-    assert_equals "1" "$count" "Skip count should be 1 after decay"
+    assert_equals "1" "$count" "Skip count should decrement to 1 after check"
 }
 
-test_scheduler_decay_removes_zero_counts() {
+test_scheduler_skip_cooldown_removes_at_zero() {
     scheduler_increment_skip "TASK-001"
-    scheduler_decay_skip_counts
+
+    # First check: decrements 1 -> 0, removes entry
+    scheduler_can_spawn_task "TASK-001" 10 || true
 
     local count
     count=$(scheduler_get_skip_count "TASK-001")
-    assert_equals "0" "$count" "Skip count should be 0 and removed"
+    assert_equals "0" "$count" "Skip count should be 0 after decrementing from 1"
 }
 
 # =============================================================================
@@ -435,8 +444,8 @@ run_test test_scheduler_detect_cycles_self_dependency
 run_test test_scheduler_mark_event
 run_test test_scheduler_skip_count_starts_at_zero
 run_test test_scheduler_increment_skip
-run_test test_scheduler_decay_skip_counts
-run_test test_scheduler_decay_removes_zero_counts
+run_test test_scheduler_skip_cooldown_decrements
+run_test test_scheduler_skip_cooldown_removes_at_zero
 run_test test_scheduler_is_complete_false_with_pending
 run_test test_scheduler_is_complete_false_with_workers
 run_test test_scheduler_is_complete_true

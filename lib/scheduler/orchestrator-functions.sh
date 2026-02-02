@@ -531,6 +531,12 @@ orch_spawn_ready_tasks() {
         return 0
     fi
 
+    # Pre-flight: pull latest main once per cycle
+    if ! _orch_pre_worker_checks; then
+        log_error "Pre-worker git checks failed - skipping all spawns this cycle"
+        return 0
+    fi
+
     # Spawn workers for ready tasks
     for task_id in $SCHED_READY_TASKS; do
         # Check if we can spawn this task
@@ -539,12 +545,6 @@ orch_spawn_ready_tasks() {
                 at_capacity) break ;;
                 file_conflict|cyclic_dependency|skip_count) continue ;;
             esac
-            continue
-        fi
-
-        # Run pre-worker checks
-        if ! _orch_pre_worker_checks; then
-            log_error "Pre-worker checks failed for $task_id - skipping"
             continue
         fi
 
@@ -585,15 +585,35 @@ _orch_pre_worker_checks() {
     local pull_output
     local max_attempts=3
     local delays=(2 4)
+    local dirty_reset_done=false
 
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
         if pull_output=$(git pull --ff-only origin main 2>&1); then
             break
         fi
 
+        # Immediately fail on merge conflicts (requires manual resolution)
         if echo "$pull_output" | grep -qi "CONFLICT"; then
             log_error "Git pull conflict detected: $pull_output"
             return 1
+        fi
+
+        # Dirty/untracked working directory - reset the blocking files and retry once
+        if [ "$dirty_reset_done" = false ] && echo "$pull_output" | grep -qiE "(local changes|untracked.*files).*overwritten"; then
+            local dirty_files
+            dirty_files=$(echo "$pull_output" | sed -n '/would be overwritten/,/Please\|Aborting/{//d; s/^[[:space:]]*//; /^$/d; p}')
+            if [ -n "$dirty_files" ]; then
+                log_warn "Resetting files blocking pull: $dirty_files"
+                echo "$dirty_files" | xargs git checkout -- 2>/dev/null || true
+                # Also remove untracked files that block merge
+                echo "$dirty_files" | while read -r f; do
+                    [ -f "$f" ] && rm -f "$f"
+                done 2>/dev/null || true
+                dirty_reset_done=true
+                # Retry immediately (don't burn an attempt on this)
+                attempt=$((attempt - 1))
+                continue
+            fi
         fi
 
         if [ $attempt -eq $max_attempts ]; then
@@ -697,18 +717,6 @@ orch_usage_tracker_write_shared() {
     [ -n "$ralph_dir" ] || return 1
 
     usage_tracker_write_shared "$ralph_dir" > /dev/null 2>&1 || true
-}
-
-# Wrapper for scheduler_decay_skip_counts
-#
-# Note: This function operates on in-memory state, so it only works
-# when called in the same process as the scheduler. For the service
-# scheduler, this is a no-op since each service runs in a subshell.
-orch_decay_skip_counts() {
-    # Skip counts are in-memory state - can only decay in main process
-    # This is called in a subshell by the service runner, so it's a no-op
-    # The main orchestrator should call scheduler_decay_skip_counts directly
-    :
 }
 
 # Wrapper for create_orphan_pr_workspaces
@@ -967,17 +975,36 @@ pre_worker_checks() {
     local pull_output
     local max_attempts=3
     local delays=(2 4)
+    local dirty_reset_done=false
 
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
         if pull_output=$(git pull --ff-only origin main 2>&1); then
             break
         fi
 
-        # Immediately fail on conflicts (non-transient)
+        # Immediately fail on merge conflicts (requires manual resolution)
         if echo "$pull_output" | grep -qi "CONFLICT"; then
             log_error "Git pull conflict detected: $pull_output"
             log_error "Cannot spawn new workers with unresolved conflicts"
             return 1
+        fi
+
+        # Dirty/untracked working directory - reset the blocking files and retry once
+        if [ "$dirty_reset_done" = false ] && echo "$pull_output" | grep -qiE "(local changes|untracked.*files).*overwritten"; then
+            local dirty_files
+            dirty_files=$(echo "$pull_output" | sed -n '/would be overwritten/,/Please\|Aborting/{//d; s/^[[:space:]]*//; /^$/d; p}')
+            if [ -n "$dirty_files" ]; then
+                log_warn "Resetting files blocking pull: $dirty_files"
+                echo "$dirty_files" | xargs git checkout -- 2>/dev/null || true
+                # Also remove untracked files that block merge
+                echo "$dirty_files" | while read -r f; do
+                    [ -f "$f" ] && rm -f "$f"
+                done 2>/dev/null || true
+                dirty_reset_done=true
+                # Retry immediately (don't burn an attempt on this)
+                attempt=$((attempt - 1))
+                continue
+            fi
         fi
 
         # On last attempt, give up

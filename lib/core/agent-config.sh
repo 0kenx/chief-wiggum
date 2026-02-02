@@ -128,9 +128,9 @@ load_result_mappings() {
     local config_file="$WIGGUM_HOME/config/agents.json"
 
     # Initialize with hardcoded defaults in case config is missing
-    _RESULT_STATUS=([PASS]="success" [FAIL]="failure" [FIX]="partial" [SKIP]="success")
-    _RESULT_EXIT_CODE=([PASS]=0 [FAIL]=10 [FIX]=0 [SKIP]=0)
-    _RESULT_DEFAULT_JUMP=([PASS]="next" [FAIL]="abort" [FIX]="prev" [SKIP]="next")
+    _RESULT_STATUS=([PASS]="success" [FAIL]="failure" [FIX]="partial" [SKIP]="success" [UNKNOWN]="failure")
+    _RESULT_EXIT_CODE=([PASS]=0 [FAIL]=10 [FIX]=0 [SKIP]=0 [UNKNOWN]=1)
+    _RESULT_DEFAULT_JUMP=([PASS]="next" [FAIL]="abort" [FIX]="prev" [SKIP]="next" [UNKNOWN]="abort")
 
     if [ -f "$config_file" ]; then
         # Helper function to load mappings from a JSON object

@@ -242,6 +242,9 @@ run_ralph_loop() {
     local supervisor_feedback=""
     _ralph_loop_completed_normally=false
     local loop_stop_reason="completed"
+    local consecutive_fast_fails=0
+    local max_consecutive_fast_fails="${WIGGUM_MAX_FAST_FAILS:-3}"
+    local fast_fail_threshold_secs="${WIGGUM_FAST_FAIL_THRESHOLD:-5}"
 
     # Check if backend supports sessions
     local _has_sessions=false
@@ -293,6 +296,10 @@ run_ralph_loop() {
         log_error "Cannot access workspace: $workspace"
         return 1
     }
+
+    # Ensure base output directories exist (fix workers may skip agent_create_directories)
+    mkdir -p "$output_dir/logs"
+    mkdir -p "$output_dir/summaries"
 
     # Create run-namespaced subdirectories
     mkdir -p "$output_dir/logs/$run_id"
@@ -381,12 +388,17 @@ run_ralph_loop() {
         local -a work_args=()
         runtime_backend_build_exec_args work_args "$workspace" "$system_prompt" "$user_prompt" "$log_file" "$max_turns" "$session_id"
 
+        local work_start_epoch
+        work_start_epoch=$(epoch_now)
+
         local exit_code=0
         runtime_exec_with_retry "${work_args[@]}" >> "$log_file" 2>&1 || exit_code=$?
         log "Work phase completed (exit code: $exit_code, session: $session_id)"
 
+        local work_duration=$(( $(epoch_now) - work_start_epoch ))
+
         # Log work phase completion
-        echo "[$(iso_now)] INFO: WORK_PHASE_COMPLETE iteration=$iteration exit_code=$exit_code" >> "$output_dir/worker.log" 2>/dev/null || true
+        echo "[$(iso_now)] INFO: WORK_PHASE_COMPLETE iteration=$iteration exit_code=$exit_code duration_sec=$work_duration" >> "$output_dir/worker.log" 2>/dev/null || true
 
         # Create checkpoint after work phase
         local checkpoint_status="in_progress"
@@ -413,6 +425,21 @@ run_ralph_loop() {
             log "Shutdown requested during work phase - exiting loop"
             loop_stop_reason="shutdown"
             break
+        fi
+
+        # Fast-fail detection: if iteration completed in under threshold with non-zero
+        # exit, the backend is likely broken (expired session, auth issue, bad workspace).
+        # Burning remaining iterations wastes API calls and produces no useful output.
+        if [ $exit_code -ne 0 ] && [ "$work_duration" -lt "$fast_fail_threshold_secs" ]; then
+            ((++consecutive_fast_fails))
+            if [ "$consecutive_fast_fails" -ge "$max_consecutive_fast_fails" ]; then
+                log_error "Fast-fail: $consecutive_fast_fails consecutive iterations failed in <${fast_fail_threshold_secs}s — backend is not functional"
+                loop_stop_reason="fast_fail"
+                break
+            fi
+            log_warn "Fast-fail: iteration $iteration failed in ${work_duration}s ($consecutive_fast_fails/$max_consecutive_fast_fails before abort)"
+        else
+            consecutive_fast_fails=0
         fi
 
         # PHASE 2: Generate summary for context continuity
@@ -657,6 +684,15 @@ ${summary_prompt}"
     local end_time
     end_time=$(epoch_now)
     local duration=$((end_time - start_time))
+
+    if [ "$loop_stop_reason" = "fast_fail" ]; then
+        echo "[$(iso_now)] ERROR: LOOP_FAST_FAIL end_time=$end_time duration_sec=$duration iterations=$((iteration + 1)) consecutive_failures=$consecutive_fast_fails" >> "$output_dir/worker.log" 2>/dev/null || true
+        export RALPH_LOOP_STOP_REASON="fast_fail"
+        export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+        _ralph_loop_completed_normally=true
+        trap - EXIT
+        return 1
+    fi
 
     if [ $iteration -ge "$max_iterations" ]; then
         log_error "Ralph loop reached max iterations ($max_iterations) without completing"

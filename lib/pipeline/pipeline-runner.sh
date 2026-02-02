@@ -26,6 +26,7 @@ source "$WIGGUM_HOME/lib/core/platform.sh"
 
 source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
+source "$WIGGUM_HOME/lib/core/agent-stream.sh"
 
 # =============================================================================
 # RESULT CACHING (Performance Optimization)
@@ -80,6 +81,81 @@ _clear_result_cache() {
 }
 
 # =============================================================================
+# PIPELINE-LEVEL BACKUP RESULT EXTRACTION
+# =============================================================================
+# When a step returns UNKNOWN, attempt to recover the result by resuming the
+# session and explicitly asking for the result tag. This generalizes the
+# backup mechanism from agent-stream.sh/_backup_result_extraction so that ALL
+# pipeline steps benefit, regardless of agent type or completion_check mode.
+
+# Attempt backup session resume to recover an UNKNOWN result
+#
+# Args:
+#   worker_dir - Worker directory path
+#   step_id    - Pipeline step ID
+#   step_agent - Agent type (for looking up valid results)
+#
+# Returns: Recovered gate_result or "UNKNOWN"
+_pipeline_backup_result_extraction() {
+    local worker_dir="$1"
+    local step_id="$2"
+    local step_agent="$3"
+
+    local backup_enabled="${WIGGUM_RESULT_BACKUP_ENABLED:-true}"
+    if [ "$backup_enabled" != "true" ]; then
+        echo "UNKNOWN"
+        return 0
+    fi
+
+    # Get session_id from the result file
+    local result_file session_id
+    result_file=$(agent_find_latest_result "$worker_dir" "$step_id")
+    if [ -z "$result_file" ] || [ ! -f "$result_file" ]; then
+        echo "UNKNOWN"
+        return 0
+    fi
+    session_id=$(jq -r '.outputs.session_id // ""' "$result_file" 2>/dev/null)
+
+    # Fallback: try RALPH_LOOP_LAST_SESSION_ID if result file has no session
+    if [ -z "$session_id" ]; then
+        session_id="${RALPH_LOOP_LAST_SESSION_ID:-}"
+    fi
+
+    if [ -z "$session_id" ]; then
+        log_debug "Pipeline backup: no session_id for step '$step_id' — cannot resume"
+        echo "UNKNOWN"
+        return 0
+    fi
+
+    # Build valid values from result_mappings keys (excluding UNKNOWN itself)
+    local valid_values=""
+    local config_file="$WIGGUM_HOME/config/agents.json"
+    if [ -f "$config_file" ]; then
+        valid_values=$(jq -r '
+            [.defaults.result_mappings // {} | keys[]] +
+            [.agents["'"$step_agent"'"].result_mappings // {} | keys[]]
+            | unique | map(select(. != "UNKNOWN")) | join("|")
+        ' "$config_file" 2>/dev/null)
+    fi
+    valid_values="${valid_values:-PASS|FAIL|FIX|SKIP}"
+
+    log "Pipeline backup: attempting session resume for step '$step_id' (session: ${session_id:0:8}...)"
+
+    local recovered
+    recovered=$(_backup_result_extraction "$session_id" "$valid_values" "$worker_dir" "$step_id")
+
+    if [ -n "$recovered" ] && [ "$recovered" != "UNKNOWN" ]; then
+        log "Pipeline backup: recovered result '$recovered' for step '$step_id'"
+        # Rewrite result file with recovered value
+        agent_write_result "$worker_dir" "$recovered"
+        echo "$recovered"
+    else
+        log_warn "Pipeline backup: session resume failed for step '$step_id' — result remains UNKNOWN"
+        echo "UNKNOWN"
+    fi
+}
+
+# =============================================================================
 # PARENT/NEXT CONTEXT PROPAGATION
 # =============================================================================
 
@@ -113,6 +189,9 @@ _export_step_context() {
     step_count=$(pipeline_step_count)
 
     # Determine parent step (previous step in pipeline, if any)
+    # Search backward from idx-1 to find a step with a result file containing
+    # a session_id. This handles resumed pipelines where the immediate parent
+    # may not have been executed in this run.
     if [ "$idx" -gt 0 ]; then
         local parent_idx=$((idx - 1))
         local parent_step_id
@@ -130,6 +209,28 @@ _export_step_context() {
             parent_session_id=$(jq -r '.outputs.session_id // ""' "$parent_result_file" 2>/dev/null)
             parent_result=$(jq -r '.outputs.gate_result // ""' "$parent_result_file" 2>/dev/null)
             parent_report=$(jq -r '.outputs.report_file // ""' "$parent_result_file" 2>/dev/null)
+
+            # If immediate parent has no session_id (e.g., resumed pipeline skipped it),
+            # search backward through earlier steps for one with a session_id
+            if [ -z "$parent_session_id" ]; then
+                local search_idx=$((parent_idx - 1))
+                while [ "$search_idx" -ge 0 ]; do
+                    local search_step_id
+                    search_step_id=$(pipeline_get "$search_idx" ".id")
+                    local search_result_file
+                    search_result_file=$(agent_find_latest_result "$worker_dir" "$search_step_id")
+                    if [ -n "$search_result_file" ] && [ -f "$search_result_file" ]; then
+                        local search_session_id
+                        search_session_id=$(jq -r '.outputs.session_id // ""' "$search_result_file" 2>/dev/null)
+                        if [ -n "$search_session_id" ]; then
+                            parent_session_id="$search_session_id"
+                            log_debug "Inherited session_id from step '$search_step_id' (parent '$parent_step_id' had none)"
+                            break
+                        fi
+                    fi
+                    ((search_idx--))
+                done
+            fi
 
             [ -n "$parent_session_id" ] && export WIGGUM_PARENT_SESSION_ID="$parent_session_id"
             [ -n "$parent_result" ] && export WIGGUM_PARENT_RESULT="$parent_result"
@@ -592,8 +693,11 @@ _pipeline_run_step() {
     _run_step_hooks "post" "$idx" "$worker_dir" "$project_dir" "$workspace"
 
     # Commit changes if configured (and not readonly)
+    local commit_failed=false
     if [ "$commit_after" = "true" ] && [ "$step_readonly" != "true" ]; then
-        _commit_subagent_changes "$workspace" "$step_agent"
+        if ! _commit_subagent_changes "$workspace" "$step_agent"; then
+            commit_failed=true
+        fi
     fi
 
     _phase_end "$step_id"
@@ -601,6 +705,24 @@ _pipeline_run_step() {
     # Read result and populate cache for subsequent calls
     local gate_result
     gate_result=$(agent_read_step_result "$worker_dir" "$step_id")
+
+    # Override gate_result when commit failed due to conflict markers.
+    # The agent may report PASS but the work is uncommittable — FIX signals
+    # the pipeline to jump back and resolve the issue.
+    if [ "$commit_failed" = true ] && [ "$gate_result" = "PASS" ]; then
+        log_warn "Overriding gate_result PASS -> FIX: commit failed (likely conflict markers)"
+        gate_result="FIX"
+        # Rewrite the result file so downstream reads see FIX
+        agent_write_result "$worker_dir" "$gate_result"
+    fi
+
+    # Pipeline-level backup extraction: when result is UNKNOWN, resume the
+    # session and ask for the result tag. This catches cases where agent-level
+    # extraction failed (status_file agents, empty logs, truncated output).
+    if [ "$gate_result" = "UNKNOWN" ]; then
+        gate_result=$(_pipeline_backup_result_extraction "$worker_dir" "$step_id" "$step_agent")
+    fi
+
     _PIPELINE_LAST_STEP_ID="$step_id"
     _PIPELINE_LAST_GATE_RESULT="$gate_result"
 

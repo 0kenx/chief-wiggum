@@ -266,10 +266,11 @@
     "supervisor_interval": 2,
     "max_restarts": 2,
     "result_mappings": {
-      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-      "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      "PASS":    { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "FAIL":    { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+      "FIX":     { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+      "SKIP":    { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "UNKNOWN": { "status": "failure", "exit_code": 1, "default_jump": "abort" }
     }
   }
 }

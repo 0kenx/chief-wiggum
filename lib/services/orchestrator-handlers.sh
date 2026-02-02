@@ -337,6 +337,12 @@ svc_orch_task_spawner() {
     local pending_main_count=0
     local pending_priority_count=0
 
+    # Pre-flight: pull latest main once per cycle
+    if ! pre_worker_checks; then
+        log_error "Pre-worker git checks failed - skipping all spawns this cycle"
+        return 0
+    fi
+
     while IFS='|' read -r _pri work_type task_id worker_dir worker_type resume_step; do
         [ -n "$task_id" ] || continue
 
@@ -399,11 +405,6 @@ svc_orch_task_spawner() {
                         ;;
                     *) ;;
                 esac
-                continue
-            fi
-
-            if ! pre_worker_checks; then
-                log_error "Pre-worker checks failed for $task_id - skipping this task"
                 continue
             fi
 
@@ -499,15 +500,6 @@ svc_orch_task_spawner() {
             fi
         fi
     done <<< "$SCHED_UNIFIED_QUEUE"
-}
-
-# Decay skip counts (every 180 ticks)
-svc_orch_skip_decay() {
-    # Use internal counter for tick-based interval
-    _SCHED_SKIP_DECAY_COUNTER=$(( ${_SCHED_SKIP_DECAY_COUNTER:-0} + 1 ))
-    if (( _SCHED_SKIP_DECAY_COUNTER % 180 == 0 )); then
-        scheduler_decay_skip_counts
-    fi
 }
 
 # Detect orphan workers (every 60 ticks)

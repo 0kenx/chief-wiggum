@@ -222,8 +222,13 @@ scheduler_can_spawn_task() {
         return 1
     fi
 
-    # Skip tasks that have recently failed kanban updates
+    # Skip tasks with active cooldown (count acts as cycles-to-skip)
     if [ -n "${_SCHED_SKIP_TASKS[$task_id]+x}" ] && [ "${_SCHED_SKIP_TASKS[$task_id]}" -gt 0 ]; then
+        # Decrement cooldown each check
+        _SCHED_SKIP_TASKS[$task_id]=$(( ${_SCHED_SKIP_TASKS[$task_id]} - 1 ))
+        if [ "${_SCHED_SKIP_TASKS[$task_id]}" -le 0 ]; then
+            unset "_SCHED_SKIP_TASKS[$task_id]"
+        fi
         SCHED_SKIP_REASON="skip_count"
         return 1
     fi
@@ -253,7 +258,11 @@ scheduler_can_spawn_task() {
 #   task_id - Task identifier
 scheduler_increment_skip() {
     local task_id="$1"
-    _SCHED_SKIP_TASKS[$task_id]=$(( ${_SCHED_SKIP_TASKS[$task_id]:-0} + 1 ))
+    local current=${_SCHED_SKIP_TASKS[$task_id]:-0}
+    # Exponential backoff: 1, 2, 4, 8, 16, capped at 30 cycles
+    local next=$(( current < 1 ? 1 : current * 2 ))
+    (( next > 30 )) && next=30
+    _SCHED_SKIP_TASKS[$task_id]=$next
 }
 
 # Get skip count for a task
@@ -265,16 +274,6 @@ scheduler_increment_skip() {
 scheduler_get_skip_count() {
     local task_id="$1"
     echo "${_SCHED_SKIP_TASKS[$task_id]:-0}"
-}
-
-# Decay skip counts (called periodically to give tasks another chance)
-scheduler_decay_skip_counts() {
-    for skip_id in "${!_SCHED_SKIP_TASKS[@]}"; do
-        _SCHED_SKIP_TASKS[$skip_id]=$(( ${_SCHED_SKIP_TASKS[$skip_id]} - 1 ))
-        if [ "${_SCHED_SKIP_TASKS[$skip_id]}" -le 0 ]; then
-            unset "_SCHED_SKIP_TASKS[$skip_id]"
-        fi
-    done
 }
 
 # Mark that a scheduling event occurred

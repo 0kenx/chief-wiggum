@@ -439,17 +439,6 @@
       }
     },
     {
-      "id": "skip-decay",
-      "description": "Decay skip counts for failed kanban updates",
-      "phase": "post",
-      "order": 50,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_skip_decay"
-      }
-    },
-    {
       "id": "orphan-detection",
       "description": "Detect orphan workers without pool entries",
       "phase": "post",
