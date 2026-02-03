@@ -352,7 +352,12 @@ _resolve_jump_target() {
             _PIPELINE_NEXT_IDX="$current_idx"
             ;;
         prev)
-            _PIPELINE_NEXT_IDX=$((current_idx - 1))
+            if [ "$current_idx" -le 0 ]; then
+                log_warn "Jump target 'prev' at step 0 has no previous step, falling back to 'self'"
+                _PIPELINE_NEXT_IDX=0
+            else
+                _PIPELINE_NEXT_IDX=$((current_idx - 1))
+            fi
             ;;
         next)
             _PIPELINE_NEXT_IDX=$((current_idx + 1))
@@ -976,11 +981,11 @@ _write_pipeline_config() {
                 to_entries[] |
                 select(.value.agent != null) |
                 [.value.id // "inline", .value.agent, (.value.config // {} | tojson)] |
-                @tsv
+                join("\u001e")
             ' 2>/dev/null || true)
 
             if [ -n "$inline_handlers" ]; then
-                while IFS=$'\t' read -r handler_id handler_agent handler_config; do
+                while IFS=$'\x1e' read -r handler_id handler_agent handler_config; do
                     [ -z "$handler_id" ] && continue
                     steps_json=$(echo "$steps_json" | jq \
                         --arg id "$handler_id" \
