@@ -312,9 +312,8 @@ test_cleanup_sections_collapses_per_section() {
     assert_file_contains "$tmp_dir/kanban.md" "### Critical" "Critical section heading should be preserved"
     assert_file_contains "$tmp_dir/kanban.md" "### High" "High section heading should be preserved"
     assert_file_contains "$tmp_dir/kanban.md" "### Medium" "Medium section heading should be preserved"
-    # Per-section done comments
-    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001 -->" "Critical section should have its own done comment"
-    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-003, TASK-004 -->" "High section should have its own done comment"
+    # Single done comment at top with all collapsed IDs
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-003, TASK-004 -->" "Done comment should list all collapsed IDs at top"
     # Non-completed tasks remain
     assert_file_contains "$tmp_dir/kanban.md" "**[TASK-002]**" "TASK-002 (pending) should remain"
     assert_file_contains "$tmp_dir/kanban.md" "**[TASK-005]**" "TASK-005 (pending) should remain"
@@ -354,9 +353,9 @@ EOF
 
     "$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" >/dev/null 2>&1
 
-    # Phase 1 heading should remain with done comment
-    assert_file_contains "$tmp_dir/kanban.md" "### Phase 1" "Section heading should be preserved even when all tasks collapsed"
-    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-002 -->" "Done comment should list all section IDs"
+    # Phase 1 heading should be deleted (no remaining tasks)
+    assert_file_not_contains "$tmp_dir/kanban.md" "### Phase 1" "Empty section heading should be deleted"
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-002 -->" "Done comment should list all IDs at top"
     # Phase 2 should be untouched
     assert_file_contains "$tmp_dir/kanban.md" "### Phase 2" "Phase 2 heading should remain"
     assert_file_contains "$tmp_dir/kanban.md" "**[TASK-003]**" "Pending task should remain"
@@ -447,12 +446,11 @@ EOF
     assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-002]**" "TASK-002 block should be collapsed"
     assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-004]**" "TASK-004 block should be collapsed"
     assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-005]**" "TASK-005 block should be collapsed"
-    # Section headings preserved
+    # Feature Work kept (has pending task), Bug Fixes deleted (all completed)
     assert_file_contains "$tmp_dir/kanban.md" "## Feature Work" "Feature Work heading should be preserved"
-    assert_file_contains "$tmp_dir/kanban.md" "## Bug Fixes" "Bug Fixes heading should be preserved"
-    # Per-section done comments
-    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-002 -->" "Feature section should have done comment"
-    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-004, TASK-005 -->" "Bug Fixes section should have done comment"
+    assert_file_not_contains "$tmp_dir/kanban.md" "## Bug Fixes" "Bug Fixes heading should be deleted (all tasks completed)"
+    # Single done comment at top
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-002, TASK-004, TASK-005 -->" "Done comment should list all collapsed IDs at top"
     # Non-completed tasks remain
     assert_file_contains "$tmp_dir/kanban.md" "**[TASK-001]**" "TASK-001 (pending approval) should remain"
     assert_file_contains "$tmp_dir/kanban.md" "**[TASK-003]**" "TASK-003 (pending) should remain"
@@ -499,9 +497,9 @@ EOF
 
     "$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" >/dev/null 2>&1
 
-    # ## and ### headings both preserved
-    assert_file_contains "$tmp_dir/kanban.md" "## Spec Compliance" "## heading should be preserved"
-    assert_file_contains "$tmp_dir/kanban.md" "### Critical" "### heading should be preserved"
+    # ## Spec Compliance kept (has child ### Medium with tasks), ### Critical deleted (all completed)
+    assert_file_contains "$tmp_dir/kanban.md" "## Spec Compliance" "## heading preserved (has child sections with tasks)"
+    assert_file_not_contains "$tmp_dir/kanban.md" "### Critical" "### Critical deleted (all tasks completed)"
     assert_file_contains "$tmp_dir/kanban.md" "### Medium" "### heading should be preserved"
     # Tasks collapsed per section
     assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-002]**" "TASK-002 should be collapsed"

@@ -576,6 +576,7 @@ _cleanup_kanban_impl() {
     # Section tracking — section 0 is the top-level (before any ###)
     local current_section=0
     declare -a section_headings=("")
+    declare -a section_levels=("0")
 
     # Per-section existing done IDs (comma-separated strings)
     declare -a section_existing_done=()
@@ -620,6 +621,11 @@ _cleanup_kanban_impl() {
                 fi
                 ((++current_section))
                 section_headings+=("$line")
+                if [[ "$line" =~ ^##[[:space:]] ]]; then
+                    section_levels+=("2")
+                else
+                    section_levels+=("3")
+                fi
                 continue
             fi
 
@@ -735,20 +741,20 @@ _cleanup_kanban_impl() {
         echo ""
         echo "$tasks_header"
 
-        for ((s=0; s<num_sections; s++)); do
-            # Merge existing + newly collapsed IDs for this section (deduplicated)
-            unset _seen_ids _merged_ids 2>/dev/null || true
-            declare -A _seen_ids=()
-            declare -a _merged_ids=()
+        # Merge ALL done IDs (existing + newly collapsed) across all sections
+        unset _all_seen 2>/dev/null || true
+        declare -A _all_seen=()
+        declare -a _all_done=()
 
+        for ((s=0; s<num_sections; s++)); do
             if [ -n "${section_existing_done[$s]:-}" ]; then
                 IFS=',' read -ra _eids <<< "${section_existing_done[$s]}"
                 for _id in "${_eids[@]}"; do
                     _id="${_id#"${_id%%[![:space:]]*}"}"
                     _id="${_id%"${_id##*[![:space:]]}"}"
-                    if [ -n "$_id" ] && [ -z "${_seen_ids[$_id]:-}" ]; then
-                        _seen_ids[$_id]=1
-                        _merged_ids+=("$_id")
+                    if [ -n "$_id" ] && [ -z "${_all_seen[$_id]:-}" ]; then
+                        _all_seen[$_id]=1
+                        _all_done+=("$_id")
                     fi
                 done
             fi
@@ -756,16 +762,60 @@ _cleanup_kanban_impl() {
             if [ -n "${section_collapsed_ids[$s]:-}" ]; then
                 IFS=',' read -ra _cids <<< "${section_collapsed_ids[$s]}"
                 for _id in "${_cids[@]}"; do
-                    if [ -z "${_seen_ids[$_id]:-}" ]; then
-                        _seen_ids[$_id]=1
-                        _merged_ids+=("$_id")
+                    if [ -z "${_all_seen[$_id]:-}" ]; then
+                        _all_seen[$_id]=1
+                        _all_done+=("$_id")
                     fi
                 done
             fi
+        done
 
-            local has_done=${#_merged_ids[@]}
-            local has_kept=false
-            [ -n "${section_kept_indices[$s]:-}" ] && has_kept=true
+        # Write single done comment at top of TASKS section
+        if [ ${#_all_done[@]} -gt 0 ]; then
+            local done_csv=""
+            for _id in "${_all_done[@]}"; do
+                if [ -n "$done_csv" ]; then
+                    done_csv="$done_csv, $_id"
+                else
+                    done_csv="$_id"
+                fi
+            done
+            echo ""
+            echo "<!-- done: $done_csv -->"
+        fi
+
+        # Determine which sections to keep (have remaining tasks)
+        declare -a section_keep=()
+        for ((s=0; s<num_sections; s++)); do
+            if [ -n "${section_kept_indices[$s]:-}" ]; then
+                section_keep[$s]=true
+            else
+                section_keep[$s]=false
+            fi
+        done
+
+        # For ## sections with no direct tasks, keep if any child ### sections have tasks
+        for ((s=1; s<num_sections; s++)); do
+            if [ "${section_keep[$s]}" = true ]; then continue; fi
+            if [ "${section_levels[$s]}" != "2" ]; then continue; fi
+            # This is a ## heading with no direct tasks — check subsequent ### sections
+            for ((sub=s+1; sub<num_sections; sub++)); do
+                # Stop at next ## heading
+                if [ "${section_levels[$sub]}" = "2" ]; then
+                    break
+                fi
+                if [ "${section_keep[$sub]}" = true ]; then
+                    section_keep[$s]=true
+                    break
+                fi
+            done
+        done
+
+        # Write sections (skip headings for empty sections)
+        for ((s=0; s<num_sections; s++)); do
+            if [ "${section_keep[$s]}" = false ] && [ "$s" -gt 0 ]; then
+                continue
+            fi
 
             # Write section heading (section 0 is top-level, no heading)
             if [ "$s" -gt 0 ] && [ -n "${section_headings[$s]:-}" ]; then
@@ -773,27 +823,8 @@ _cleanup_kanban_impl() {
                 echo "${section_headings[$s]}"
             fi
 
-            # Skip section content if no done IDs and no kept tasks
-            if [ "$has_done" -eq 0 ] && [ "$has_kept" = false ]; then
-                continue
-            fi
-
-            # Write done comment if any
-            if [ "$has_done" -gt 0 ]; then
-                local done_csv=""
-                for _id in "${_merged_ids[@]}"; do
-                    if [ -n "$done_csv" ]; then
-                        done_csv="$done_csv, $_id"
-                    else
-                        done_csv="$_id"
-                    fi
-                done
-                echo ""
-                echo "<!-- done: $done_csv -->"
-            fi
-
             # Write kept task blocks
-            if [ "$has_kept" = true ]; then
+            if [ -n "${section_kept_indices[$s]:-}" ]; then
                 IFS=' ' read -ra _indices <<< "${section_kept_indices[$s]}"
                 for idx in "${_indices[@]}"; do
                     local block="${task_blocks[$idx]}"
