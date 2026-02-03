@@ -1337,7 +1337,11 @@ _resume_decide_for_worker() {
     # Run system.resume-decide agent
     source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
     source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1
+    local _agent_exit=0
+    run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1 || _agent_exit=$?
+    if [ "$_agent_exit" -ne 0 ]; then
+        log_warn "resume-decide agent exited $_agent_exit for $task_id — will still process decision if written"
+    fi
 
     # Read decision from resume-decision.json
     if [ ! -f "$worker_dir/resume-decision.json" ]; then
@@ -1598,6 +1602,121 @@ _poll_pending_decides() {
             # Clean up any partial decision file
             rm -f "$worker_dir/resume-decision.json"
         fi
+    done
+}
+
+# Recover stranded resume decisions after orchestrator restart
+#
+# Scans for workers with resume-decision.json that aren't running and aren't
+# tracked in _PENDING_DECIDES. For non-RETRY decisions (COMPLETE/ABORT/DEFER),
+# processes them inline using the same logic as _resume_decide_for_worker().
+# RETRY decisions are left for get_workers_with_retry_decision to pick up.
+#
+# This handles the case where run_agent exits non-zero in _resume_decide_for_worker
+# after writing the decision file, or the orchestrator restarts after decisions
+# are written but before they're processed.
+#
+# Globals:
+#   RALPH_DIR   - Required
+#   PROJECT_DIR - Required
+#   _PENDING_DECIDES - Checked to avoid double-processing
+#
+# Returns: 0 always (errors are logged per-worker)
+_recover_stranded_decisions() {
+    [ -d "$RALPH_DIR/workers" ] || return 0
+
+    local worker_dir
+    for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+        [ -f "$worker_dir/resume-decision.json" ] || continue
+
+        # Skip if worker is running
+        is_worker_running "$worker_dir" && continue
+
+        # Skip if tracked by _PENDING_DECIDES (being handled)
+        local _tracked=false
+        local _pid
+        for _pid in "${!_PENDING_DECIDES[@]}"; do
+            local _entry="${_PENDING_DECIDES[$_pid]}"
+            [[ "$_entry" == "$worker_dir|"* ]] && { _tracked=true; break; }
+        done
+        [ "$_tracked" = "true" ] && continue
+
+        local decision
+        decision=$(jq -r '.decision // ""' "$worker_dir/resume-decision.json" 2>/dev/null)
+
+        # RETRY is handled by get_workers_with_retry_decision — skip
+        [ "$decision" = "RETRY" ] && continue
+
+        local task_id worker_id
+        task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+        worker_id=$(basename "$worker_dir")
+
+        log_warn "Recovering stranded $decision decision for $task_id"
+
+        case "$decision" in
+            COMPLETE)
+                resume_state_increment "$worker_dir" "COMPLETE" "" "" \
+                    "Recovered stranded COMPLETE decision"
+
+                # Try to create PR if workspace and branch exist
+                local pr_url=""
+                [ -f "$worker_dir/pr_url.txt" ] && pr_url=$(cat "$worker_dir/pr_url.txt" 2>/dev/null)
+                if [ -z "$pr_url" ] && [ -d "$worker_dir/workspace" ]; then
+                    source "$WIGGUM_HOME/lib/git/git-operations.sh"
+                    local branch_name
+                    branch_name=$(cd "$worker_dir/workspace" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+                    if [ -n "$branch_name" ] && [ "$branch_name" != "HEAD" ]; then
+                        (cd "$worker_dir/workspace" && git push -u origin "$branch_name" 2>/dev/null) || true
+                        local task_desc=""
+                        [ -f "$worker_dir/prd.md" ] && task_desc=$(head -5 "$worker_dir/prd.md" | sed -n 's/^# *//p' | head -1)
+                        task_desc="${task_desc:-Task $task_id}"
+                        local pr_exit=0
+                        git_create_pr "$branch_name" "$task_id" "$task_desc" "$worker_dir" "$PROJECT_DIR" || pr_exit=$?
+                        if [ $pr_exit -eq 0 ] && [ -n "${GIT_PR_URL:-}" ]; then
+                            echo "$GIT_PR_URL" > "$worker_dir/pr_url.txt"
+                            pr_url="$GIT_PR_URL"
+                        fi
+                    fi
+                fi
+
+                if [ -n "$pr_url" ] || [ -d "$worker_dir/workspace" ]; then
+                    update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+                    resume_state_set_terminal "$worker_dir" "Recovered: work complete, task marked [P]"
+                else
+                    # No workspace, no PR — work was lost
+                    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+                    resume_state_set_terminal "$worker_dir" "Recovered: COMPLETE but no workspace or PR — work lost"
+                    log_error "Task $task_id COMPLETE decision but no workspace or PR — marking failed"
+                fi
+
+                rm -f "$worker_dir/resume-decision.json"
+                activity_log "worker.resume_complete" "$worker_id" "$task_id" "recovered=true"
+                scheduler_mark_event
+                ;;
+            ABORT)
+                resume_state_increment "$worker_dir" "ABORT" "" "" "Recovered stranded ABORT"
+                update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+                resume_state_set_terminal "$worker_dir" "Recovered: aborted by resume-decide"
+                rm -f "$worker_dir/resume-decision.json"
+                activity_log "worker.resume_abort" "$worker_id" "$task_id" "recovered=true"
+                scheduler_mark_event
+                ;;
+            DEFER)
+                load_resume_config
+                resume_state_increment "$worker_dir" "DEFER" "" "" "Recovered stranded DEFER"
+                resume_state_set_cooldown "$worker_dir" "$RESUME_COOLDOWN_SECONDS"
+                rm -f "$worker_dir/resume-decision.json"
+                activity_log "worker.resume_defer" "$worker_id" "$task_id" "recovered=true"
+                ;;
+            *)
+                resume_state_increment "$worker_dir" "ABORT" "" "" "Recovered unknown decision: $decision"
+                update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+                resume_state_set_terminal "$worker_dir" "Recovered: unknown decision '$decision'"
+                rm -f "$worker_dir/resume-decision.json"
+                scheduler_mark_event
+                ;;
+        esac
     done
 }
 

@@ -273,6 +273,7 @@ svc_orch_resume_poll() {
 svc_orch_resume_decide() {
     local max_decide="${RESUME_MAX_DECIDE_CONCURRENT:-20}"
     _poll_pending_decides
+    _recover_stranded_decisions
 
     local decide_count="${#_PENDING_DECIDES[@]}"
     local workers_needing_decide
@@ -284,6 +285,17 @@ svc_orch_resume_decide() {
 
         # For interrupted steps, write decision inline (fast, no background)
         if [ -n "$current_step" ] && ! _step_has_result "$worker_dir" "$current_step"; then
+            resume_state_increment "$worker_dir" "RETRY" "" "$current_step" \
+                "Step interrupted, direct resume"
+            if resume_state_max_exceeded "$worker_dir"; then
+                update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+                resume_state_set_terminal "$worker_dir" "Max resume attempts exceeded (direct RETRY)"
+                log_error "Task $task_id marked FAILED — max resume attempts exceeded at step $current_step"
+                activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$task_id" \
+                    "reason=max_direct_retry step=$current_step"
+                scheduler_mark_event
+                continue
+            fi
             jq -n --arg step "$current_step" '{
                 decision: "RETRY",
                 pipeline: null,
