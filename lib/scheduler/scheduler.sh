@@ -460,6 +460,42 @@ scheduler_get_dep_bonus_per_task() { echo "$_SCHED_DEP_BONUS_PER_TASK"; }
 scheduler_get_resume_initial_bonus() { echo "$_SCHED_RESUME_INITIAL_BONUS"; }
 scheduler_get_resume_fail_penalty() { echo "$_SCHED_RESUME_FAIL_PENALTY"; }
 
+# Check if worker has repeated failures at the same pipeline step
+#
+# Examines resume-state.json history for consecutive failures at the
+# same step (from most recent backward). Returns 0 (terminal) if the
+# threshold is met.
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if repeated failures detected, 1 otherwise
+_has_repeated_step_failures() {
+    local worker_dir="$1"
+    local state_file="$worker_dir/resume-state.json"
+    [ -f "$state_file" ] || return 1
+
+    local threshold="${WIGGUM_MAX_STEP_RETRIES:-3}"
+
+    # Count consecutive entries from most recent where step is the same
+    local consecutive_count
+    consecutive_count=$(jq -r --argjson threshold "$threshold" '
+        (.history // []) |
+        [.[] | select(.step != null and .step != "") | .step] |
+        reverse |
+        if length == 0 then 0
+        else
+            .[0] as $first |
+            reduce .[] as $s (0;
+                if $s == $first then . + 1 else . end
+            )
+        end
+    ' "$state_file" 2>/dev/null)
+    consecutive_count="${consecutive_count:-0}"
+
+    [ "$consecutive_count" -ge "$threshold" ]
+}
+
 # Check if worker hit terminal failure
 #
 # Terminal failure means the worker cannot be usefully resumed and should be
@@ -488,6 +524,17 @@ _is_terminal_failure() {
 
     # Criterion 1: resume-state marks terminal (COMPLETE or ABORT decisions)
     resume_state_is_terminal "$worker_dir" && return 0
+
+    # Criterion 1b: workspace missing (no point resuming if setup completed)
+    if [ ! -d "$worker_dir/workspace" ] && [ -f "$worker_dir/prd.md" ]; then
+        return 0
+    fi
+
+    # Criterion 1c: stop-reason marker from infrastructure failure (workspace deleted)
+    [ -f "$worker_dir/stop-reason-workspace-deleted" ] && return 0
+
+    # Criterion 1d: repeated failures at same pipeline step across resumes
+    _has_repeated_step_failures "$worker_dir" && return 0
 
     # Criterion 2: pipeline completed to last step with FAIL result
     local config_file="$worker_dir/pipeline-config.json"

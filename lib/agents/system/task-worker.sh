@@ -248,6 +248,19 @@ agent_run() {
         log "Skipping pipeline (resuming directly to finalization)"
     fi
 
+    # Write stop-reason markers for infrastructure failures
+    # These persist across resume cycles, unlike env vars
+    case "${RALPH_LOOP_STOP_REASON:-}" in
+        fast_fail)
+            echo "$(epoch_now)" > "$worker_dir/stop-reason-fast-fail"
+            log_warn "Stop-reason marker: fast_fail"
+            ;;
+        workspace_deleted)
+            echo "$(epoch_now)" > "$worker_dir/stop-reason-workspace-deleted"
+            log_warn "Stop-reason marker: workspace_deleted"
+            ;;
+    esac
+
     # === FINALIZATION PHASE ===
     _phase_start "finalization"
 

@@ -68,6 +68,14 @@ export ERROR_LOG_MAX_AGE
 STUCK_WORKER_THRESHOLD="${WIGGUM_STUCK_WORKER_THRESHOLD:-1800}"
 export STUCK_WORKER_THRESHOLD
 
+# Max consecutive failures at same pipeline step before terminal
+WIGGUM_MAX_STEP_RETRIES="${WIGGUM_MAX_STEP_RETRIES:-3}"
+export WIGGUM_MAX_STEP_RETRIES
+
+# Max cooldown for pre-worker check failures (seconds)
+WIGGUM_PRE_WORKER_MAX_COOLDOWN="${WIGGUM_PRE_WORKER_MAX_COOLDOWN:-300}"
+export WIGGUM_PRE_WORKER_MAX_COOLDOWN
+
 # Orchestrator and service state directories
 ORCH_STATE_DIR="$RALPH_DIR/orchestrator"
 SVC_STATE_DIR="$RALPH_DIR/services"

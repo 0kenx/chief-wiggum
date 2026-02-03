@@ -531,11 +531,39 @@ orch_spawn_ready_tasks() {
         return 0
     fi
 
-    # Pre-flight: pull latest main once per cycle
+    # Pre-flight: pull latest main once per cycle (with exponential backoff cooldown)
+    local _pwc_state="$ralph_dir/orchestrator/pre-worker-state.json"
+    if [ -f "$_pwc_state" ]; then
+        local _pwc_until
+        _pwc_until=$(jq -r '.cooldown_until // 0' "$_pwc_state" 2>/dev/null)
+        _pwc_until="${_pwc_until:-0}"
+        if [ "$_pwc_until" -gt "$(epoch_now)" ]; then
+            log_debug "Pre-worker checks in cooldown (until $_pwc_until)"
+            return 0
+        fi
+    fi
+
     if ! _orch_pre_worker_checks; then
-        log_error "Pre-worker git checks failed - skipping all spawns this cycle"
+        # Track consecutive failures with exponential backoff
+        local _pwc_failures=0
+        if [ -f "$_pwc_state" ]; then
+            _pwc_failures=$(jq -r '.consecutive_failures // 0' "$_pwc_state" 2>/dev/null)
+            _pwc_failures="${_pwc_failures:-0}"
+        fi
+        ((_pwc_failures++)) || true
+        local _pwc_max_cooldown="${WIGGUM_PRE_WORKER_MAX_COOLDOWN:-300}"
+        # Exponential: 30, 60, 120, 240, 300 (capped)
+        local _pwc_cooldown=$((30 * (1 << (_pwc_failures - 1))))
+        [ "$_pwc_cooldown" -gt "$_pwc_max_cooldown" ] && _pwc_cooldown="$_pwc_max_cooldown"
+        local _pwc_until=$(( $(epoch_now) + _pwc_cooldown ))
+        mkdir -p "$ralph_dir/orchestrator"
+        jq -n --argjson f "$_pwc_failures" --argjson u "$_pwc_until" \
+            '{consecutive_failures:$f, cooldown_until:$u}' > "$_pwc_state"
+        log_error "Pre-worker checks failed ($_pwc_failures consecutive) — cooldown ${_pwc_cooldown}s"
         return 0
     fi
+    # Reset on success
+    [ -f "$_pwc_state" ] && rm -f "$_pwc_state"
 
     # Spawn workers for ready tasks
     for task_id in $SCHED_READY_TASKS; do
@@ -599,19 +627,27 @@ _orch_pre_worker_checks() {
         fi
 
         # Dirty/untracked working directory - reset the blocking files and retry once
-        if [ "$dirty_reset_done" = false ] && echo "$pull_output" | grep -qiE "(local changes|untracked.*files).*overwritten"; then
-            local dirty_files
-            dirty_files=$(echo "$pull_output" | sed -n '/would be overwritten/,/Please\|Aborting/{//d; s/^[[:space:]]*//; /^$/d; p}')
-            if [ -n "$dirty_files" ]; then
-                log_warn "Resetting files blocking pull: $dirty_files"
-                echo "$dirty_files" | xargs git checkout -- 2>/dev/null || true
-                # Also remove untracked files that block merge
-                echo "$dirty_files" | while read -r f; do
-                    [ -f "$f" ] && rm -f "$f"
-                done 2>/dev/null || true
-                dirty_reset_done=true
-                # Retry immediately (don't burn an attempt on this)
-                attempt=$((attempt - 1))
+        if echo "$pull_output" | grep -qiE "(local changes|untracked.*files).*overwritten"; then
+            if [ "$dirty_reset_done" = false ]; then
+                local dirty_files
+                dirty_files=$(echo "$pull_output" | sed -n '/would be overwritten/,/Please\|Aborting/{//d; s/^[[:space:]]*//; /^$/d; p}')
+                if [ -n "$dirty_files" ]; then
+                    log_warn "Resetting files blocking pull: $dirty_files"
+                    echo "$dirty_files" | xargs git checkout -- 2>/dev/null || true
+                    # Also remove untracked files that block merge
+                    echo "$dirty_files" | while read -r f; do
+                        [ -f "$f" ] && rm -f "$f"
+                    done 2>/dev/null || true
+                    dirty_reset_done=true
+                    # Retry immediately (don't burn an attempt on this)
+                    attempt=$((attempt - 1))
+                    continue
+                fi
+            else
+                # Targeted reset insufficient — hard reset main to match remote
+                log_warn "Dirty reset insufficient — performing hard reset of main"
+                git reset --hard origin/main 2>/dev/null || true
+                git clean -fd 2>/dev/null || true
                 continue
             fi
         fi
@@ -1192,6 +1228,27 @@ _step_has_result() {
     [ -f "$result_file" ]
 }
 
+# Handle an auto-ABORT decision for a worker (shared by fast-paths)
+#
+# Updates resume state, marks kanban as failed, sets terminal, and cleans up.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task identifier
+#   reason     - Reason string for the abort
+_resume_decide_handle_abort() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local reason="${3:-Unrecoverable — auto-aborted}"
+
+    resume_state_increment "$worker_dir" "ABORT" "" "" "Auto-abort: $reason"
+    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+    resume_state_set_terminal "$worker_dir" "$reason"
+    rm -f "$worker_dir/resume-decision.json"
+    activity_log "worker.resume_abort" "$(basename "$worker_dir")" "$task_id"
+    scheduler_mark_event
+}
+
 # Run resume-decide analysis for a single worker (blocking)
 #
 # Determines the resume action for a stopped worker:
@@ -1229,6 +1286,40 @@ _resume_decide_for_worker() {
             reason: "Step interrupted, direct resume"
         }' > "$worker_dir/resume-decision.json"
         log "Direct RETRY decision for $task_id (interrupted at $current_step)"
+        return 0
+    fi
+
+    # Fast path: workspace deleted → ABORT (nothing to resume)
+    if [ ! -d "$worker_dir/workspace" ]; then
+        log "Direct ABORT for $task_id (workspace missing)"
+        _resume_decide_handle_abort "$worker_dir" "$task_id" "Workspace no longer exists"
+        return 0
+    fi
+
+    # Fast path: fast-fail marker → DEFER with long cooldown
+    if [ -f "$worker_dir/stop-reason-fast-fail" ]; then
+        local marker_epoch
+        marker_epoch=$(cat "$worker_dir/stop-reason-fast-fail" 2>/dev/null)
+        marker_epoch="${marker_epoch:-0}"
+        local marker_age=$(( $(epoch_now) - marker_epoch ))
+        if [ "$marker_age" -lt 3600 ]; then
+            local cooldown=600
+            resume_state_increment "$worker_dir" "DEFER" "" "" "Backend fast-fail (age: ${marker_age}s)"
+            resume_state_set_cooldown "$worker_dir" "$cooldown"
+            rm -f "$worker_dir/resume-decision.json"
+            log "Direct DEFER for $task_id (fast-fail marker, age ${marker_age}s, cooldown ${cooldown}s)"
+            return 0
+        else
+            # Marker is old, backend may have recovered — allow normal decide
+            rm -f "$worker_dir/stop-reason-fast-fail"
+        fi
+    fi
+
+    # Fast path: repeated same-step failures → ABORT
+    if _has_repeated_step_failures "$worker_dir"; then
+        log_error "Direct ABORT for $task_id (repeated failures at step ${current_step:-unknown})"
+        _resume_decide_handle_abort "$worker_dir" "$task_id" \
+            "Repeated failures at same pipeline step (${current_step:-unknown})"
         return 0
     fi
 

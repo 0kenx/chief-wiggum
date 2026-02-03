@@ -885,6 +885,21 @@ _md_extract_and_write_result() {
             result="UNKNOWN"
         fi
 
+        # Infrastructure failure overrides: don't leave as UNKNOWN when the stop
+        # reason tells us exactly what happened
+        if [ "$result" = "UNKNOWN" ]; then
+            case "${RALPH_LOOP_STOP_REASON:-}" in
+                fast_fail)
+                    result="FAIL"
+                    log_warn "Fast-fail: backend not functional — overriding UNKNOWN to FAIL"
+                    ;;
+                workspace_deleted)
+                    result="FAIL"
+                    log_warn "Workspace deleted — overriding UNKNOWN to FAIL"
+                    ;;
+            esac
+        fi
+
         # Include session_id in extra_outputs for downstream steps (e.g., task-summarizer)
         local extra_outputs="{}"
         local session_id="${RALPH_LOOP_LAST_SESSION_ID:-}"
