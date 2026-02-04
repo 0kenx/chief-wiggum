@@ -330,6 +330,10 @@ do_resume() {
         usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
     fi
 
+    # === Mark task in-progress ===
+    # Move task back to [=] (e.g., from [*] failed) so kanban reflects active work
+    update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+
     # === Launch system.task-worker ===
     _msg "Launching system.task-worker from step: $resume_step"
 

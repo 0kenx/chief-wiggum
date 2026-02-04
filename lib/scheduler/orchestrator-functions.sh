@@ -1850,6 +1850,9 @@ _launch_resume_worker() {
 
     log "Launching resume worker for $task_id from step '$resume_step' (index $step_idx)"
 
+    # Move task back to [=] in-progress (e.g., from [*] failed)
+    update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+
     # Launch worker via setsid (same pattern as bin/wiggum-worker resume)
     export _WORKER_WIGGUM_HOME="$WIGGUM_HOME"
     export _WORKER_DIR="$worker_dir"
