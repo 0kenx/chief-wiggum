@@ -1,0 +1,18 @@
+[project]
+name = "wiggum-orchestrator"
+version = "0.1.0"
+description = "Python service scheduler for Chief Wiggum orchestrator"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]

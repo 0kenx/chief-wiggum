@@ -368,6 +368,10 @@ svc_orch_scheduler_tick() {
 
 # Spawn workers for ready tasks and resume candidates from unified queue
 svc_orch_task_spawner() {
+    # Early exit: nothing to spawn if unified queue is empty
+    # (populated by scheduler_tick in post phase order 30, before this at order 45)
+    [[ -n "${SCHED_UNIFIED_QUEUE:-}" ]] || return 0
+
     local pending_main_count=0
     local pending_priority_count=0
 

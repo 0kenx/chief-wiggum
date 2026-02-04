@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Chief Wiggum - Python orchestrator entry point
+#
+# Wrapper that sets environment and executes the Python service scheduler.
+# Falls back through: .venv/bin/python → uv run → python3
+set -euo pipefail
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+export WIGGUM_HOME
+
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="${RALPH_DIR:-$PROJECT_DIR/.ralph}"
+export PROJECT_DIR RALPH_DIR
+
+ORCH_DIR="$WIGGUM_HOME/lib/orchestrator-py"
+
+if [ -f "$ORCH_DIR/.venv/bin/python" ]; then
+    exec "$ORCH_DIR/.venv/bin/python" -m wiggum_orchestrator "$@"
+elif command -v uv &>/dev/null; then
+    exec uv run --project "$ORCH_DIR" python -m wiggum_orchestrator "$@"
+else
+    exec python3 -m wiggum_orchestrator "$@"
+fi

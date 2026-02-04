@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: wiggum-orchestrator
+Version: 0.1.0
+Summary: Python service scheduler for Chief Wiggum orchestrator
+Requires-Python: >=3.10
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
