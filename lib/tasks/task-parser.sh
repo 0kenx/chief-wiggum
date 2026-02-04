@@ -422,7 +422,9 @@ task_has_plan() {
 # Get tasks that are ready to run (pending, with satisfied dependencies)
 # Sorted by priority: CRITICAL > HIGH > MEDIUM > LOW
 # Uses fixed-point arithmetic (10000 = 1.0000)
-# Optional args: ready_since_file aging_factor sibling_wip_penalty_fp ralph_dir plan_bonus_fp dep_bonus_fp
+# Optional args: ready_since_file aging_factor sibling_wip_penalty_fp ralph_dir plan_bonus_fp dep_bonus_fp _metadata
+# When _metadata (8th param) is provided, uses it instead of calling _get_cached_metadata()
+# and returns "effective_pri|task_id" lines; otherwise returns just task_id for backward compat.
 get_ready_tasks() {
     local kanban="$1"
     local ready_since_file="${2:-}"
@@ -431,9 +433,14 @@ get_ready_tasks() {
     local ralph_dir="${5:-}"                  # Optional: .ralph directory for plan lookup
     local plan_bonus="${6:-15000}"            # 1.5 in fixed-point (bonus for having a plan)
     local dep_bonus_per_task="${7:-7000}"     # 0.7 in fixed-point (bonus per task blocked)
+    local _metadata="${8:-}"                  # Optional: pre-fetched metadata (avoids subshell cache loss)
 
     local all_metadata
-    all_metadata=$(_get_cached_metadata "$kanban")
+    if [ -n "$_metadata" ]; then
+        all_metadata="$_metadata"
+    else
+        all_metadata=$(_get_cached_metadata "$kanban")
+    fi
 
     # Get all pending tasks (status = space)
     local pending_tasks
@@ -500,15 +507,25 @@ get_ready_tasks() {
 
             echo "$effective_pri|$task_id"
         fi
-    done | LC_ALL=C sort -t'|' -k1,1 -n | cut -d'|' -f2
+    done | LC_ALL=C sort -t'|' -k1,1 -n | {
+        # When pre-fetched metadata is passed, return pri|id for caller reuse;
+        # otherwise strip priorities for backward compatibility
+        if [ -n "${_metadata:-}" ]; then cat; else cut -d'|' -f2; fi
+    }
 }
 
 # Get blocked tasks (pending but dependencies not satisfied)
+# Optional 2nd param: pre-fetched metadata (avoids subshell cache loss)
 get_blocked_tasks() {
     local kanban="$1"
+    local _metadata="${2:-}"
 
     local all_metadata
-    all_metadata=$(_get_cached_metadata "$kanban")
+    if [ -n "$_metadata" ]; then
+        all_metadata="$_metadata"
+    else
+        all_metadata=$(_get_cached_metadata "$kanban")
+    fi
 
     # Get all pending tasks
     local pending_tasks

@@ -54,6 +54,16 @@ declare -gA _SCHED_CYCLIC_TASKS=()
 # Skip tasks tracking (task_id -> consecutive failure count)
 declare -gA _SCHED_SKIP_TASKS=()
 
+# Per-tick cached kanban metadata (set by scheduler_tick, used by get_unified_work_queue et al.)
+declare -g _SCHED_TICK_METADATA=""
+# Per-tick ready tasks with priorities: "effective_pri|task_id" lines
+declare -g _SCHED_READY_WITH_PRIORITIES=""
+# Git pull time guard: epoch of last successful git pull
+declare -g _SCHED_LAST_GIT_PULL=0
+# Cached worker directory listing (per-tick)
+declare -g _SCHED_WORKER_DIRS=""
+declare -g _SCHED_WORKER_DIRS_TICK=0
+
 # Initialize the scheduler
 #
 # Args:
@@ -91,6 +101,11 @@ scheduler_init() {
     SCHED_SCHEDULING_EVENT=false
     _SCHED_CYCLIC_TASKS=()
     _SCHED_SKIP_TASKS=()
+    _SCHED_TICK_METADATA=""
+    _SCHED_READY_WITH_PRIORITIES=""
+    _SCHED_LAST_GIT_PULL=0
+    _SCHED_WORKER_DIRS=""
+    _SCHED_WORKER_DIRS_TICK=0
 }
 
 # Detect and register cyclic dependencies
@@ -171,18 +186,29 @@ scheduler_tick() {
     local prev_ready="$SCHED_READY_TASKS"
     local prev_blocked="$SCHED_BLOCKED_TASKS"
 
-    # Get tasks ready to run (pending with satisfied dependencies, sorted by priority)
-    SCHED_READY_TASKS=$(get_ready_tasks \
+    # Parse kanban metadata once in the parent process (avoids subshell cache loss)
+    _SCHED_TICK_METADATA=$(_get_cached_metadata "$_SCHED_RALPH_DIR/kanban.md")
+
+    # Get tasks ready to run, passing pre-fetched metadata to avoid redundant parse.
+    # Returns "effective_pri|task_id" lines when metadata is passed.
+    _SCHED_READY_WITH_PRIORITIES=$(get_ready_tasks \
         "$_SCHED_RALPH_DIR/kanban.md" \
         "$_SCHED_READY_SINCE_FILE" \
         "$_SCHED_AGING_FACTOR" \
         "$_SCHED_SIBLING_WIP_PENALTY" \
         "$_SCHED_RALPH_DIR" \
         "$_SCHED_PLAN_BONUS" \
-        "$_SCHED_DEP_BONUS_PER_TASK")
+        "$_SCHED_DEP_BONUS_PER_TASK" \
+        "$_SCHED_TICK_METADATA")
+    SCHED_READY_TASKS=$(echo "$_SCHED_READY_WITH_PRIORITIES" | cut -d'|' -f2 | sed '/^$/d')
 
-    SCHED_BLOCKED_TASKS=$(get_blocked_tasks "$_SCHED_RALPH_DIR/kanban.md")
-    SCHED_PENDING_TASKS=$(get_todo_tasks "$_SCHED_RALPH_DIR/kanban.md")
+    SCHED_BLOCKED_TASKS=$(get_blocked_tasks "$_SCHED_RALPH_DIR/kanban.md" "$_SCHED_TICK_METADATA")
+
+    # Derive pending tasks from cached metadata (avoids separate kanban parse)
+    SCHED_PENDING_TASKS=$(echo "$_SCHED_TICK_METADATA" | awk -F'|' '$2 == " " { print $1 }')
+
+    # Refresh cached worker directory listing for this tick
+    scheduler_refresh_worker_dirs
 
     # Build unified queue merging new tasks and resume candidates
     SCHED_UNIFIED_QUEUE=$(get_unified_work_queue)
@@ -292,18 +318,9 @@ scheduler_update_aging() {
     local new_ready_since
     new_ready_since=$(mktemp)
 
-    # Re-fetch ready tasks to get current state after spawning
-    local current_ready
-    current_ready=$(get_ready_tasks \
-        "$_SCHED_RALPH_DIR/kanban.md" \
-        "$_SCHED_READY_SINCE_FILE" \
-        "$_SCHED_AGING_FACTOR" \
-        "$_SCHED_SIBLING_WIP_PENALTY" \
-        "$_SCHED_RALPH_DIR" \
-        "$_SCHED_PLAN_BONUS" \
-        "$_SCHED_DEP_BONUS_PER_TASK")
-
-    for task_id in $current_ready; do
+    # Use cached ready tasks from scheduler_tick (same in-process tick cycle;
+    # scheduler_tick runs at order 30 before aging_update at order 70)
+    for task_id in $SCHED_READY_TASKS; do
         local prev_count
         prev_count=$(awk -F'|' -v t="$task_id" '$1 == t { print $2 }' "$_SCHED_READY_SINCE_FILE" 2>/dev/null)
         prev_count=${prev_count:-0}
@@ -485,6 +502,37 @@ scheduler_get_plan_bonus() { echo "$_SCHED_PLAN_BONUS"; }
 scheduler_get_dep_bonus_per_task() { echo "$_SCHED_DEP_BONUS_PER_TASK"; }
 scheduler_get_resume_initial_bonus() { echo "$_SCHED_RESUME_INITIAL_BONUS"; }
 scheduler_get_resume_fail_penalty() { echo "$_SCHED_RESUME_FAIL_PENALTY"; }
+
+# Refresh cached worker directories for the current tick
+#
+# Caches the glob result per orchestrator iteration to avoid repeated
+# filesystem scans within the same tick cycle. Must be called in the
+# parent process (not in a $() subshell) for the cache to persist.
+scheduler_refresh_worker_dirs() {
+    local current_tick="${_ORCH_ITERATION:-0}"
+    if [ "$_SCHED_WORKER_DIRS_TICK" = "$current_tick" ] && [ -n "$_SCHED_WORKER_DIRS" ]; then
+        return 0
+    fi
+    _SCHED_WORKER_DIRS=""
+    if [ -d "$_SCHED_RALPH_DIR/workers" ]; then
+        local dir
+        for dir in "$_SCHED_RALPH_DIR/workers"/worker-*; do
+            [ -d "$dir" ] || continue
+            _SCHED_WORKER_DIRS+="$dir"$'\n'
+        done
+        # Remove trailing newline
+        _SCHED_WORKER_DIRS="${_SCHED_WORKER_DIRS%$'\n'}"
+    fi
+    _SCHED_WORKER_DIRS_TICK="$current_tick"
+}
+
+# Get cached list of worker directories for this tick
+#
+# Returns: newline-separated list of worker directory paths
+scheduler_get_worker_dirs() {
+    scheduler_refresh_worker_dirs
+    echo "$_SCHED_WORKER_DIRS"
+}
 
 # Check if worker has repeated failures at the same pipeline step
 #
@@ -779,64 +827,23 @@ get_unified_work_queue() {
     local kanban="$_SCHED_RALPH_DIR/kanban.md"
     local no_resume="${WIGGUM_NO_RESUME:-false}"
 
-    # Collect all metadata once for priority lookups
+    # Use per-tick cached metadata when available (set by scheduler_tick)
     local all_metadata
-    all_metadata=$(_get_cached_metadata "$kanban")
+    all_metadata="${_SCHED_TICK_METADATA:-$(_get_cached_metadata "$kanban")}"
 
     local reverse_graph
     reverse_graph=$(_build_reverse_dep_graph "$all_metadata")
 
     local queue=""
 
-    # --- New tasks ---
-    # SCHED_READY_TASKS is already sorted by get_ready_tasks() but we need
-    # the effective priority values to merge with resume tasks.
-    # Re-compute effective priority for each ready task.
-    for task_id in $SCHED_READY_TASKS; do
-        local priority
-        priority=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
-
-        local effective_pri
-        if [ -f "$_SCHED_READY_SINCE_FILE" ]; then
-            local iters_waiting
-            iters_waiting=$(awk -F'|' -v t="$task_id" '$1 == t { print $2 }' "$_SCHED_READY_SINCE_FILE")
-            iters_waiting=${iters_waiting:-0}
-            effective_pri=$(get_effective_priority "$priority" "$iters_waiting" "$_SCHED_AGING_FACTOR")
-        else
-            case "$priority" in
-                CRITICAL) effective_pri=0 ;;
-                HIGH)     effective_pri=10000 ;;
-                MEDIUM)   effective_pri=20000 ;;
-                LOW)      effective_pri=30000 ;;
-                *)        effective_pri=20000 ;;
-            esac
-        fi
-
-        # Apply sibling penalty
-        if [ "$_SCHED_SIBLING_WIP_PENALTY" -gt 0 ]; then
-            local penalty
-            penalty=$(get_sibling_penalty "$kanban" "$task_id" "$all_metadata" "$_SCHED_SIBLING_WIP_PENALTY")
-            effective_pri=$(( effective_pri + penalty ))
-        fi
-
-        # Plan bonus
-        if [ "$_SCHED_PLAN_BONUS" -gt 0 ]; then
-            if task_has_plan "$_SCHED_RALPH_DIR" "$task_id"; then
-                effective_pri=$(( effective_pri - _SCHED_PLAN_BONUS ))
-            fi
-        fi
-
-        # Dependency depth bonus
-        if [ "$_SCHED_DEP_BONUS_PER_TASK" -gt 0 ]; then
-            local dep_depth
-            dep_depth=$(_bfs_count_from_graph "$reverse_graph" "$task_id")
-            effective_pri=$(( effective_pri - dep_depth * _SCHED_DEP_BONUS_PER_TASK ))
-        fi
-
-        [ "$effective_pri" -lt 0 ] && effective_pri=0
-
-        queue+="${effective_pri}|new|${task_id}|||"$'\n'
-    done
+    # --- New tasks (use pre-computed priorities from scheduler_tick) ---
+    if [ -n "${_SCHED_READY_WITH_PRIORITIES:-}" ]; then
+        local _rwp_pri _rwp_tid
+        while IFS='|' read -r _rwp_pri _rwp_tid; do
+            [ -n "$_rwp_tid" ] || continue
+            queue+="${_rwp_pri}|new|${_rwp_tid}|||"$'\n'
+        done <<< "$_SCHED_READY_WITH_PRIORITIES"
+    fi
 
     # --- Resume tasks (only workers with RETRY decision from two-phase resume) ---
     if [ "$no_resume" != "true" ]; then

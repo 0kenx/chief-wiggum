@@ -424,7 +424,8 @@ svc_orch_task_spawner() {
             fi
 
             local task_priority
-            task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
+            task_priority=$(echo "${_SCHED_TICK_METADATA:-}" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
+            task_priority="${task_priority:-MEDIUM}"
 
             log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
             if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then

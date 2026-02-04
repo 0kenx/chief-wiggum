@@ -1027,6 +1027,17 @@ spawn_worker() {
 # Pre-worker checks before spawning a new worker
 # Returns 0 if safe to proceed, 1 if conflicts detected
 pre_worker_checks() {
+    # Git pull time guard: skip if pulled recently (WIGGUM_GIT_PULL_INTERVAL=0 restores old behavior)
+    local pull_interval="${WIGGUM_GIT_PULL_INTERVAL:-20}"
+    if [ "$pull_interval" -gt 0 ] && [ "${_SCHED_LAST_GIT_PULL:-0}" -gt 0 ]; then
+        local _now
+        _now=$(epoch_now)
+        if (( _now - _SCHED_LAST_GIT_PULL < pull_interval )); then
+            log_debug "Skipping git pull (interval ${pull_interval}s not elapsed)"
+            return 0
+        fi
+    fi
+
     # Pull latest changes from main with retry
     log "Pulling latest changes from origin/main..."
 
@@ -1077,10 +1088,23 @@ pre_worker_checks() {
         sleep "$delay"
     done
 
-    # Check for conflicts with active worktrees
-    local workers_dir="$RALPH_DIR/workers"
-    if [ -d "$workers_dir" ]; then
-        for worker_dir in "$workers_dir"/worker-*; do
+    # Update git pull timestamp on success
+    _SCHED_LAST_GIT_PULL=$(epoch_now)
+
+    # Check for conflicts with active worktrees (use cached dirs if available)
+    local _worker_dirs="${_SCHED_WORKER_DIRS:-}"
+    if [ -z "$_worker_dirs" ] && [ -d "$RALPH_DIR/workers" ]; then
+        local _dir
+        for _dir in "$RALPH_DIR/workers"/worker-*; do
+            [ -d "$_dir" ] || continue
+            _worker_dirs+="$_dir"$'\n'
+        done
+        _worker_dirs="${_worker_dirs%$'\n'}"
+    fi
+
+    if [ -n "$_worker_dirs" ]; then
+        while IFS= read -r worker_dir; do
+            [ -n "$worker_dir" ] || continue
             [ -d "$worker_dir/workspace" ] || continue
 
             local workspace="$worker_dir/workspace"
@@ -1093,7 +1117,7 @@ pre_worker_checks() {
                     return 1
                 fi
             fi
-        done
+        done <<< "$_worker_dirs"
     fi
 
     return 0
