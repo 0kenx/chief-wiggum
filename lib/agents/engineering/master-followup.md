@@ -120,13 +120,27 @@ Scan the codebase for security vulnerabilities, focusing on the code that was im
 
 Write tests for code changes using the project's existing test framework.
 
-### Step 2.1: Discover ALL Test Frameworks (CRITICAL)
+### Step 2.1: Check for CI Scripts and Discover Test Frameworks (CRITICAL)
+
+**First, check for a `ci/` directory:**
+```bash
+ls ci/ 2>/dev/null
+```
+
+**If `ci/` exists:**
+1. List all files in `ci/` and read each script to understand what it does
+2. Identify which scripts run tests, linting, builds, or other checks
+3. These CI scripts are the **gold standard** — use them in Step 2.3 instead of generic test commands
+4. You still write tests (that's your job), but CI scripts are the acceptance check
+
+**If `ci/` does not exist:** discover frameworks below.
 
 **CRITICAL: Polyglot projects have MULTIPLE test frameworks. You MUST identify ALL of them.**
 
-Check for ALL of these:
+Explore the project to find test infrastructure:
 ```bash
-ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>/dev/null
+ls package.json Cargo.toml go.mod pyproject.toml pom.xml 2>/dev/null
+ls tests/ 2>/dev/null
 ```
 
 | If Present | Test Framework |
@@ -136,7 +150,7 @@ ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>
 | go.mod | go test |
 | pyproject.toml | pytest |
 | pom.xml | maven test |
-| tests/test-runner.sh | custom bash tests |
+| tests/ directory | Explore contents — read scripts to find runnable test commands |
 
 **For polyglot projects (e.g., Rust backend + TypeScript frontend):**
 - Write tests using BOTH frameworks where appropriate
@@ -155,7 +169,9 @@ Read the spec FIRST (docs/ and @../prd.md):
 - Place tests in correct location following project structure
 - Use existing assertion patterns
 
-**CRITICAL: Run ALL applicable test suites for polyglot projects:**
+**If CI scripts were found in Step 2.1:** run the CI test scripts as the acceptance check. Their exit codes and output determine the result. Also run your new tests through the project's test framework.
+
+**Otherwise, run ALL applicable test suites for polyglot projects:**
 ```bash
 # Run ALL test suites that exist
 [ -f Cargo.toml ] && cargo test
@@ -163,6 +179,8 @@ Read the spec FIRST (docs/ and @../prd.md):
 [ -f go.mod ] && go test ./...
 [ -f pyproject.toml ] && pytest
 ```
+
+Also explore the `tests/` directory for additional runnable scripts and execute them.
 
 - Fix test bugs yourself; report implementation bugs as FIX
 - **ANY test failure in ANY suite requires resolution**

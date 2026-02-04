@@ -73,13 +73,30 @@ TEST EXECUTION TASK:
 
 Run the project's existing tests to verify the code works correctly after recent changes.
 
-## Step 1: Identify ALL Test Frameworks (CRITICAL)
+## Step 0: Check for CI Scripts (CRITICAL — Do This First)
+
+Check whether the project has a `ci/` directory:
+```bash
+ls ci/ 2>/dev/null
+```
+
+**If `ci/` exists:**
+1. List all files in `ci/` and read each script to understand what it does
+2. Identify which scripts run tests, linting, builds, or other checks
+3. Run the relevant CI scripts — these are the **gold standard** for this project
+4. Use the CI script exit codes and output as your test results
+5. **Skip Steps 1-3 entirely** — the CI scripts replace framework auto-detection
+
+**If `ci/` does not exist:** proceed to Step 1.
+
+## Step 1: Identify ALL Test Frameworks (Fallback — skip if CI scripts found)
 
 **CRITICAL: Polyglot projects have MULTIPLE test frameworks. You MUST identify ALL of them.**
 
-Check for ALL of these:
+Explore the project to find test infrastructure:
 ```bash
-ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>/dev/null
+ls package.json Cargo.toml go.mod pyproject.toml pom.xml 2>/dev/null
+ls tests/ 2>/dev/null
 ```
 
 | If Present | Test Framework |
@@ -89,7 +106,7 @@ ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>
 | go.mod | go test |
 | pyproject.toml | pytest |
 | pom.xml | maven test |
-| tests/test-runner.sh | custom bash tests |
+| tests/ directory | Explore contents — read scripts to find runnable test commands |
 
 **For polyglot projects (e.g., Rust + TypeScript):**
 - Identify BOTH frameworks
@@ -97,7 +114,7 @@ ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>
 
 **If no test framework exists -> SKIP**
 
-## Step 2: Verify Build First (ALL LANGUAGES)
+## Step 2: Verify Build First (Fallback — skip if CI scripts found)
 
 Before running tests, verify ALL codebases compile:
 
@@ -118,7 +135,7 @@ Before running tests, verify ALL codebases compile:
 
 **ANY build failure -> report as FIX** with compilation errors.
 
-## Step 3: Run ALL Tests (CRITICAL)
+## Step 3: Run ALL Tests (Fallback — skip if CI scripts found)
 
 **CRITICAL: For polyglot projects, run ALL test suites.**
 
@@ -129,8 +146,13 @@ Before running tests, verify ALL codebases compile:
 [ -f go.mod ] && go test ./...
 [ -f pyproject.toml ] && pytest
 [ -f pom.xml ] && mvn test
-[ -f tests/test-runner.sh ] && ./tests/test-runner.sh
 ```
+
+Also explore the `tests/` directory for additional runnable scripts:
+```bash
+ls tests/ 2>/dev/null
+```
+Read any shell scripts or test runners found there and execute them.
 
 | If Present | Test Command |
 |------------|--------------|
@@ -139,7 +161,7 @@ Before running tests, verify ALL codebases compile:
 | go.mod | `go test ./...` |
 | pyproject.toml | `pytest` |
 | pom.xml | `mvn test` |
-| tests/test-runner.sh | `./tests/test-runner.sh` |
+| tests/ directory | Read scripts to discover and run test commands |
 
 **For polyglot projects:**
 - Run BOTH `cargo test` AND `npm test`

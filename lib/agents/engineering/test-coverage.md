@@ -122,7 +122,22 @@ Do NOT write unit tests - those are the software engineer's responsibility.
    - What edge cases and error conditions are specified?
    - What data flows should occur?
 
-## Step 2: Discover Test Framework
+## Step 2: Check for CI Scripts
+
+Check whether the project has a `ci/` directory:
+```bash
+ls ci/ 2>/dev/null
+```
+
+**If `ci/` exists:**
+1. List all files in `ci/` and read each script to understand what it does
+2. Note which scripts run tests, linting, builds, or other checks
+3. These CI scripts are the **gold standard** acceptance check for this project
+4. You still write integration/E2E tests (that's your job), but in Step 7 you will run the CI scripts as the final acceptance check instead of generic test commands
+
+**If `ci/` does not exist:** proceed to Step 3 for framework discovery.
+
+## Step 3: Discover Test Framework (Fallback — skip if CI scripts found)
 
 Find what the project uses:
 - `package.json` -> jest, mocha, vitest, ava
@@ -132,7 +147,7 @@ Find what the project uses:
 
 **If no test framework exists -> SKIP** (do not install one)
 
-## Step 3: Design Integration/E2E Tests (From Specs)
+## Step 4: Design Integration/E2E Tests (From Specs)
 
 For each spec requirement, plan tests that verify INTEGRATION:
 
@@ -145,7 +160,7 @@ For each spec requirement, plan tests that verify INTEGRATION:
 - Integration test: "Do components A and B work together as spec defines?" (YOUR job)
 - E2E test: "Does the complete workflow produce spec-defined outcome?" (YOUR job)
 
-## Step 4: Write Integration/E2E Tests
+## Step 5: Write Integration/E2E Tests
 
 ### What to Test
 - API endpoints with real request/response cycles
@@ -179,7 +194,7 @@ Examples:
 - Assert on spec-defined outcomes, not implementation details
 - If test fails, implementation doesn't conform to spec
 
-## Step 5: Verify Build First
+## Step 6: Verify Build First
 
 Before running tests, verify the codebase compiles:
 
@@ -193,12 +208,16 @@ Before running tests, verify the codebase compiles:
 **If the build fails**, this is an implementation bug from an earlier step. Report as FIX
 with clear details about the compilation errors - do NOT attempt to fix implementation bugs.
 
-## Step 6: Run Tests
+## Step 7: Run Tests
 
-1. Run the project's test command (npm test, pytest, go test, cargo test, etc.)
-2. **Test bugs** (wrong assertions, missing test imports, test typos) -> fix the tests yourself and re-run
-3. **Spec conformance failures** (implementation doesn't match spec) -> report as FIX
-4. Ensure existing tests still pass (no regressions)
+**If CI scripts were found in Step 2:** run the CI test scripts as the acceptance check. Their exit codes and output determine the result. You should also run your new integration/E2E tests through the project's test framework.
+
+**Otherwise:** run the project's test command (npm test, pytest, go test, cargo test, etc.)
+
+In both cases:
+1. **Test bugs** (wrong assertions, missing test imports, test typos) -> fix the tests yourself and re-run
+2. **Spec conformance failures** (implementation doesn't match spec) -> report as FIX
+3. Ensure existing tests still pass (no regressions)
 
 **Key distinction:**
 - If YOUR test code has bugs (typo, wrong import, syntax error) -> fix it yourself
