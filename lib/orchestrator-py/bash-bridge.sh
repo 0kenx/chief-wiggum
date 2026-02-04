@@ -125,6 +125,12 @@ scheduler_init "$RALPH_DIR" "$PROJECT_DIR" \
 # Verify scheduler_init actually set _SCHED_RALPH_DIR
 _assert_dir "_SCHED_RALPH_DIR" "${_SCHED_RALPH_DIR:-}" "kanban.md"
 
+# Restore pool state from live worker directories.
+# Each bridge invocation is a fresh process — scheduler_init clears the pool.
+# Without this, pool_count() always returns 0 and worker limits are never enforced.
+pool_restore_from_workers "$RALPH_DIR"
+pool_ingest_pending "$RALPH_DIR"
+
 # Load configs that handler functions depend on at call time
 load_log_rotation_config 2>/dev/null || true
 log_rotation_init "$RALPH_DIR/logs" 2>/dev/null || true

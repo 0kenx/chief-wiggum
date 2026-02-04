@@ -43,6 +43,12 @@ class ServiceExecutor:
         env["WIGGUM_HOME"] = wiggum_home
         env["PROJECT_DIR"] = project_dir
         env["RALPH_DIR"] = ralph_dir
+        # Ensure $WIGGUM_HOME/bin is on PATH so command-type services
+        # (e.g. pr-sync running "wiggum-pr sync") can find CLI tools.
+        bin_dir = os.path.join(wiggum_home, "bin")
+        path = env.get("PATH", "")
+        if bin_dir not in path.split(os.pathsep):
+            env["PATH"] = bin_dir + os.pathsep + path if path else bin_dir
         if overrides:
             env.update(overrides)
         return env

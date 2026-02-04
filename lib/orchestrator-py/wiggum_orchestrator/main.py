@@ -38,10 +38,50 @@ def _parse_args() -> argparse.Namespace:
         description="Python service scheduler for Chief Wiggum",
     )
     parser.add_argument(
+        "mode", nargs="?", default=None,
+        choices=["plan"],
+        help="Optional positional mode (plan)",
+    )
+    parser.add_argument(
         "--run-mode",
         default=os.environ.get("WIGGUM_RUN_MODE", "default"),
         choices=["default", "fix-only", "merge-only", "resume-only"],
         help="Orchestrator run mode",
+    )
+    parser.add_argument(
+        "--max-workers", type=int,
+        default=None,
+        help="Maximum concurrent workers (default: 4)",
+    )
+    parser.add_argument(
+        "--max-iters", type=int,
+        default=None,
+        help="Maximum iterations per worker (default: 20)",
+    )
+    parser.add_argument(
+        "--max-turns", type=int,
+        default=None,
+        help="Maximum turns per Claude session (default: 50)",
+    )
+    parser.add_argument(
+        "--fix-agents", type=int,
+        default=None,
+        help="Maximum concurrent fix/resolve workers (default: 2)",
+    )
+    parser.add_argument(
+        "--pipeline",
+        default=None,
+        help="Pipeline config to use",
+    )
+    parser.add_argument(
+        "--smart", action="store_true",
+        default=os.environ.get("WIGGUM_SMART_MODE", "false") == "true",
+        help="Dynamically select pipeline per task based on complexity",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        default=False,
+        help="Override stale orchestrator lock",
     )
     parser.add_argument(
         "--no-resume", action="store_true",
@@ -116,6 +156,23 @@ def run(args: argparse.Namespace) -> int:
     if state.restore():
         log.log("Restored previous service state")
 
+    # Propagate CLI args into environment so bridge picks them up.
+    # CLI args take precedence over env vars.
+    if args.max_workers is not None:
+        os.environ["MAX_WORKERS"] = str(args.max_workers)
+    if args.max_iters is not None:
+        os.environ["MAX_ITERATIONS"] = str(args.max_iters)
+    if args.max_turns is not None:
+        os.environ["MAX_TURNS"] = str(args.max_turns)
+    if args.fix_agents is not None:
+        os.environ["FIX_WORKER_LIMIT"] = str(args.fix_agents)
+    if args.pipeline is not None:
+        os.environ["WIGGUM_PIPELINE"] = args.pipeline
+    if args.mode == "plan":
+        os.environ["WIGGUM_PLAN_MODE"] = "true"
+    if args.smart:
+        os.environ["WIGGUM_SMART_MODE"] = "true"
+
     # Build env overrides for bridge
     env_overrides: dict[str, str] = {}
     for key in (
@@ -128,6 +185,7 @@ def run(args: argparse.Namespace) -> int:
         "RESUME_MIN_RETRY_INTERVAL", "MAX_SKIP_RETRIES",
         "PID_WAIT_TIMEOUT", "LOG_FILE",
         "RESUME_MAX_DECIDE_CONCURRENT",
+        "WIGGUM_PIPELINE", "WIGGUM_PLAN_MODE", "WIGGUM_SMART_MODE",
     ):
         val = os.environ.get(key)
         if val is not None:
