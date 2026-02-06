@@ -178,6 +178,14 @@ _resume_decide_for_worker() {
             resume_state_increment "$worker_dir" "RETRY" "$resume_pipeline" "$resume_step_id" \
                 "Resume-decide recommended RETRY"
 
+            # Enforce max attempts — convert RETRY to ABORT if exceeded
+            if resume_state_max_exceeded "$worker_dir"; then
+                log_error "Task $task_id hit max resume attempts — converting RETRY to ABORT"
+                _resume_decide_handle_abort "$worker_dir" "$task_id" \
+                    "Max resume attempts exceeded (RETRY at step ${resume_step_id:-unknown})"
+                return 0
+            fi
+
             log "Resume-decide for $task_id: RETRY from '$resume_step_id'"
             ;;
         COMPLETE)

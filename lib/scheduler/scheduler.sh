@@ -772,8 +772,22 @@ get_workers_needing_decide() {
         # Skip plan workers (read-only planning sessions)
         [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
 
-        # Must have workspace and prd.md (setup was completed)
-        [ -d "$worker_dir/workspace" ] || continue
+        # Must have workspace — if deleted after setup, mark terminal instead of silently skipping
+        if [ ! -d "$worker_dir/workspace" ]; then
+            if [ -f "$worker_dir/prd.md" ] && ! resume_state_is_terminal "$worker_dir"; then
+                local _wdel_tid
+                _wdel_tid=$(get_task_id_from_worker "$(basename "$worker_dir")")
+                echo "$(epoch_now)" > "$worker_dir/stop-reason-workspace-deleted"
+                resume_state_increment "$worker_dir" "ABORT" "" "" "Workspace deleted — auto-abort"
+                resume_state_set_terminal "$worker_dir" "Workspace deleted during execution"
+                update_kanban_failed "$RALPH_DIR/kanban.md" "$_wdel_tid" || true
+                github_issue_sync_task_status "$RALPH_DIR" "$_wdel_tid" "*" || true
+                log_error "Worker $(basename "$worker_dir") workspace deleted — marked terminal"
+                activity_log "worker.workspace_deleted" "$(basename "$worker_dir")" "$_wdel_tid"
+                scheduler_mark_event
+            fi
+            continue
+        fi
         [ -f "$worker_dir/prd.md" ] || continue
 
         # Skip if still running
@@ -785,8 +799,20 @@ get_workers_needing_decide() {
         # Skip workers in cooldown (DEFER)
         resume_state_is_cooling "$worker_dir" && continue
 
-        # Skip workers that exceeded max resume attempts
-        resume_state_max_exceeded "$worker_dir" && continue
+        # Skip workers that exceeded max resume attempts — mark terminal
+        if resume_state_max_exceeded "$worker_dir"; then
+            if ! resume_state_is_terminal "$worker_dir"; then
+                local _max_tid
+                _max_tid=$(get_task_id_from_worker "$(basename "$worker_dir")")
+                resume_state_set_terminal "$worker_dir" "Max resume attempts exceeded"
+                update_kanban_failed "$RALPH_DIR/kanban.md" "$_max_tid" || true
+                github_issue_sync_task_status "$RALPH_DIR" "$_max_tid" "*" || true
+                log_error "Worker $(basename "$worker_dir") max resume attempts exceeded — marked terminal"
+                activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$_max_tid" "reason=max_attempts"
+                scheduler_mark_event
+            fi
+            continue
+        fi
 
         # Skip if decision already exists (not yet consumed by spawner)
         if [ -f "$worker_dir/resume-decision.json" ]; then
@@ -846,6 +872,18 @@ get_workers_with_retry_decision() {
 
         # Skip if worker is running
         is_worker_running "$worker_dir" && continue
+
+        # Skip terminal workers (stale decision file from before terminal was set)
+        if resume_state_is_terminal "$worker_dir"; then
+            rm -f "$worker_dir/resume-decision.json"
+            continue
+        fi
+
+        # Skip max-exceeded workers (decision written before max check caught up)
+        if resume_state_max_exceeded "$worker_dir"; then
+            rm -f "$worker_dir/resume-decision.json"
+            continue
+        fi
 
         # Read decision
         local decision
