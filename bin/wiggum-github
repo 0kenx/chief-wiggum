@@ -8,6 +8,7 @@
 #   wiggum github sync up <TASK-ID|all>   Create GitHub issues for untracked tasks
 #   wiggum github plan sync [TASK-ID|all] Sync plan files with GitHub issue comments
 #   wiggum github status                  Show sync state summary
+#   wiggum github init                    Create required GitHub labels and configure sync
 #   wiggum github --dry-run               Show planned changes without writing
 set -euo pipefail
 
@@ -28,6 +29,7 @@ Usage: wiggum github [command] [options]
 
 Commands:
   (none)                       Full sync cycle (down + up)
+  init                         Create required GitHub labels and configure sync
   down                         Pull GitHub issues to local kanban only
   up                           Push local kanban status to GitHub only
   sync up <TASK-ID|all> [-y]   Create GitHub issues for untracked kanban tasks
@@ -41,6 +43,8 @@ Options:
   -h, --help             Show this help
 
 Examples:
+  wiggum github init                         # Set up labels and configuration
+  wiggum github init --dry-run               # Preview labels without creating
   wiggum github                              # Full sync
   wiggum github down                         # Import new issues
   wiggum github up                           # Push status changes
@@ -67,6 +71,165 @@ Environment:
   WIGGUM_GITHUB_LABEL_FILTER=wiggum    Gate label (default: wiggum)
 
 EOF
+}
+
+# =============================================================================
+# GitHub Init - Create labels and configure sync
+# =============================================================================
+
+# Label definitions: name|color|description
+GITHUB_LABELS=(
+    # Gate label (required for sync)
+    "wiggum|0052cc|Chief Wiggum managed task"
+    # Status labels
+    "wiggum:in-progress|fbca04|Task is being worked on"
+    "wiggum:pending-approval|d4c5f9|Task awaiting review/approval"
+    "wiggum:completed|0e8a16|Task completed successfully"
+    "wiggum:failed|d93f0b|Task failed"
+    "wiggum:not-planned|c0c0c0|Task will not be implemented"
+    # Priority labels
+    "priority:critical|b60205|Highest priority - immediate attention"
+    "priority:high|d93f0b|High priority"
+    "priority:medium|fbca04|Medium priority (default)"
+    "priority:low|c2e0c6|Low priority"
+)
+
+# Create a single GitHub label
+#
+# Args:
+#   label_spec - "name|color|description"
+#   dry_run    - "true" to only print what would be done
+#
+# Returns: 0 on success or if label exists, 1 on error
+github_create_label() {
+    local label_spec="$1"
+    local dry_run="${2:-false}"
+
+    local name color description
+    IFS='|' read -r name color description <<< "$label_spec"
+
+    if [ "$dry_run" = "true" ]; then
+        echo "  [dry-run] Would create label: $name (#$color)"
+        return 0
+    fi
+
+    # Check if label exists
+    local exit_code=0
+    if gh label list --search "$name" --json name -q ".[].name" 2>/dev/null | grep -qx "$name"; then
+        echo "  Label exists: $name"
+        return 0
+    fi
+
+    # Create the label
+    gh label create "$name" --color "$color" --description "$description" 2>/dev/null || exit_code=$?
+
+    if [ "$exit_code" -eq 0 ]; then
+        echo "  Created label: $name (#$color)"
+    else
+        echo "  Failed to create label: $name (exit: $exit_code)" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Initialize GitHub integration for Chief Wiggum
+#
+# Creates required labels and optionally configures sync settings.
+#
+# Args:
+#   dry_run - "true" to only show what would be done
+#
+# Returns: 0 on success, 1 on error
+github_init() {
+    local dry_run="${1:-false}"
+
+    echo "Chief Wiggum GitHub Integration Setup"
+    echo "======================================"
+    echo ""
+
+    # Check prerequisites
+    echo "Checking prerequisites..."
+
+    # 1. Check gh CLI
+    if ! command -v gh &>/dev/null; then
+        echo "  ERROR: GitHub CLI (gh) not found."
+        echo "  Install from: https://cli.github.com/"
+        return 1
+    fi
+    echo "  gh CLI: found"
+
+    # 2. Check gh authentication
+    if ! gh auth status &>/dev/null; then
+        echo "  ERROR: Not authenticated with GitHub."
+        echo "  Run: gh auth login"
+        return 1
+    fi
+    echo "  gh auth: authenticated"
+
+    # 3. Check if in a GitHub repo
+    local repo_info
+    repo_info=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || true
+    if [ -z "$repo_info" ]; then
+        echo "  ERROR: Not in a GitHub repository."
+        echo "  Ensure this directory is a git repo with a GitHub remote."
+        return 1
+    fi
+    echo "  Repository: $repo_info"
+
+    # 4. Check .ralph directory
+    if [ ! -d "$RALPH_DIR" ]; then
+        echo ""
+        echo "  WARNING: .ralph directory not found."
+        echo "  Run 'wiggum init' first to create project structure."
+        echo ""
+    fi
+
+    echo ""
+    echo "Creating labels..."
+
+    # Create all labels
+    local label_spec
+    local errors=0
+    for label_spec in "${GITHUB_LABELS[@]}"; do
+        github_create_label "$label_spec" "$dry_run" || ((++errors)) || true
+    done
+
+    if [ "$errors" -gt 0 ]; then
+        echo ""
+        echo "WARNING: $errors label(s) failed to create."
+    fi
+
+    echo ""
+
+    if [ "$dry_run" = "true" ]; then
+        echo "[dry-run] No changes made."
+        return 0
+    fi
+
+    # Offer to configure sync
+    echo "Labels created successfully!"
+    echo ""
+    echo "Next steps to enable GitHub sync:"
+    echo ""
+    echo "  1. Get your GitHub user ID:"
+    echo "     gh api user --jq '.id'"
+    echo ""
+    echo "  2. Add to .ralph/config.json:"
+    echo '     {'
+    echo '       "github": {'
+    echo '         "issue_sync": {'
+    echo '           "enabled": true,'
+    echo '           "allowed_user_ids": [YOUR_USER_ID]'
+    echo '         }'
+    echo '       }'
+    echo '     }'
+    echo ""
+    echo "  3. Add the 'wiggum' label to issues you want Chief Wiggum to manage."
+    echo ""
+    echo "  4. Run 'wiggum github down' to import labeled issues."
+    echo ""
+
+    return 0
 }
 
 main() {
@@ -145,7 +308,7 @@ main() {
                     exit $EXIT_USAGE
                 fi
                 ;;
-            down|up|status)
+            down|up|status|init)
                 command="$1"
                 shift
                 ;;
@@ -156,6 +319,12 @@ main() {
                 ;;
         esac
     done
+
+    # Init command has special handling (doesn't require existing config)
+    if [ "$command" = "init" ]; then
+        github_init "$dry_run"
+        exit $?
+    fi
 
     # Verify ralph directory
     if [ ! -d "$RALPH_DIR" ]; then

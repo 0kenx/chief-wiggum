@@ -18,6 +18,7 @@ source "$WIGGUM_HOME/lib/git/pr-comments.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
+source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 source "$WIGGUM_HOME/lib/github/pr-labels.sh"
@@ -526,6 +527,17 @@ cmd_task_resolve() {
         return 1
     fi
 
+    # Check if worker is already running (prevents race with orchestrator)
+    if is_worker_running "$worker_dir"; then
+        local running_pid
+        running_pid=$(get_worker_pid "$worker_dir" 2>/dev/null) || running_pid="unknown"
+        log_error "Worker is already running (PID: $running_pid)"
+        log_error "Stop the worker first:"
+        log_error "  wiggum worker stop $pattern"
+        log_error "  wiggum pr resolve $pattern"
+        return 1
+    fi
+
     # Verify workspace is a functional git repository (catches broken worktrees)
     if ! git -C "$workspace" rev-parse HEAD &>/dev/null; then
         log_error "Workspace is not a functional git repository (broken worktree?): $workspace"
@@ -598,6 +610,20 @@ cmd_task_resolve() {
 
     log "Starting conflict resolver for $(basename "$worker_dir")"
     log "Progress: $worker_dir/logs/resolve-*.log"
+
+    # Update pipeline-config.json to show current agent (clears stale pipeline state)
+    # This ensures TUI and status displays show the correct agent
+    jq -n \
+        --arg name "standalone" \
+        --arg agent "engineering.git-conflict-resolver" \
+        --arg step_id "resolve" \
+        --argjson idx 0 \
+        '{
+            pipeline: { name: $name, source: "wiggum-pr-resolve" },
+            runtime: { plan_file: "", resume_instructions: "" },
+            current: { step_idx: $idx, step_id: $step_id },
+            steps: { "resolve": { agent: $agent, config: {} } }
+        }' > "$worker_dir/pipeline-config.json"
 
     # Run agent (conversation logs go to logs/resolve-*.log)
     run_agent "engineering.git-conflict-resolver" "$worker_dir" "$(pwd)" 0 \
