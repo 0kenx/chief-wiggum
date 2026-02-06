@@ -23,13 +23,32 @@ from wiggum_orchestrator.worker_pool import WorkerPool
 
 # Graceful shutdown event
 _exit_event = threading.Event()
+_scheduler: ServiceScheduler | None = None
+_signal_count = 0
 
 
 def _handle_signal(signum: int, frame: object) -> None:
-    """Signal handler for SIGINT/SIGTERM."""
+    """Signal handler for SIGINT/SIGTERM with escalation.
+
+    1st signal: graceful shutdown (interrupt current subprocess, exit loop).
+    2nd signal: force terminate all subprocesses.
+    3rd signal: immediate exit via os._exit().
+    """
+    global _signal_count
     sig_name = signal.Signals(signum).name
-    log.log(f"Received {sig_name}, shutting down...")
-    _exit_event.set()
+    _signal_count += 1
+
+    if _signal_count == 1:
+        log.log(f"Received {sig_name}, shutting down...")
+        _exit_event.set()
+        if _scheduler is not None:
+            _scheduler.interrupt()
+    elif _signal_count == 2:
+        log.log(f"Received {sig_name} again, forcing shutdown...")
+        if _scheduler is not None:
+            _scheduler.terminate_all()
+    else:
+        os._exit(128 + signum)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -266,6 +285,9 @@ def run(args: argparse.Namespace) -> int:
     cb = CircuitBreaker(state)
     scheduler = ServiceScheduler(registry, state, executor, cb)
 
+    global _scheduler
+    _scheduler = scheduler
+
     # Worker pool (for tracking)
     pool = WorkerPool(ralph_dir)
     pool.restore()
@@ -321,6 +343,7 @@ def run(args: argparse.Namespace) -> int:
     # Shutdown phase
     log.log("Running shutdown phase...")
     scheduler.run_phase("shutdown")
+    _scheduler = None
     state.save()
     pool.save()
     _release_lock(pid_file)

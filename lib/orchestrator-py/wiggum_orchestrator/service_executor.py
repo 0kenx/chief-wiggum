@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 
 from wiggum_orchestrator import logging_bridge as log
 from wiggum_orchestrator.config import ServiceConfig
@@ -30,6 +31,8 @@ class ServiceExecutor:
         )
         self._env = self._build_env(wiggum_home, ralph_dir, project_dir,
                                      env_overrides)
+        self._proc_lock = threading.Lock()
+        self._current_proc: subprocess.Popen | None = None
 
     @staticmethod
     def _build_env(
@@ -53,6 +56,16 @@ class ServiceExecutor:
             env.update(overrides)
         return env
 
+    def interrupt(self) -> None:
+        """Terminate the currently running foreground subprocess, if any."""
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+
     def run_phase(self, phase: str, functions: list[str]) -> bool:
         """Run all phase functions in a single bash process.
 
@@ -69,23 +82,29 @@ class ServiceExecutor:
         cmd = ["bash", self._bridge, "phase", phase] + functions
         log.log_debug(f"Bridge phase {phase}: {' '.join(functions)}")
 
+        proc = subprocess.Popen(
+            cmd,
+            env=self._env,
+            cwd=self._env.get("PROJECT_DIR"),
+        )
+        with self._proc_lock:
+            self._current_proc = proc
         try:
-            result = subprocess.run(
-                cmd,
-                env=self._env,
-                cwd=self._env.get("PROJECT_DIR"),
-                capture_output=False,
-                timeout=600,
-            )
-            if result.returncode != 0:
-                log.log_error(
-                    f"Bridge phase {phase} failed (exit {result.returncode})",
-                )
-                return False
-            return True
+            proc.wait(timeout=600)
         except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
             log.log_error(f"Bridge phase {phase} timed out after 600s")
             return False
+        finally:
+            with self._proc_lock:
+                self._current_proc = None
+        if proc.returncode != 0:
+            log.log_error(
+                f"Bridge phase {phase} failed (exit {proc.returncode})",
+            )
+            return False
+        return True
 
     def run_function(
         self,
@@ -111,18 +130,25 @@ class ServiceExecutor:
             cmd.extend(extra_args)
 
         log.log_debug(f"Bridge function: {func}")
+        timeout = svc.timeout or 600
+        proc = subprocess.Popen(
+            cmd,
+            env=self._env,
+            cwd=self._env.get("PROJECT_DIR"),
+        )
+        with self._proc_lock:
+            self._current_proc = proc
         try:
-            result = subprocess.run(
-                cmd,
-                env=self._env,
-                cwd=self._env.get("PROJECT_DIR"),
-                capture_output=False,
-                timeout=svc.timeout or 600,
-            )
-            return result.returncode
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            log.log_warn(f"Service {svc.id} timed out after {svc.timeout or 600}s")
+            proc.kill()
+            proc.wait()
+            log.log_warn(f"Service {svc.id} timed out after {timeout}s")
             return 124  # GNU timeout exit code
+        finally:
+            with self._proc_lock:
+                self._current_proc = None
+        return proc.returncode
 
     def run_command(self, svc: ServiceConfig) -> int:
         """Run a command-type service.
@@ -139,18 +165,25 @@ class ServiceExecutor:
             return 1
 
         log.log_debug(f"Bridge command: {cmd_str}")
+        timeout = svc.timeout or 600
+        proc = subprocess.Popen(
+            ["bash", "-c", cmd_str],
+            env=self._env,
+            cwd=self._env.get("PROJECT_DIR"),
+        )
+        with self._proc_lock:
+            self._current_proc = proc
         try:
-            result = subprocess.run(
-                ["bash", "-c", cmd_str],
-                env=self._env,
-                cwd=self._env.get("PROJECT_DIR"),
-                capture_output=False,
-                timeout=svc.timeout or 600,
-            )
-            return result.returncode
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            log.log_warn(f"Service {svc.id} timed out after {svc.timeout or 600}s")
+            proc.kill()
+            proc.wait()
+            log.log_warn(f"Service {svc.id} timed out after {timeout}s")
             return 124  # GNU timeout exit code
+        finally:
+            with self._proc_lock:
+                self._current_proc = None
+        return proc.returncode
 
     def run_function_background(
         self,

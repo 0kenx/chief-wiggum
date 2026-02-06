@@ -255,6 +255,19 @@ class ServiceScheduler:
         for svc_id in completed:
             del self._background_procs[svc_id]
 
+    def interrupt(self) -> None:
+        """Interrupt the current foreground subprocess."""
+        self._executor.interrupt()
+
+    def terminate_all(self) -> None:
+        """Terminate all running processes (foreground + background)."""
+        self._executor.interrupt()
+        for svc_id, (proc, _svc) in list(self._background_procs.items()):
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+
     def _conditions_met(self, svc: ServiceConfig) -> bool:
         """Check service conditions (env vars, file existence)."""
         if svc.condition is None:
