@@ -1,0 +1,24 @@
+{
+  "name": "failure-recovery",
+  "description": "Recovery pipeline for failed tasks: analyze failure, post to GitHub, cleanup workspace",
+  "steps": [
+    {
+      "id": "failure-summarize",
+      "agent": "system.failure-summarizer",
+      "max": 1,
+      "readonly": true,
+      "on_result": {
+        "FAIL": { "jump": "abort" }
+      }
+    },
+    {
+      "id": "failure-resolve",
+      "agent": "system.failure-resolver",
+      "max": 2,
+      "commit_after": true,
+      "on_result": {
+        "FIX": { "jump": "self" }
+      }
+    }
+  ]
+}

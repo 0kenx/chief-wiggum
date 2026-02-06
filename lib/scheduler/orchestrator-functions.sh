@@ -963,6 +963,42 @@ orch_github_plan_sync() {
 }
 
 # =============================================================================
+# Failure Recovery
+# =============================================================================
+
+# Run failure recovery for failed workers
+#
+# Scans for workers with [*] status in kanban that are eligible for recovery.
+# Runs the failure-recovery pipeline to analyze and cleanup, then triggers
+# normal resume flow.
+#
+# Globals:
+#   RALPH_DIR   - Required
+#   PROJECT_DIR - Required
+#   WIGGUM_HOME - Required
+#
+# Returns: 0 on success, 1 on failure
+orch_failure_recovery() {
+    local ralph_dir="${RALPH_DIR:-}"
+    local project_dir="${PROJECT_DIR:-}"
+
+    [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
+    [ -n "$project_dir" ] || { log_error "PROJECT_DIR not set"; return 1; }
+
+    # Delegate to the failure-recovery CLI with --once flag
+    local recovery_output recovery_exit=0
+    recovery_output=$("$WIGGUM_HOME/bin/wiggum-failure-recovery" run 2>&1) || recovery_exit=$?
+
+    if [ $recovery_exit -ne 0 ]; then
+        # Log but don't fail the service - recovery is best-effort
+        log_debug "Failure recovery run completed with exit code $recovery_exit"
+        echo "$recovery_output" | sed 's/^/  [recovery] /' | head -20
+    fi
+
+    return 0
+}
+
+# =============================================================================
 # Worker Spawn and Lifecycle Functions
 #
 # Extracted from wiggum-run to keep the entry point minimal.

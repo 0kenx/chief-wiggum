@@ -115,6 +115,11 @@ svc_orch_github_plan_sync() {
     orch_github_plan_sync "$@"
 }
 
+# Run failure recovery for failed workers
+svc_orch_failure_recovery() {
+    orch_failure_recovery "$@"
+}
+
 # Rotate oversized global log files
 svc_orch_log_rotation() {
     log_rotation_check_all

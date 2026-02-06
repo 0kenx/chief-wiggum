@@ -360,6 +360,29 @@
       }
     },
     {
+      "id": "failure-recovery",
+      "description": "Run recovery pipeline for failed workers and trigger resume",
+      "phase": "periodic",
+      "order": 75,
+      "schedule": {
+        "type": "interval",
+        "interval": 120,
+        "jitter": 15,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_orch_failure_recovery"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      },
+      "condition": {
+        "env_not_equals": { "WIGGUM_RUN_MODE": "merge-only" }
+      }
+    },
+    {
       "id": "memory-extract",
       "description": "Dispatch pending workers for memory analysis (writes context file)",
       "phase": "periodic",

@@ -397,6 +397,18 @@ agent_run() {
     local decision="" resume_pipeline="" resume_step_id="" reason=""
     _parse_resume_decision "$raw_decision" "$instructions"
 
+    # After failure-recovery pipeline completes, restore the original pipeline
+    # The failure-recovery pipeline is a meta-pipeline for workspace recovery only
+    if [ "$resume_pipeline" = "failure-recovery" ]; then
+        local orig_pipeline="default"
+        if [ -f "$worker_dir/original-pipeline.txt" ]; then
+            orig_pipeline=$(cat "$worker_dir/original-pipeline.txt")
+        fi
+        resume_pipeline="$orig_pipeline"
+        raw_decision="RETRY:${orig_pipeline}:${resume_step_id}"
+        reason="Resume from $resume_step_id in pipeline $orig_pipeline (after failure recovery)"
+    fi
+
     # Determine workspace recovery information (for RETRY decisions)
     local last_checkpoint=""
     local recovery_possible="false"

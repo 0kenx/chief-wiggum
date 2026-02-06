@@ -53,6 +53,7 @@ Cleanup & Debug:
 Integration:
   github <action>     Sync GitHub issues with kanban
   service <action>    Manage orchestrator services
+  failure-recovery    Recover failed workers
 
 Global Flags:
   -v/--verbose  -vv  -vvv  -q/--quiet
@@ -111,6 +112,9 @@ main() {
             ;;
         service)
             exec "$WIGGUM_HOME/bin/wiggum-service" "$@"
+            ;;
+        failure-recovery)
+            exec "$WIGGUM_HOME/bin/wiggum-failure-recovery" "$@"
             ;;
 
         # New groups

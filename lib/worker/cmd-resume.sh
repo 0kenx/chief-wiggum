@@ -644,4 +644,3 @@ _handle_defer() {
 
     exit $EXIT_RESUME_DEFER
 }
-

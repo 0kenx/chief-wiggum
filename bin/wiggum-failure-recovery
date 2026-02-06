@@ -1,0 +1,414 @@
+#!/usr/bin/env bash
+# wiggum-failure-recovery - Monitor and recover failed tasks
+#
+# This service finds failed workers ([*] in kanban) and runs the failure-recovery
+# pipeline to analyze, cleanup, and prepare them for retry. After recovery completes,
+# triggers normal resume flow via `wiggum worker resume`.
+#
+# Flow:
+#   [*] Failed task → failure-recovery pipeline → wiggum worker resume → resume-decide
+set -euo pipefail
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+source "$WIGGUM_HOME/lib/core/bin-common.sh"
+source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/file-lock.sh"
+source "$WIGGUM_HOME/lib/core/safe-path.sh"
+source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
+source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
+source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+source "$WIGGUM_HOME/lib/github/issue-writer.sh"
+source "$WIGGUM_HOME/lib/github/issue-state.sh"
+
+# Recovery marker file inside worker directory
+RECOVERY_MARKER="recovery-attempted"
+
+show_help() {
+    cat << EOF
+wiggum failure-recovery - Monitor and recover failed tasks
+
+Usage: wiggum failure-recovery [options] [command]
+
+Commands:
+  list                  List failed workers eligible for recovery
+  run [task-id]         Run recovery on a specific task or all eligible
+  status [task-id]      Show recovery status for a task
+
+Options:
+  -v, --verbose         Verbose output
+  -vv                   Debug output
+  --dry-run             Show what would be done without doing it
+  -h, --help            Show this help message
+
+Examples:
+  wiggum failure-recovery list          # List failed workers
+  wiggum failure-recovery run           # Recover all failed workers
+  wiggum failure-recovery run TASK-001  # Recover specific task
+
+EOF
+}
+
+log() {
+    echo "[$(date -Iseconds)] $*"
+}
+
+# Find failed workers eligible for recovery
+#
+# A worker is eligible if:
+#   - Task is marked [*] in kanban
+#   - Worker directory exists with workspace
+#   - No recovery-attempted marker (or recovery failed previously)
+#   - Worker is not currently running
+#
+# Returns: Lines of "worker_dir task_id" for each eligible worker
+find_failed_workers() {
+    local ralph_dir="$1"
+    local kanban_file="$ralph_dir/kanban.md"
+
+    [ -f "$kanban_file" ] || return 0
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    # Get failed task IDs from kanban
+    local failed_tasks
+    failed_tasks=$(get_failed_tasks "$kanban_file")
+    [ -n "$failed_tasks" ] || return 0
+
+    while IFS= read -r task_id; do
+        [ -n "$task_id" ] || continue
+
+        # Find worker directory for this task
+        local worker_dir=""
+        for dir in "$ralph_dir/workers"/worker-${task_id}-*; do
+            [ -d "$dir" ] && worker_dir="$dir" && break
+        done
+        [ -n "$worker_dir" ] || continue
+
+        # Must have workspace
+        [ -d "$worker_dir/workspace" ] || continue
+
+        # Skip if currently running
+        is_worker_running "$worker_dir" && continue
+
+        # Skip if recovery already in progress (recovery pipeline running)
+        [ -f "$worker_dir/recovery-in-progress" ] && continue
+
+        # Check recovery marker - if present, check if it succeeded
+        if [ -f "$worker_dir/$RECOVERY_MARKER" ]; then
+            local recovery_status
+            recovery_status=$(cat "$worker_dir/$RECOVERY_MARKER" 2>/dev/null)
+            # If recovery succeeded (PASS), task should be picked up by normal resume
+            # If recovery failed (FAIL), allow retry
+            [ "$recovery_status" = "PASS" ] && continue
+        fi
+
+        echo "$worker_dir $task_id"
+    done <<< "$failed_tasks"
+}
+
+# Run recovery pipeline on a worker
+#
+# Args:
+#   worker_dir  - Worker directory path
+#   task_id     - Task ID
+#   dry_run     - "true" for dry run
+#
+# Returns: 0 on success, 1 on failure
+run_recovery_pipeline() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local dry_run="${3:-false}"
+
+    if [ "$dry_run" = "true" ]; then
+        log "[dry-run] Would run recovery pipeline on $task_id"
+        return 0
+    fi
+
+    log "Starting recovery pipeline for $task_id"
+
+    # Mark recovery in progress
+    epoch_now > "$worker_dir/recovery-in-progress"
+
+    # Post to GitHub issue that recovery is starting
+    _post_recovery_starting "$task_id"
+
+    # Save original pipeline name before switching to failure-recovery
+    # This allows resume-decide to restore the correct pipeline after recovery
+    if [ -f "$worker_dir/pipeline-config.json" ]; then
+        local orig_pipeline
+        orig_pipeline=$(jq -r '.pipeline.name // "default"' "$worker_dir/pipeline-config.json" 2>/dev/null) || true
+        orig_pipeline="${orig_pipeline:-default}"
+        echo "$orig_pipeline" > "$worker_dir/original-pipeline.txt"
+    fi
+
+    # Set pipeline to failure-recovery
+    export WIGGUM_PIPELINE="failure-recovery"
+
+    # Run the recovery pipeline using task-worker
+    run_agent "system.task-worker" "$worker_dir" "$PROJECT_DIR" 30 3 50 \
+        "failure-summarize" "" || true
+
+    # Remove in-progress marker
+    rm -f "$worker_dir/recovery-in-progress"
+
+    # Check result
+    local recovery_result="FAIL"
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-failure-resolve-result.json" 2>/dev/null | sort -r | head -1)
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        recovery_result=$(jq -r '.outputs.gate_result // "FAIL"' "$result_file" 2>/dev/null)
+    fi
+
+    # Write recovery marker
+    echo "$recovery_result" > "$worker_dir/$RECOVERY_MARKER"
+
+    if [ "$recovery_result" = "PASS" ]; then
+        log "Recovery pipeline completed successfully for $task_id"
+
+        # Post failure summary to GitHub if available
+        _post_failure_summary_to_github "$worker_dir" "$task_id"
+
+        # Trigger normal resume flow
+        log "Triggering resume for $task_id..."
+        "$WIGGUM_HOME/bin/wiggum-worker" resume "$task_id" || {
+            log "Resume failed for $task_id"
+            return 1
+        }
+        return 0
+    else
+        log "Recovery pipeline returned $recovery_result for $task_id"
+        return 1
+    fi
+}
+
+# Post recovery starting comment to GitHub
+_post_recovery_starting() {
+    local task_id="$1"
+
+    # Check if sync state exists
+    [ -f "$RALPH_DIR/github-sync-state.json" ] || return 0
+
+    local entry
+    entry=$(jq -r --arg tid "$task_id" '.issues[$tid] // "null"' "$RALPH_DIR/github-sync-state.json" 2>/dev/null)
+    [ "$entry" != "null" ] || return 0
+
+    local issue_number
+    issue_number=$(echo "$entry" | jq -r '.issue_number')
+    [ -n "$issue_number" ] && [ "$issue_number" != "null" ] || return 0
+
+    local body="## Recovery Started
+
+The failure recovery pipeline is analyzing this task to prepare for retry.
+
+_Generated by Chief Wiggum failure recovery service_"
+
+    github_issue_post_comment "$issue_number" "$body" 2>/dev/null || true
+}
+
+# Post failure summary to GitHub
+_post_failure_summary_to_github() {
+    local worker_dir="$1"
+    local task_id="$2"
+
+    # Find the failure-summarizer report
+    local report_file
+    report_file=$(find "$worker_dir/reports" -name "*failure-summarizer*" -o -name "*analysis*" 2>/dev/null | sort -r | head -1)
+    [ -n "$report_file" ] && [ -f "$report_file" ] || return 0
+
+    local summary_content
+    summary_content=$(cat "$report_file")
+
+    github_issue_post_failure_summary "$RALPH_DIR" "$task_id" "$summary_content" 2>/dev/null || true
+}
+
+# List command
+do_list() {
+    local failed_workers
+    failed_workers=$(find_failed_workers "$RALPH_DIR")
+
+    if [ -z "$failed_workers" ]; then
+        echo "No failed workers eligible for recovery."
+        return 0
+    fi
+
+    echo "Failed workers eligible for recovery:"
+    echo ""
+    while read -r worker_dir task_id; do
+        local recovery_status="not attempted"
+        if [ -f "$worker_dir/$RECOVERY_MARKER" ]; then
+            recovery_status="$(cat "$worker_dir/$RECOVERY_MARKER")"
+        fi
+        echo "  $task_id"
+        echo "    Worker: $(basename "$worker_dir")"
+        echo "    Recovery: $recovery_status"
+        echo ""
+    done <<< "$failed_workers"
+}
+
+# Run command
+do_run() {
+    local target_task="${1:-}"
+    local dry_run="${2:-false}"
+
+    if [ -n "$target_task" ]; then
+        # Run recovery for specific task
+        local worker_dir=""
+        for dir in "$RALPH_DIR/workers"/worker-${target_task}-*; do
+            [ -d "$dir" ] && worker_dir="$dir" && break
+        done
+
+        if [ -z "$worker_dir" ]; then
+            echo "No worker found for task $target_task"
+            return 1
+        fi
+
+        run_recovery_pipeline "$worker_dir" "$target_task" "$dry_run"
+        return $?
+    fi
+
+    # Run recovery for all eligible workers
+    local failed_workers
+    failed_workers=$(find_failed_workers "$RALPH_DIR")
+
+    if [ -z "$failed_workers" ]; then
+        echo "No failed workers eligible for recovery."
+        return 0
+    fi
+
+    local count=0
+    local success=0
+    local failed=0
+
+    while read -r worker_dir task_id; do
+        [ -n "$worker_dir" ] || continue
+        ((++count))
+
+        if run_recovery_pipeline "$worker_dir" "$task_id" "$dry_run"; then
+            ((++success))
+        else
+            ((++failed))
+        fi
+    done <<< "$failed_workers"
+
+    echo ""
+    log "Recovery complete: $success succeeded, $failed failed out of $count total"
+}
+
+# Status command
+do_status() {
+    local target_task="${1:-}"
+
+    if [ -z "$target_task" ]; then
+        echo "Usage: wiggum failure-recovery status <task-id>"
+        return 1
+    fi
+
+    local worker_dir=""
+    for dir in "$RALPH_DIR/workers"/worker-${target_task}-*; do
+        [ -d "$dir" ] && worker_dir="$dir" && break
+    done
+
+    if [ -z "$worker_dir" ]; then
+        echo "No worker found for task $target_task"
+        return 1
+    fi
+
+    local task_status
+    task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$target_task")
+
+    echo "Task: $target_task"
+    echo "Kanban status: [$task_status]"
+    echo "Worker: $(basename "$worker_dir")"
+    echo ""
+
+    if [ -f "$worker_dir/recovery-in-progress" ]; then
+        local started
+        started=$(cat "$worker_dir/recovery-in-progress")
+        echo "Recovery: IN PROGRESS (started: $(iso_from_epoch "$started"))"
+    elif [ -f "$worker_dir/$RECOVERY_MARKER" ]; then
+        local result
+        result=$(cat "$worker_dir/$RECOVERY_MARKER")
+        echo "Recovery: $result"
+
+        # Show latest report
+        local report_file
+        report_file=$(find "$worker_dir/reports" -name "*failure-summarizer*" -o -name "*analysis*" 2>/dev/null | sort -r | head -1)
+        if [ -n "$report_file" ] && [ -f "$report_file" ]; then
+            echo ""
+            echo "Latest analysis:"
+            head -50 "$report_file"
+        fi
+    else
+        echo "Recovery: not attempted"
+    fi
+}
+
+# Parse arguments
+parse_verbose_flags "$@"
+set -- "${WIGGUM_REMAINING_ARGS[@]}"
+
+DRY_RUN=false
+COMMAND=""
+TARGET=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        list|run|status)
+            COMMAND="$1"
+            shift
+            [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]] && TARGET="$1" && shift
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            if [ -z "$COMMAND" ]; then
+                COMMAND="$1"
+            elif [ -z "$TARGET" ]; then
+                TARGET="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Default command
+[ -z "$COMMAND" ] && COMMAND="list"
+
+# Validate ralph directory
+[ -d "$RALPH_DIR" ] || {
+    echo "ERROR: .ralph/ directory not found"
+    exit 1
+}
+
+# Initialize logging
+mkdir -p "$RALPH_DIR/logs"
+export LOG_FILE="$RALPH_DIR/logs/failure-recovery.log"
+
+# Execute command
+case "$COMMAND" in
+    list)
+        do_list
+        ;;
+    run)
+        do_run "$TARGET" "$DRY_RUN"
+        ;;
+    status)
+        do_status "$TARGET"
+        ;;
+    *)
+        echo "Unknown command: $COMMAND"
+        show_help
+        exit 1
+        ;;
+esac

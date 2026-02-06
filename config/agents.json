@@ -181,6 +181,25 @@
         "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
       }
     },
+    "system.failure-summarizer": {
+      "max_iterations": 1,
+      "max_turns": 40,
+      "timeout_seconds": 600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
+    },
+    "system.failure-resolver": {
+      "max_iterations": 3,
+      "max_turns": 50,
+      "timeout_seconds": 900,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX": { "status": "partial", "exit_code": 0, "default_jump": "self" }
+      }
+    },
     "system.codebase-health": {
       "max_iterations": 1,
       "max_turns": 40,
