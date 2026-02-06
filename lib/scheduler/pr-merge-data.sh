@@ -488,6 +488,10 @@ pr_merge_gather_all() {
         task_id=$(basename "$worker_dir" | sed 's/worker-\([A-Za-z]*-[0-9]*\)-.*/\1/')
 
         # Check if task is pending approval
+        # Validate task_id format before using in grep -E to prevent regex injection
+        if ! [[ "$task_id" =~ ^[A-Za-z]{2,10}-[0-9]{1,4}$ ]]; then
+            continue
+        fi
         local task_status
         task_status=$(grep -E "^\- \[.\] \*\*\[$task_id\]" "$ralph_dir/kanban.md" 2>/dev/null | \
             sed 's/^- \[\(.\)\].*/\1/' || echo "")

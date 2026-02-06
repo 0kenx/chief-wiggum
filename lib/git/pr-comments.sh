@@ -314,6 +314,13 @@ find_worker_by_task_id() {
         return
     fi
 
+    # Validate task_pattern to prevent glob injection in find -name
+    # Only allow alphanumeric, hyphens, and underscores (task ID characters)
+    if [[ "$task_pattern" =~ [^A-Za-z0-9_-] ]]; then
+        log_warn "find_worker_by_task_id: rejecting pattern with invalid characters: $task_pattern"
+        return
+    fi
+
     local worker_dir
 
     # Try exact prefix match first: worker-PIPELINE-001-*
@@ -381,7 +388,7 @@ _update_sync_state() {
     local sync_state_file="$3"
 
     local temp_file
-    temp_file=$(mktemp)
+    temp_file=$(mktemp "${sync_state_file}.XXXXXX")
 
     jq --arg pr "$pr_number" --arg ids "$comment_ids" \
         '.[$pr] = $ids' "$sync_state_file" > "$temp_file" 2>/dev/null

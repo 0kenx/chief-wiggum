@@ -1206,7 +1206,7 @@ _update_current_step() {
 
     # Atomic update using temp file
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "${config_file}.XXXXXX")
     jq --argjson idx "$idx" --arg id "$step_id" \
         '.current = {step_idx: $idx, step_id: $id}' \
         "$config_file" > "$tmp_file" && mv "$tmp_file" "$config_file"

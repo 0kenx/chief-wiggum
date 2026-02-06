@@ -341,7 +341,7 @@ checkpoint_update_supervisor() {
     fi
 
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "${checkpoint_file}.XXXXXX")
 
     jq --arg decision "$decision" --arg guidance "$guidance" \
         '.supervisor_decision = $decision | .supervisor_guidance = $guidance' \

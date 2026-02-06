@@ -187,6 +187,11 @@ do_start() {
             log "Worker bootstrap completed successfully"
         ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
+        # Clean up exported worker variables from parent environment
+        unset _WORKER_WIGGUM_HOME _WORKER_DIR _WORKER_AGENT_TYPE _WORKER_PROJECT_DIR \
+              _WORKER_MAX_ITERATIONS _WORKER_MAX_TURNS _WORKER_PIPELINE _WORKER_RALPH_DIR \
+              _WORKER_TASK_ID
+
         # Wait briefly for agent.pid to be created
         local wait_count=0
         while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 10 ]; do

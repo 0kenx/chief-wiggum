@@ -44,7 +44,7 @@ extract_summary_text() {
 
     # Otherwise, write to temp file and extract (for backward compat with piped content)
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp /tmp/wiggum-loop-XXXXXX)
     echo "$input" > "$tmp_file"
     runtime_backend_extract_text "$tmp_file"
     rm -f "$tmp_file"

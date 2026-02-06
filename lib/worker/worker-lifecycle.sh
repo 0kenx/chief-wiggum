@@ -147,7 +147,7 @@ get_valid_worker_pid() {
         local cmdline
         cmdline=$(ps -p "$pid" -o args= 2>/dev/null)
         # Accept wiggum commands, bash subshells, or explicit pattern
-        if ! echo "$cmdline" | grep -qE "(wiggum|$process_pattern|/bin/bash|\.ralph/)"; then
+        if ! echo "$cmdline" | grep -qE "(wiggum|$process_pattern|\.ralph/)"; then
             return 1
         fi
     fi
@@ -323,16 +323,15 @@ write_pid_file() {
 
     (
         flock -w 5 200 || {
-            log_warn "write_pid_file: Failed to acquire lock"
-            # Security: Use umask to restrict PID file permissions
-            umask 077
-            echo "$pid" > "$pid_file"
-            exit 0
+            log_warn "write_pid_file: Failed to acquire lock, refusing to write without lock"
+            exit 1
         }
 
         # Security: Use umask to restrict PID file permissions (owner only)
+        # Security: Write-then-rename for atomicity
         umask 077
-        echo "$pid" > "$pid_file"
+        echo "$pid" > "${pid_file}.tmp"
+        mv "${pid_file}.tmp" "$pid_file"
 
     ) 200>"$lock_file"
 }
@@ -392,6 +391,13 @@ kill_process_tree() {
 
     # Now kill the parent
     kill -"$signal" "$pid" 2>/dev/null || true
+
+    # Wait briefly for process to actually terminate
+    local _wait_count=0
+    while kill -0 "$pid" 2>/dev/null && [ "$_wait_count" -lt 10 ]; do
+        sleep 0.1
+        ((_wait_count++)) || true
+    done
 }
 
 # Wait for worker PID file to be created

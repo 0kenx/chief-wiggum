@@ -166,6 +166,10 @@ do_worker_fix() {
             _log_ts "INFO: Fix agent completed successfully"
         ' >> "$RALPH_DIR/logs/fix-workers.log" 2>&1 &
 
+        # Clean up exported worker variables from parent environment
+        unset _WORKER_WIGGUM_HOME _WORKER_DIR _WORKER_AGENT_TYPE _WORKER_PROJECT_DIR \
+              _WORKER_PIPELINE _WORKER_RALPH_DIR _WORKER_TASK_ID
+
         # Poll for agent.pid creation (10 × 0.1s)
         local wait_count=0
         while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 10 ]; do

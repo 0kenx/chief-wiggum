@@ -138,66 +138,72 @@ service_run() {
     esac
 }
 
-# Build resource limit command prefix
+# Execute a command with resource limits applied safely (no eval)
 #
-# Creates a command prefix that applies resource limits using
-# available system tools (ulimit, nice, timeout).
+# Applies nice, ulimit memory, and timeout limits by building
+# an argument array and executing directly.
 #
 # Args:
 #   limits  - JSON limits config or "null"
 #   timeout - Timeout in seconds
+#   cmd...  - Command and arguments to execute
 #
-# Returns: Command prefix string via stdout
-_build_limits_prefix() {
+# Returns: Exit code from command execution
+_exec_with_limits() {
     local limits="$1"
     local timeout="$2"
+    shift 2
 
-    local prefix=""
+    # Validate timeout is a non-negative integer
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        log_warn "_exec_with_limits: invalid timeout '$timeout', defaulting to 0"
+        timeout=0
+    fi
 
-    # Skip if no limits configured
-    if [ "$limits" = "null" ] || [ -z "$limits" ]; then
-        # Just use timeout if available
-        if command -v timeout &>/dev/null && [ "$timeout" -gt 0 ]; then
-            prefix="timeout $timeout "
+    # Parse limit values (with validation)
+    local nice_value="" memory_limit="" timeout_kill="true"
+    if [ "$limits" != "null" ] && [ -n "$limits" ]; then
+        nice_value=$(echo "$limits" | jq -r '.nice // empty')
+        memory_limit=$(echo "$limits" | jq -r '.memory // empty')
+        timeout_kill=$(echo "$limits" | jq -r '.timeout_kill // true')
+
+        # Validate nice_value is an integer
+        if [ -n "$nice_value" ] && ! [[ "$nice_value" =~ ^-?[0-9]+$ ]]; then
+            log_warn "_exec_with_limits: invalid nice value '$nice_value', ignoring"
+            nice_value=""
         fi
-        echo "$prefix"
-        return
     fi
 
-    # Parse limit values
-    local memory_limit nice_value timeout_kill
-    memory_limit=$(echo "$limits" | jq -r '.memory // empty')
-    nice_value=$(echo "$limits" | jq -r '.nice // empty')
-    timeout_kill=$(echo "$limits" | jq -r '.timeout_kill // true')
+    # Build the command array layer by layer (innermost first)
+    local -a cmd=("$@")
 
-    # Build the command prefix
-    local limit_cmds=""
-
-    # Add nice if specified
-    if [ -n "$nice_value" ]; then
-        limit_cmds="nice -n $nice_value "
-    fi
-
-    # Add memory limit via ulimit (if we can parse it)
+    # Layer 1: memory limit via ulimit wrapper (innermost)
     if [ -n "$memory_limit" ]; then
         local mem_bytes
         mem_bytes=$(service_parse_memory_limit "$memory_limit")
-        # Convert to KB for ulimit -v
         local mem_kb=$((mem_bytes / 1024))
-        # ulimit must be in a subshell, so we'll use a wrapper
-        limit_cmds="${limit_cmds}bash -c 'ulimit -v $mem_kb 2>/dev/null; exec \"\$@\"' -- "
-    fi
-
-    # Add timeout
-    if command -v timeout &>/dev/null && [ "$timeout" -gt 0 ]; then
-        local timeout_flag=""
-        if [ "$timeout_kill" = "true" ]; then
-            timeout_flag="--kill-after=5"
+        # Validate mem_kb is a positive integer
+        if [[ "$mem_kb" =~ ^[0-9]+$ ]] && [ "$mem_kb" -gt 0 ]; then
+            cmd=(bash -c "ulimit -v $mem_kb 2>/dev/null; exec \"\$@\"" -- "${cmd[@]}")
         fi
-        prefix="timeout $timeout_flag $timeout "
     fi
 
-    echo "${prefix}${limit_cmds}"
+    # Layer 2: nice (wraps the above)
+    if [ -n "$nice_value" ]; then
+        cmd=(nice -n "$nice_value" "${cmd[@]}")
+    fi
+
+    # Layer 3: timeout (outermost)
+    if command -v timeout &>/dev/null && [ "$timeout" -gt 0 ]; then
+        if [ "$timeout_kill" = "true" ]; then
+            cmd=(timeout --kill-after=5 "$timeout" "${cmd[@]}")
+        else
+            cmd=(timeout "$timeout" "${cmd[@]}")
+        fi
+    fi
+
+    # Execute without eval
+    "${cmd[@]}"
 }
 
 # Run a command-type service
@@ -226,10 +232,6 @@ _run_service_command() {
     # Set working directory
     local dir="${working_dir:-$_RUNNER_PROJECT_DIR}"
 
-    # Get limits prefix
-    local limits_prefix
-    limits_prefix=$(_build_limits_prefix "$limits" "$timeout")
-
     # Record start time for metrics
     local start_time
     start_time=$(date +%s%3N 2>/dev/null || echo "$(( $(epoch_now) * 1000 ))")
@@ -257,13 +259,9 @@ _run_service_command() {
 
         activity_log "service.started" "" "" "service=$id" "type=command"
 
-        # Run with limits prefix
+        # Run with resource limits (no eval)
         local _exit_code=0
-        if [ -n "$limits_prefix" ]; then
-            eval "${limits_prefix}bash -c $(printf '%q' "$command")" || _exit_code=$?
-        else
-            bash -c "$command" || _exit_code=$?
-        fi
+        _exec_with_limits "$limits" "$timeout" bash -c "$command" || _exit_code=$?
 
         log "Service $id completed (exit_code=$_exit_code)"
         activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
@@ -389,8 +387,7 @@ _run_service_function() {
                 exit 124  # Standard timeout exit code
             fi
 
-            wait "$func_pid"
-            _exit_code=$?
+            wait "$func_pid" || _exit_code=$?
         else
             "$func" "${func_args[@]}" || _exit_code=$?
         fi
@@ -487,10 +484,6 @@ _run_service_pipeline() {
 
     # Determine workspace mode from cache
     local use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-false}"
-
-    # Get limits prefix
-    local limits_prefix
-    limits_prefix=$(_build_limits_prefix "$limits" "$timeout")
 
     # Record start time
     local start_time
@@ -595,10 +588,6 @@ _run_service_agent() {
         worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
     fi
 
-    # Get limits prefix
-    local limits_prefix
-    limits_prefix=$(_build_limits_prefix "$limits" "$timeout")
-
     # Record start time
     local start_time
     start_time=$(date +%s%3N 2>/dev/null || echo "$(( $(epoch_now) * 1000 ))")
@@ -628,13 +617,10 @@ _run_service_agent() {
         # Source agent registry
         source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 
-        # Run the agent
+        # Run the agent with resource limits (no eval)
         local _exit_code=0
-        if [ -n "$limits_prefix" ]; then
-            eval "${limits_prefix}run_agent '$agent_type' '$worker_dir' '$_RUNNER_PROJECT_DIR' '$monitor_interval' '$max_iterations' '$max_turns' ${extra_args[*]}" || _exit_code=$?
-        else
+        _exec_with_limits "$limits" "$timeout" \
             run_agent "$agent_type" "$worker_dir" "$_RUNNER_PROJECT_DIR" "$monitor_interval" "$max_iterations" "$max_turns" "${extra_args[@]}" || _exit_code=$?
-        fi
 
         log "Service $id completed (exit_code=$_exit_code)"
         activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
@@ -686,9 +672,6 @@ service_run_sync() {
 
             local dir="${working_dir:-$_RUNNER_PROJECT_DIR}"
 
-            local limits_prefix
-            limits_prefix=$(_build_limits_prefix "$limits" "$timeout")
-
             (
                 cd "$dir" || exit 1
                 export PATH="$WIGGUM_HOME/bin:$PATH"
@@ -700,11 +683,7 @@ service_run_sync() {
                     command="$command ${extra_args[*]}"
                 fi
 
-                if [ -n "$limits_prefix" ]; then
-                    eval "${limits_prefix}bash -c $(printf '%q' "$command")"
-                else
-                    bash -c "$command"
-                fi
+                _exec_with_limits "$limits" "$timeout" bash -c "$command"
             )
             exit_code=$?
             ;;
@@ -751,8 +730,7 @@ service_run_sync() {
                         kill -9 "$func_pid" 2>/dev/null || true
                         exit_code=124
                     else
-                        wait "$func_pid"
-                        exit_code=$?
+                        wait "$func_pid" || exit_code=$?
                     fi
                 else
                     "$func" "${func_args[@]}"

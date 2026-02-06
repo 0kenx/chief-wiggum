@@ -149,8 +149,9 @@ _redact_sensitive() {
     # - Base64-encoded secrets (long alphanumeric strings after = or :)
     line=$(printf '%s' "$line" | sed -E \
         -e 's/(ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|API_KEY|SECRET_KEY|AUTH_TOKEN|ACCESS_TOKEN|PRIVATE_KEY)=([^[:space:]]+)/\1=[REDACTED]/gi' \
+        -e 's/(GH_TOKEN|GITHUB_TOKEN|GITHUB_PAT_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|DATABASE_URL)=([^[:space:]]+)/\1=[REDACTED]/gi' \
         -e 's/(Bearer )[A-Za-z0-9_\-\.]+/\1[REDACTED]/g' \
-        -e 's/(sk-)[A-Za-z0-9\-]{20,}/\1[REDACTED]/g' \
+        -e 's/(sk-|ghp_|gho_|ghs_|ghu_|github_pat_)[A-Za-z0-9\-_]{20,}/\1[REDACTED]/g' \
         -e 's/(password[=:]["'"'"']?)[^[:space:]"'"'"']+/\1[REDACTED]/gi')
     printf '%s' "$line"
 }

@@ -152,7 +152,7 @@ service_state_save() {
 
     # Write atomically
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "${_SERVICE_STATE_FILE}.XXXXXX")
     echo "$json" > "$tmp_file"
     mv "$tmp_file" "$_SERVICE_STATE_FILE"
 }

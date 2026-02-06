@@ -74,12 +74,25 @@ EOF
     fi
 }
 
+# Sanitize a string for audit log output
+# Strips newlines, carriage returns, and pipe characters to prevent log injection
+_audit_sanitize() {
+    printf '%s' "$1" | tr -d '\n\r' | tr '|' '_'
+}
+
 # Log a generic audit event
 # Usage: audit_log "EVENT_TYPE" "key1=value1" "key2=value2" ...
 # Security: Uses flock for safe concurrent writes from multiple workers
+# Security: Sanitizes all inputs to prevent log injection
 audit_log() {
     local event_type="$1"
     shift
+
+    # Security: Validate event_type format (alphanumeric + underscore only)
+    if ! [[ "$event_type" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+        log_warn "audit_log: Invalid event type rejected: $(printf '%q' "$event_type")"
+        return 1
+    fi
 
     # Ensure log is initialized
     init_audit_log
@@ -88,9 +101,9 @@ audit_log() {
     timestamp=$(iso_now)
     local log_entry="[$timestamp] $event_type"
 
-    # Append all key=value pairs
+    # Append all key=value pairs (sanitized)
     for kvp in "$@"; do
-        log_entry="$log_entry | $kvp"
+        log_entry="$log_entry | $(_audit_sanitize "$kvp")"
     done
 
     # Atomic append with flock (using shared utility)

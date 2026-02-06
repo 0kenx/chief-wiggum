@@ -57,7 +57,8 @@ agent_runner_init() {
     mkdir -p "$agent_dir"
 
     # Record PID - use BASHPID to get actual process ID (not parent's $$ in subshells)
-    echo "$BASHPID" > "$agent_dir/agent.pid"
+    # Security: Atomic write with restricted permissions (write-then-rename)
+    (umask 077; echo "$BASHPID" > "$agent_dir/agent.pid.tmp" && mv "$agent_dir/agent.pid.tmp" "$agent_dir/agent.pid")
     log_debug "Agent PID $BASHPID recorded in $agent_dir/agent.pid"
 
     # Setup signal handlers

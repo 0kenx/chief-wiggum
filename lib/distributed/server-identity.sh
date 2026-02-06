@@ -172,7 +172,7 @@ server_identity_update_pid() {
     [ -f "$identity_file" ] || return 1
 
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "${identity_file}.XXXXXX")
     jq --arg pid "$$" '.pid = ($pid | tonumber)' "$identity_file" > "$tmp_file"
     mv "$tmp_file" "$identity_file"
 }
@@ -296,7 +296,7 @@ server_claims_update() {
     fi
 
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "${claims_file}.XXXXXX")
 
     case "$action" in
         add)
@@ -368,6 +368,18 @@ server_heartbeat_log() {
     local task_id="$2"
     local action="$3"
     local heartbeat_log="$ralph_dir/server/heartbeat.log"
+
+    # Security: Validate task_id format to prevent log injection
+    if ! [[ "$task_id" =~ ^[A-Za-z]{2,10}-[0-9]{1,4}$ ]]; then
+        log_warn "server_heartbeat_log: Invalid task_id format: $(printf '%q' "$task_id")"
+        return 1
+    fi
+
+    # Security: Validate action (alphanumeric + underscore/hyphen only)
+    if ! [[ "$action" =~ ^[a-z][a-z0-9_-]*$ ]]; then
+        log_warn "server_heartbeat_log: Invalid action format: $(printf '%q' "$action")"
+        return 1
+    fi
 
     mkdir -p "$(dirname "$heartbeat_log")"
 

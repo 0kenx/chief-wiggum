@@ -405,6 +405,11 @@ do_resume() {
         fi
     ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
+    # Clean up exported worker variables from parent environment
+    unset _WORKER_WIGGUM_HOME _WORKER_DIR _WORKER_PROJECT_DIR \
+          _WORKER_MAX_ITERATIONS _WORKER_MAX_TURNS _WORKER_RESUME_STEP \
+          _WORKER_RESUME_INSTRUCTIONS
+
     # Wait briefly for agent.pid to be created
     local wait_count=0
     while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 10 ]; do

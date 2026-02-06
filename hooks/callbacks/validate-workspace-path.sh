@@ -60,10 +60,10 @@ if [[ "${DEBUG_HOOKS:-false}" == "true" ]]; then
     echo "[HOOK DEBUG] Worker dir: $worker_dir" >&2
 fi
 
-# If no workspace is set, something is wrong - allow but log warning
+# If no workspace is set, fail closed - block the operation
 if [[ -z "$workspace" ]]; then
-    echo "WARNING: WORKER_WORKSPACE not set - path validation disabled" >&2
-    exit 0
+    echo "ERROR: WORKER_WORKSPACE not set - blocking operation (fail-closed)" >&2
+    exit 2
 fi
 
 # If no file_path, no search_path, and no command, allow (e.g., some tools don't have paths)

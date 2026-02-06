@@ -105,7 +105,7 @@ runtime_exec_with_retry() {
 
     # Temp file for capturing stderr to detect retryable errors
     local _retry_stderr_file
-    _retry_stderr_file=$(mktemp)
+    _retry_stderr_file=$(mktemp /tmp/wiggum-retry-XXXXXX)
     # shellcheck disable=SC2064
     trap "rm -f '$_retry_stderr_file'" RETURN
 

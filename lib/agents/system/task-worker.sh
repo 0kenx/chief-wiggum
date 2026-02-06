@@ -121,6 +121,8 @@ _commit_subagent_changes() {
 
     # Stage all changes
     git add . 2>/dev/null || true
+    # Security: Unstage common sensitive file patterns
+    git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
 
     # Check if there are staged changes
     if git diff --staged --quiet; then

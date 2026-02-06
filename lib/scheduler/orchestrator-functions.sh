@@ -1606,6 +1606,10 @@ _launch_decide_background() {
     ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
     local decide_pid=$!
 
+    # Clean up exported decide variables from parent environment
+    unset _DECIDE_WIGGUM_HOME _DECIDE_WORKER_DIR _DECIDE_TASK_ID \
+          _DECIDE_WORKER_TYPE _DECIDE_PROJECT_DIR _DECIDE_RALPH_DIR
+
     # Write decide.pid so is_worker_running() sees this worker as busy
     echo "$decide_pid" > "$worker_dir/decide.pid"
 
@@ -1951,6 +1955,11 @@ _launch_resume_worker() {
             exit 1
         fi
     ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+
+    # Clean up exported worker variables from parent environment
+    unset _WORKER_WIGGUM_HOME _WORKER_DIR _WORKER_PROJECT_DIR \
+          _WORKER_MAX_ITERATIONS _WORKER_MAX_TURNS _WORKER_RESUME_STEP \
+          _WORKER_RESUME_INSTRUCTIONS
 
     # Wait for agent.pid (with timeout)
     local wait_timeout="${PID_WAIT_TIMEOUT:-300}"

@@ -67,6 +67,12 @@ runtime_init() {
     local backend
     backend=$(_runtime_discover_backend)
 
+    # Validate backend name to prevent path traversal (e.g., "../" or "/")
+    if [[ ! "$backend" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        log_error "Invalid runtime backend name: $backend (must be alphanumeric/hyphens/underscores)"
+        return 3  # Configuration error
+    fi
+
     local backend_file="$WIGGUM_HOME/lib/backend/${backend}/${backend}-backend.sh"
 
     if [ ! -f "$backend_file" ]; then

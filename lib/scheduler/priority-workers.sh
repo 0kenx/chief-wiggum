@@ -344,6 +344,11 @@ _verify_task_merged() {
 
     # First check: kanban status
     if [ -f "$kanban_file" ]; then
+        # Validate task_id format before using in grep -E to prevent regex injection
+        if ! [[ "$task_id" =~ ^[A-Za-z]{2,10}-[0-9]{1,4}$ ]]; then
+            echo "unknown"
+            return 1
+        fi
         local task_status
         task_status=$(grep -E "^\- \[.\] \*\*\[$task_id\]" "$kanban_file" 2>/dev/null | \
             sed 's/^- \[\(.\)\].*/\1/' | head -1 || echo "")
@@ -605,7 +610,7 @@ _advance_batch_past_merged_tasks() {
 
         # Check if task is already complete in kanban
         local task_status=""
-        if [ -f "$kanban_file" ]; then
+        if [ -f "$kanban_file" ] && [[ "$current_task_id" =~ ^[A-Za-z]{2,10}-[0-9]{1,4}$ ]]; then
             task_status=$(grep -E "^\- \[.\] \*\*\[$current_task_id\]" "$kanban_file" 2>/dev/null | \
                 sed 's/^- \[\(.\)\].*/\1/' | head -1 || echo "")
         fi
@@ -1064,7 +1069,7 @@ create_orphan_pr_workspaces() {
     # Remove processed entries from orphan file
     if [ ${#processed[@]} -gt 0 ]; then
         local temp_file
-        temp_file=$(mktemp)
+        temp_file=$(mktemp "${orphan_file}.XXXXXX")
         while IFS= read -r line; do
             local task_id
             task_id=$(echo "$line" | jq -r '.task_id')

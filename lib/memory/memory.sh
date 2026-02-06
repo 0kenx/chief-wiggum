@@ -290,7 +290,7 @@ memory_rebuild_agent_stats() {
     # Collect per-agent stats from all task stats
     # Use a temporary file to aggregate across tasks
     local tmp_dir
-    tmp_dir=$(mktemp -d)
+    tmp_dir=$(mktemp -d /tmp/wiggum-mem-XXXXXX)
 
     local task_stats_files
     task_stats_files=$(find "$tasks_dir" -name "stats.json" -type f 2>/dev/null || true)

@@ -680,6 +680,11 @@ service_conditions_met() {
         # Check file_exists
         local file_exists_pattern="${_SVC_CACHE["cond_fe:${id}"]:-}"
         if [ -n "$file_exists_pattern" ]; then
+            # Reject patterns with path traversal or command substitution
+            if [[ "$file_exists_pattern" == *".."* ]] || [[ "$file_exists_pattern" == *'$('* ]] || [[ "$file_exists_pattern" == *'`'* ]]; then
+                log_warn "Service $id condition file_exists rejected: unsafe pattern '$file_exists_pattern'"
+                return 1
+            fi
             # shellcheck disable=SC2086
             if ! compgen -G $file_exists_pattern > /dev/null 2>&1; then
                 log_debug "Service $id condition file_exists '$file_exists_pattern' not met"
@@ -690,6 +695,11 @@ service_conditions_met() {
         # Check file_not_exists
         local file_not_exists_pattern="${_SVC_CACHE["cond_fne:${id}"]:-}"
         if [ -n "$file_not_exists_pattern" ]; then
+            # Reject patterns with path traversal or command substitution
+            if [[ "$file_not_exists_pattern" == *".."* ]] || [[ "$file_not_exists_pattern" == *'$('* ]] || [[ "$file_not_exists_pattern" == *'`'* ]]; then
+                log_warn "Service $id condition file_not_exists rejected: unsafe pattern '$file_not_exists_pattern'"
+                return 1
+            fi
             # shellcheck disable=SC2086
             if compgen -G $file_not_exists_pattern > /dev/null 2>&1; then
                 log_debug "Service $id condition file_not_exists '$file_not_exists_pattern' not met"
@@ -764,6 +774,11 @@ service_conditions_met() {
     local file_exists_pattern
     file_exists_pattern=$(echo "$condition" | jq -r '.file_exists // empty')
     if [ -n "$file_exists_pattern" ]; then
+        # Reject patterns with path traversal or command substitution
+        if [[ "$file_exists_pattern" == *".."* ]] || [[ "$file_exists_pattern" == *'$('* ]] || [[ "$file_exists_pattern" == *'`'* ]]; then
+            log_warn "Service $id condition file_exists rejected: unsafe pattern '$file_exists_pattern'"
+            return 1
+        fi
         # shellcheck disable=SC2086
         if ! compgen -G $file_exists_pattern > /dev/null 2>&1; then
             log_debug "Service $id condition file_exists '$file_exists_pattern' not met"
@@ -774,6 +789,11 @@ service_conditions_met() {
     local file_not_exists_pattern
     file_not_exists_pattern=$(echo "$condition" | jq -r '.file_not_exists // empty')
     if [ -n "$file_not_exists_pattern" ]; then
+        # Reject patterns with path traversal or command substitution
+        if [[ "$file_not_exists_pattern" == *".."* ]] || [[ "$file_not_exists_pattern" == *'$('* ]] || [[ "$file_not_exists_pattern" == *'`'* ]]; then
+            log_warn "Service $id condition file_not_exists rejected: unsafe pattern '$file_not_exists_pattern'"
+            return 1
+        fi
         # shellcheck disable=SC2086
         if compgen -G $file_not_exists_pattern > /dev/null 2>&1; then
             log_debug "Service $id condition file_not_exists '$file_not_exists_pattern' not met"

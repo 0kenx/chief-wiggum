@@ -39,6 +39,18 @@ _get_cached_metadata() {
     echo "$_KANBAN_CACHE"
 }
 
+# Validate task ID matches expected format: [A-Za-z]{2,10}-[0-9]{1,4}
+# This prevents regex/awk injection when task IDs are used in grep -E or awk patterns.
+#
+# Args:
+#   task_id - Task ID to validate
+#
+# Returns: 0 if valid, 1 if invalid
+_validate_task_id() {
+    local task_id="$1"
+    [[ "$task_id" =~ ^[A-Za-z]{2,10}-[0-9]{1,4}$ ]]
+}
+
 has_incomplete_tasks() {
     local file="$1"
     grep -q -- '- \[ \]' "$file"
@@ -188,6 +200,9 @@ is_task_in_done_comment() {
     local kanban="$1"
     local task_id="$2"
 
+    # Validate task_id to prevent regex injection in grep -E
+    _validate_task_id "$task_id" || return 1
+
     # Look for task ID in done comment (comma or space separated, word boundaries)
     grep -qE "^<!-- done:.*[, ]${task_id}([, ]|$)" "$kanban" 2>/dev/null
 }
@@ -330,7 +345,13 @@ _bfs_count_from_graph() {
     visited[$target_task]=1
     local count=0
 
+    # Security: Bound BFS depth to prevent runaway traversal on malformed graphs
+    local max_depth=1000
     while [ ${#queue[@]} -gt 0 ]; do
+        if [ "$count" -ge "$max_depth" ]; then
+            log_warn "_bfs_count_from_graph: Depth limit ($max_depth) reached for $target_task"
+            break
+        fi
         local current="${queue[0]}"
         queue=("${queue[@]:1}")
 
@@ -763,6 +784,12 @@ extract_task() {
     local task_id="$1"
     local kanban="$2"
 
+    # Validate task_id format to prevent awk/regex injection
+    if ! _validate_task_id "$task_id"; then
+        log_error "extract_task: invalid task_id format: $task_id"
+        return 1
+    fi
+
     # Extract task title from the first line matching the task ID
     local task_title
     task_title=$(awk -v task="$task_id" '
@@ -778,7 +805,7 @@ extract_task() {
 # Task: $task_id${task_title:+ - $task_title}
 
 $(awk -v task="$task_id" '
-    /\*\*\['"$task_id"'\]\*\*/ {found=1; next}
+    $0 ~ "\\*\\*\\[" task "\\]\\*\\*" {found=1; next}
     found && /^  - Description:/ {sub(/^  - Description: /, ""); desc=$0; next}
     found && /^  - Priority:/ {sub(/^  - Priority: /, ""); priority=$0; next}
     found && /^  - Dependencies:/ {sub(/^  - Dependencies: /, ""); deps=$0; next}

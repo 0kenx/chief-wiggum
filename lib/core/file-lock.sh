@@ -30,7 +30,10 @@ append_with_lock() {
 
     (
         flock -w "$timeout" 200 || {
-            # Lock failed, write directly (better than losing data)
+            # Lock failed, write directly (better than losing data for append-only logs).
+            # NOTE: This fall-through is intentional ONLY for append operations.
+            # State-critical writes (PID files, kanban status) must NOT fall through.
+            log_warn "append_with_lock: Failed to acquire lock for $file, appending without lock"
             echo "$content" >> "$file"
             exit 0
         }
@@ -309,7 +312,7 @@ ${summary}
 
     # Use a temporary file to handle multi-line content safely
     local temp_file
-    temp_file=$(mktemp)
+    temp_file=$(mktemp /tmp/wiggum-lock-XXXXXX)
     echo "$entry" > "$temp_file"
 
     # shellcheck disable=SC2016

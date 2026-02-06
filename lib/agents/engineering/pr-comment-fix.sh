@@ -417,6 +417,8 @@ _commit_and_push_fixes() {
 
     # Stage all changes
     git add -A
+    # Security: Unstage common sensitive file patterns
+    git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
 
     # Guard: refuse to commit conflict markers
     local marker_files

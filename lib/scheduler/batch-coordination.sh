@@ -179,7 +179,7 @@ batch_coord_mark_complete() {
             task_id="$2"
 
             # Update: add to completed, advance position
-            tmp_file=$(mktemp)
+            tmp_file=$(mktemp "${coord_file}.XXXXXX")
             jq --arg tid "$task_id" "
                 .completed += [\$tid] |
                 .current_position += 1 |
@@ -218,7 +218,7 @@ batch_coord_mark_failed() {
             task_id="$2"
             reason="$3"
 
-            tmp_file=$(mktemp)
+            tmp_file=$(mktemp "${coord_file}.XXXXXX")
             jq --arg tid "$task_id" --arg reason "$reason" "
                 .status = \"failed\" |
                 .failed = {task_id: \$tid, reason: \$reason} |

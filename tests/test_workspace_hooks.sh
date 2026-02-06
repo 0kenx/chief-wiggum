@@ -333,13 +333,13 @@ test_hook_allows_no_path_tools() {
     assert_equals "0" "$rc" "Should allow commands with no file paths"
 }
 
-test_hook_allows_when_no_workspace_set() {
+test_hook_blocks_when_no_workspace_set() {
     local json
     json=$(tool_json "Write" "/etc/passwd")
 
     local rc=0
     run_validate_hook "$json" "" "" || rc=$?
-    assert_equals "0" "$rc" "Should allow all when no workspace is set (with warning)"
+    assert_equals "2" "$rc" "Should block when no workspace is set (fail-closed)"
 }
 
 # =============================================================================
@@ -595,7 +595,7 @@ run_test test_hook_allows_read_inside_workspace
 run_test test_hook_allows_bash_within_workspace
 run_test test_hook_allows_safe_system_paths
 run_test test_hook_allows_no_path_tools
-run_test test_hook_allows_when_no_workspace_set
+run_test test_hook_blocks_when_no_workspace_set
 
 # CLAUDE_PROJECT_DIR fallback
 run_test test_hook_uses_claude_project_dir_fallback

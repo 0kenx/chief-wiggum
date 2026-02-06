@@ -244,6 +244,8 @@ git_safety_checkpoint() {
     if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
         # Stage all changes
         git add -A 2>/dev/null || true
+        # Security: Unstage common sensitive file patterns
+        git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
 
         # Check if there are staged changes to commit
         if ! git diff --staged --quiet; then
@@ -369,6 +371,9 @@ git_create_commit() {
     if [ "$has_uncommitted_changes" = true ]; then
         # Stage all changes
         git add -A
+
+        # Security: Unstage common sensitive file patterns that should never be committed
+        git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
 
         # Guard: refuse to commit conflict markers
         local marker_files

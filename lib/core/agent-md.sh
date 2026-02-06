@@ -144,21 +144,22 @@ _yaml_get_value() {
 #   key         - The key to extract
 #   array_name  - Name of the array variable to populate
 #
-# Security: Validates array_name against strict pattern before using eval
+# Security: Uses declare -n (nameref) instead of eval for safe array population
 _yaml_get_array() {
     local frontmatter="$1"
     local key="$2"
     local array_name="$3"
 
     # Security: Validate array name contains only safe characters (alphanumeric and underscore)
-    # This prevents code injection through malicious array names
     if [[ ! "$array_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
         log_error "_yaml_get_array: Invalid array name: $array_name"
         return 1
     fi
 
-    # Clear the array (safe after validation)
-    eval "$array_name=()"
+    # Use nameref to avoid eval entirely
+    # shellcheck disable=SC2178  # nameref intentionally references an array
+    declare -n _arr_ref="$array_name"
+    _arr_ref=()
 
     local line
     line=$(echo "$frontmatter" | grep -E "^${key}:" | head -1 | sed "s/^${key}:[[:space:]]*//" || true)
@@ -181,9 +182,7 @@ _yaml_get_array() {
             item="${item%\'}"
 
             if [ -n "$item" ]; then
-                # Safe after array_name validation above
-                # Use \$item to defer expansion until eval time for proper quoting
-                eval "${array_name}[$i]=\"\$item\""
+                _arr_ref[$i]="$item"
                 ((++i)) || true
             fi
         done <<< "$line,"

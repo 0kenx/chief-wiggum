@@ -316,7 +316,7 @@ scheduler_update_aging() {
     fi
 
     local new_ready_since
-    new_ready_since=$(mktemp)
+    new_ready_since=$(mktemp /tmp/wiggum-sched-XXXXXX)
 
     # Use cached ready tasks from scheduler_tick (same in-process tick cycle;
     # scheduler_tick runs at order 30 before aging_update at order 70)
