@@ -1023,17 +1023,15 @@ orch_failure_recovery() {
         # Skip running workers
         is_worker_running "$worker_dir" && continue
 
-        # Handle stale recovery-in-progress markers
+        # Handle recovery-in-progress markers
         if [ -f "$worker_dir/recovery-in-progress" ]; then
-            local marker_ts
-            marker_ts=$(cat "$worker_dir/recovery-in-progress" 2>/dev/null)
-            marker_ts="${marker_ts:-0}"
-            if [ "$(( now_ts - marker_ts ))" -gt "$stale_threshold" ]; then
-                rm -f "$worker_dir/recovery-in-progress"
-                log_warn "Removed stale recovery-in-progress marker for $(basename "$worker_dir")"
-            else
+            # Check if a tracked recovery PID is still running for this worker
+            if _is_recovery_tracked_and_running "$worker_dir"; then
                 continue
             fi
+            # No running PID tracked — marker is orphaned (crashed/killed process)
+            rm -f "$worker_dir/recovery-in-progress"
+            log_warn "Removed orphaned recovery-in-progress marker for $(basename "$worker_dir")"
         fi
 
         # Skip if recovery already succeeded (PASS)
@@ -1196,18 +1194,26 @@ _count_active_recoveries() {
         done < "$pending_file"
     fi
 
-    # Also count workers with fresh recovery-in-progress markers
-    local now_ts stale_threshold=1800
-    now_ts=$(epoch_now)
-    for dir in "$RALPH_DIR/workers"/worker-*; do
-        [ -f "$dir/recovery-in-progress" ] || continue
-        local marker_ts
-        marker_ts=$(cat "$dir/recovery-in-progress" 2>/dev/null)
-        marker_ts="${marker_ts:-0}"
-        [ "$(( now_ts - marker_ts ))" -lt "$stale_threshold" ] && ((++count))
-    done
-
     echo "$count"
+}
+
+# Check if a recovery process is tracked and running for a worker directory
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if tracked PID is running, 1 otherwise
+_is_recovery_tracked_and_running() {
+    local worker_dir="$1"
+    local pending_file="$RALPH_DIR/orchestrator/recovery-pending"
+    [ -s "$pending_file" ] || return 1
+
+    while IFS='|' read -r pid tracked_dir _rest; do
+        [ -n "$pid" ] || continue
+        [ "$tracked_dir" = "$worker_dir" ] || continue
+        kill -0 "$pid" 2>/dev/null && return 0
+    done < "$pending_file"
+    return 1
 }
 
 # =============================================================================
