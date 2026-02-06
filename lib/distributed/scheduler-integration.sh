@@ -21,6 +21,16 @@ _SCHEDULER_INTEGRATION_LOADED=1
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/tasks/task-source.sh"
 
+# Source distributed modules unconditionally — they use double-source guards
+# and define only functions (no side effects). The functions themselves check
+# _SCHED_DIST_MODE and return early in local mode. Sourcing here ensures
+# they're available when the bridge calls service handlers like
+# scheduler_update_heartbeats without going through scheduler_init_with_task_source.
+source "$WIGGUM_HOME/lib/distributed/server-identity.sh"
+source "$WIGGUM_HOME/lib/distributed/claim-manager.sh"
+source "$WIGGUM_HOME/lib/distributed/heartbeat.sh"
+source "$WIGGUM_HOME/lib/distributed/orphan-recovery.sh"
+
 # =============================================================================
 # State
 # =============================================================================
@@ -68,12 +78,6 @@ scheduler_init_with_task_source() {
             log_error "Failed to initialize task source"
             return 1
         }
-
-        # Initialize distributed components
-        source "$WIGGUM_HOME/lib/distributed/server-identity.sh"
-        source "$WIGGUM_HOME/lib/distributed/claim-manager.sh"
-        source "$WIGGUM_HOME/lib/distributed/heartbeat.sh"
-        source "$WIGGUM_HOME/lib/distributed/orphan-recovery.sh"
 
         # Load server config
         server_config_load "$ralph_dir"
