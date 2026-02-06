@@ -428,6 +428,106 @@ test_scan_active_workers_cleans_stale_resume_pid() {
 }
 
 # =============================================================================
+# Per-Worker Locking Tests
+# =============================================================================
+
+test_per_worker_lock_path() {
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-020-12345"
+    mkdir -p "$worker_dir"
+
+    local lock_file
+    lock_file=$(_get_pid_ops_lock "$RALPH_DIR" "$worker_dir")
+
+    assert_equals "$worker_dir/.pid.lock" "$lock_file" "Should return per-worker lock path"
+}
+
+test_global_lock_path_fallback() {
+    local lock_file
+    lock_file=$(_get_pid_ops_lock "$RALPH_DIR")
+
+    assert_equals "$RALPH_DIR/orchestrator/pid-ops.lock" "$lock_file" "Should return global lock path when no worker_dir"
+}
+
+test_scan_skips_cleanup_when_locked() {
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-021-99999"
+    mkdir -p "$worker_dir"
+    echo "99999999" > "$worker_dir/agent.pid"
+
+    local lock_file="$worker_dir/.pid.lock"
+
+    # Hold the lock in background
+    (
+        exec 200>"$lock_file"
+        flock 200
+        sleep 2
+    ) &
+    local lock_pid=$!
+    sleep 0.1  # Let lock be acquired
+
+    # Scan should skip this worker's cleanup (non-blocking)
+    scan_active_workers "$RALPH_DIR" > /dev/null
+
+    # Kill the lock holder
+    kill $lock_pid 2>/dev/null || true
+    wait $lock_pid 2>/dev/null || true
+
+    # PID file should still exist (cleanup was skipped)
+    assert_file_exists "$worker_dir/agent.pid" "Should skip cleanup when lock is held"
+}
+
+test_scan_cleans_different_worker_when_one_locked() {
+    local worker_a="$RALPH_DIR/workers/worker-TASK-022-11111"
+    local worker_b="$RALPH_DIR/workers/worker-TASK-023-22222"
+    mkdir -p "$worker_a" "$worker_b"
+    echo "99999999" > "$worker_a/agent.pid"
+    echo "99999998" > "$worker_b/agent.pid"
+
+    local lock_file_a="$worker_a/.pid.lock"
+
+    # Hold lock on worker A
+    (
+        exec 200>"$lock_file_a"
+        flock 200
+        sleep 2
+    ) &
+    local lock_pid=$!
+    sleep 0.1
+
+    # Scan should clean worker B but skip worker A
+    scan_active_workers "$RALPH_DIR" > /dev/null
+
+    kill $lock_pid 2>/dev/null || true
+    wait $lock_pid 2>/dev/null || true
+
+    # Worker A should still have stale PID (locked)
+    assert_file_exists "$worker_a/agent.pid" "Should skip locked worker"
+    # Worker B should be cleaned (not locked)
+    assert_file_not_exists "$worker_b/agent.pid" "Should clean unlocked worker"
+}
+
+test_write_pid_file_uses_per_worker_lock() {
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-024-33333"
+    mkdir -p "$worker_dir"
+    local pid_file="$worker_dir/agent.pid"
+
+    write_pid_file "$pid_file" "12345"
+
+    assert_file_exists "$pid_file" "Should create PID file"
+    assert_equals "12345" "$(cat "$pid_file")" "Should contain correct PID"
+}
+
+test_remove_pid_file_uses_per_worker_lock() {
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-025-44444"
+    mkdir -p "$worker_dir"
+    local pid_file="$worker_dir/agent.pid"
+    echo "12345" > "$pid_file"
+
+    remove_pid_file "$pid_file"
+
+    assert_file_not_exists "$pid_file" "Should remove PID file"
+}
+
+# =============================================================================
 # Run All Tests
 # =============================================================================
 
@@ -478,6 +578,14 @@ run_test test_wait_for_worker_pid_timeout
 run_test test_is_worker_running_true_when_resuming
 run_test test_scan_active_workers_finds_resuming
 run_test test_scan_active_workers_cleans_stale_resume_pid
+
+# per-worker locking tests
+run_test test_per_worker_lock_path
+run_test test_global_lock_path_fallback
+run_test test_scan_skips_cleanup_when_locked
+run_test test_scan_cleans_different_worker_when_one_locked
+run_test test_write_pid_file_uses_per_worker_lock
+run_test test_remove_pid_file_uses_per_worker_lock
 
 print_test_summary
 exit_with_test_result

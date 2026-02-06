@@ -17,14 +17,22 @@ source "$WIGGUM_HOME/lib/core/file-lock.sh"
 # Global lock file for PID operations (prevents race conditions)
 _PID_OPS_LOCK_FILE=""
 
-# Get the PID operations lock file path for a ralph directory
-# Args: <ralph_dir>
-# Returns: lock file path
+# Get the PID operations lock file path
+# Args: <ralph_dir> [worker_dir]
+# Returns: lock file path (per-worker if worker_dir provided, else global)
 _get_pid_ops_lock() {
     local ralph_dir="$1"
-    local lock_dir="$ralph_dir/orchestrator"
-    [ -d "$lock_dir" ] || mkdir -p "$lock_dir"
-    echo "$lock_dir/pid-ops.lock"
+    local worker_dir="${2:-}"
+
+    if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+        # Per-worker lock
+        echo "$worker_dir/.pid.lock"
+    else
+        # Global lock (legacy fallback)
+        local lock_dir="$ralph_dir/orchestrator"
+        [ -d "$lock_dir" ] || mkdir -p "$lock_dir"
+        echo "$lock_dir/pid-ops.lock"
+    fi
 }
 
 # Find the newest worker directory for a task
@@ -229,81 +237,89 @@ get_task_id_from_worker() {
 # Args: <ralph_dir>
 # Outputs lines of: <pid> <task_id> <worker_id> <pid_type>
 #   pid_type is "agent" (normal running) or "resume" (resume in progress)
-# Uses file locking to prevent race conditions during PID cleanup
+# Uses per-worker locks only when cleaning up stale PIDs
 scan_active_workers() {
     local ralph_dir="$1"
-    local lock_file
 
     [ -d "$ralph_dir/workers" ] || return 0
 
-    lock_file=$(_get_pid_ops_lock "$ralph_dir")
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
 
-    # Use flock for atomic PID operations
-    (
-        flock -w 10 200 || {
-            log_warn "scan_active_workers: Failed to acquire lock after 10s"
-            exit 2  # Distinguishable exit code for lock failure
-        }
+        local worker_id
+        worker_id=$(basename "$worker_dir")
+        local task_id
+        task_id=$(get_task_id_from_worker "$worker_id")
 
-        for worker_dir in "$ralph_dir/workers"/worker-*; do
-            [ -d "$worker_dir" ] || continue
-
-            local worker_id
-            worker_id=$(basename "$worker_dir")
-            local task_id
-            task_id=$(get_task_id_from_worker "$worker_id")
-
-            # Check agent.pid first, then resume.pid as fallback
-            local pid="" pid_type=""
-            if [ -f "$worker_dir/agent.pid" ]; then
-                pid=$(get_valid_worker_pid "$worker_dir/agent.pid" "bash") || true
-                if [ -n "$pid" ]; then
-                    pid_type="agent"
-                else
-                    rm -f "$worker_dir/agent.pid"
-                fi
-            fi
-
-            if [ -z "$pid" ] && [ -f "$worker_dir/resume.pid" ]; then
-                pid=$(get_valid_worker_pid "$worker_dir/resume.pid" "bash") || true
-                if [ -n "$pid" ]; then
-                    pid_type="resume"
-                else
-                    rm -f "$worker_dir/resume.pid"
-                fi
-            fi
-
-            if [ -z "$pid" ] && [ -f "$worker_dir/decide.pid" ]; then
-                pid=$(get_valid_worker_pid "$worker_dir/decide.pid" "bash") || true
-                if [ -n "$pid" ]; then
-                    pid_type="decide"
-                else
-                    rm -f "$worker_dir/decide.pid"
-                fi
-            fi
-
+        # Check agent.pid first, then resume.pid, then decide.pid
+        local pid="" pid_type=""
+        if [ -f "$worker_dir/agent.pid" ]; then
+            pid=$(get_valid_worker_pid "$worker_dir/agent.pid" "bash") || true
             if [ -n "$pid" ]; then
-                echo "$pid $task_id $worker_id $pid_type"
+                pid_type="agent"
+            else
+                # Stale PID - clean up with per-worker lock
+                _cleanup_stale_pid "$ralph_dir" "$worker_dir" "agent.pid"
             fi
-        done
+        fi
 
+        if [ -z "$pid" ] && [ -f "$worker_dir/resume.pid" ]; then
+            pid=$(get_valid_worker_pid "$worker_dir/resume.pid" "bash") || true
+            if [ -n "$pid" ]; then
+                pid_type="resume"
+            else
+                _cleanup_stale_pid "$ralph_dir" "$worker_dir" "resume.pid"
+            fi
+        fi
+
+        if [ -z "$pid" ] && [ -f "$worker_dir/decide.pid" ]; then
+            pid=$(get_valid_worker_pid "$worker_dir/decide.pid" "bash") || true
+            if [ -n "$pid" ]; then
+                pid_type="decide"
+            else
+                _cleanup_stale_pid "$ralph_dir" "$worker_dir" "decide.pid"
+            fi
+        fi
+
+        if [ -n "$pid" ]; then
+            echo "$pid $task_id $worker_id $pid_type"
+        fi
+    done
+}
+
+# Clean up a stale PID file with per-worker locking
+# Args: <ralph_dir> <worker_dir> <pid_filename>
+_cleanup_stale_pid() {
+    local ralph_dir="$1"
+    local worker_dir="$2"
+    local pid_filename="$3"
+    local pid_file="$worker_dir/$pid_filename"
+
+    local lock_file
+    lock_file=$(_get_pid_ops_lock "$ralph_dir" "$worker_dir")
+
+    # Non-blocking: skip cleanup if lock is held (another process is working on this worker)
+    (
+        flock -n 200 || exit 0
+        rm -f "$pid_file"
     ) 200>"$lock_file"
 }
 
 # Atomically write a PID file
 # Args: <pid_file> <pid>
-# Uses file locking to prevent race conditions
+# Uses per-worker file locking to prevent race conditions
 # Security: Creates PID file with restricted permissions (owner read/write only)
 write_pid_file() {
     local pid_file="$1"
     local pid="$2"
-    local ralph_dir
 
-    # Extract ralph_dir from pid_file path (.ralph/workers/worker-XXX/agent.pid)
-    ralph_dir=$(dirname "$(dirname "$(dirname "$pid_file")")")
+    # Extract worker_dir and ralph_dir from pid_file path (.ralph/workers/worker-XXX/agent.pid)
+    local worker_dir ralph_dir
+    worker_dir=$(dirname "$pid_file")
+    ralph_dir=$(dirname "$(dirname "$worker_dir")")
 
     local lock_file
-    lock_file=$(_get_pid_ops_lock "$ralph_dir")
+    lock_file=$(_get_pid_ops_lock "$ralph_dir" "$worker_dir")
 
     (
         flock -w 5 200 || {
@@ -323,16 +339,17 @@ write_pid_file() {
 
 # Atomically remove a PID file
 # Args: <pid_file>
-# Uses file locking to prevent race conditions
+# Uses per-worker file locking to prevent race conditions
 remove_pid_file() {
     local pid_file="$1"
-    local ralph_dir
 
-    # Extract ralph_dir from pid_file path (.ralph/workers/worker-XXX/agent.pid)
-    ralph_dir=$(dirname "$(dirname "$(dirname "$pid_file")")")
+    # Extract worker_dir and ralph_dir from pid_file path (.ralph/workers/worker-XXX/agent.pid)
+    local worker_dir ralph_dir
+    worker_dir=$(dirname "$pid_file")
+    ralph_dir=$(dirname "$(dirname "$worker_dir")")
 
     local lock_file
-    lock_file=$(_get_pid_ops_lock "$ralph_dir")
+    lock_file=$(_get_pid_ops_lock "$ralph_dir" "$worker_dir")
 
     (
         flock -w 5 200 || {
