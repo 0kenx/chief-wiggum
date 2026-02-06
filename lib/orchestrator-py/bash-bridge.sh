@@ -59,6 +59,7 @@ source "$WIGGUM_HOME/lib/scheduler/conflict-registry.sh"
 source "$WIGGUM_HOME/lib/scheduler/pr-merge-optimizer.sh"
 source "$WIGGUM_HOME/lib/scheduler/orchestrator-functions.sh"
 source "$WIGGUM_HOME/lib/scheduler/smart-routing.sh"
+source "$WIGGUM_HOME/lib/distributed/scheduler-integration.sh"
 
 # Service-based scheduler (for state functions)
 source "$WIGGUM_HOME/lib/service/service-scheduler.sh"
