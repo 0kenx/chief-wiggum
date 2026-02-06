@@ -983,21 +983,231 @@ orch_github_plan_sync() {
 orch_failure_recovery() {
     local ralph_dir="${RALPH_DIR:-}"
     local project_dir="${PROJECT_DIR:-}"
+    local limit="${RECOVERY_WORKER_LIMIT:-2}"
+    local stale_threshold=1800  # 30 minutes
 
     [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
     [ -n "$project_dir" ] || { log_error "PROJECT_DIR not set"; return 1; }
 
-    # Delegate to the failure-recovery CLI with --once flag
-    local recovery_output recovery_exit=0
-    recovery_output=$("$WIGGUM_HOME/bin/wiggum-failure-recovery" run 2>&1) || recovery_exit=$?
+    # Phase 1: Poll completed recovery processes
+    _poll_pending_recoveries
 
-    if [ $recovery_exit -ne 0 ]; then
-        # Log but don't fail the service - recovery is best-effort
-        log_debug "Failure recovery run completed with exit code $recovery_exit"
-        echo "$recovery_output" | sed 's/^/  [recovery] /' | head -20
+    # Phase 2: Find eligible failed workers and launch recovery agents
+    local kanban_file="$ralph_dir/kanban.md"
+    [ -f "$kanban_file" ] || return 0
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    local failed_tasks
+    failed_tasks=$(get_failed_tasks "$kanban_file")
+    [ -n "$failed_tasks" ] || return 0
+
+    local now_ts launched=0
+    now_ts=$(epoch_now)
+
+    while IFS= read -r task_id; do
+        [ -n "$task_id" ] || continue
+
+        # Respect limit
+        local active_count
+        active_count=$(_count_active_recoveries)
+        [ "$active_count" -lt "$limit" ] || break
+
+        # Find worker directory
+        local worker_dir=""
+        for dir in "$ralph_dir/workers"/worker-${task_id}-*; do
+            [ -d "$dir" ] && worker_dir="$dir" && break
+        done
+        [ -n "$worker_dir" ] || continue
+        [ -d "$worker_dir/workspace" ] || continue
+
+        # Skip running workers
+        is_worker_running "$worker_dir" && continue
+
+        # Handle stale recovery-in-progress markers
+        if [ -f "$worker_dir/recovery-in-progress" ]; then
+            local marker_ts
+            marker_ts=$(cat "$worker_dir/recovery-in-progress" 2>/dev/null)
+            marker_ts="${marker_ts:-0}"
+            if [ "$(( now_ts - marker_ts ))" -gt "$stale_threshold" ]; then
+                rm -f "$worker_dir/recovery-in-progress"
+                log_warn "Removed stale recovery-in-progress marker for $(basename "$worker_dir")"
+            else
+                continue
+            fi
+        fi
+
+        # Skip if recovery already succeeded (PASS)
+        if [ -f "$worker_dir/recovery-attempted" ]; then
+            local prev_result
+            prev_result=$(cat "$worker_dir/recovery-attempted" 2>/dev/null)
+            [ "$prev_result" = "PASS" ] && continue
+        fi
+
+        # Launch recovery agent in background
+        _launch_recovery_worker "$worker_dir" "$task_id"
+        ((++launched))
+    done <<< "$failed_tasks"
+
+    if [ "$launched" -gt 0 ]; then
+        log "failure-recovery: launched $launched recovery agent(s)"
     fi
 
     return 0
+}
+
+# Launch a recovery agent in the background for a failed worker
+#
+# Same pattern as _launch_resume_worker: setsid subprocess that calls
+# run_agent with the failure-recovery pipeline, output to workers.log.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task ID
+_launch_recovery_worker() {
+    local worker_dir="$1"
+    local task_id="$2"
+
+    log "failure-recovery: launching recovery for $task_id"
+
+    # Mark recovery in progress
+    epoch_now > "$worker_dir/recovery-in-progress"
+
+    # Save original pipeline name
+    if [ -f "$worker_dir/pipeline-config.json" ]; then
+        local orig_pipeline
+        orig_pipeline=$(jq -r '.pipeline.name // "default"' "$worker_dir/pipeline-config.json" 2>/dev/null) || true
+        orig_pipeline="${orig_pipeline:-default}"
+        echo "$orig_pipeline" > "$worker_dir/original-pipeline.txt"
+    fi
+
+    # Export vars for setsid subprocess
+    export _RECOVERY_WIGGUM_HOME="$WIGGUM_HOME"
+    export _RECOVERY_WORKER_DIR="$worker_dir"
+    export _RECOVERY_PROJECT_DIR="$PROJECT_DIR"
+    export _RECOVERY_TASK_ID="$task_id"
+
+    # shellcheck disable=SC2016
+    setsid bash -c '
+        set -euo pipefail
+        _log_ts() { echo "[$(date -Iseconds)] $*"; }
+        _log_ts "INFO: Recovery subprocess starting for $_RECOVERY_TASK_ID"
+
+        export WIGGUM_HOME="$_RECOVERY_WIGGUM_HOME"
+        export WIGGUM_PIPELINE="failure-recovery"
+
+        worker_dir="$_RECOVERY_WORKER_DIR"
+        task_id="$_RECOVERY_TASK_ID"
+
+        if ! source "$WIGGUM_HOME/lib/worker/agent-registry.sh" 2>&1; then
+            _log_ts "ERROR: Failed to source agent-registry.sh"
+            exit 1
+        fi
+
+        _log_ts "INFO: Running failure-recovery pipeline for $task_id"
+        _exit_code=0
+        run_agent "system.task-worker" "$worker_dir" "$_RECOVERY_PROJECT_DIR" 30 3 50 \
+            "failure-summarize" "" || _exit_code=$?
+
+        # Remove in-progress marker
+        rm -f "$worker_dir/recovery-in-progress"
+
+        # Check recovery result
+        recovery_result="FAIL"
+        result_file=$(find "$worker_dir/results" -name "*-failure-resolve-result.json" 2>/dev/null | sort -r | head -1 || true)
+        if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+            recovery_result=$(jq -r ".outputs.gate_result // \"FAIL\"" "$result_file" 2>/dev/null)
+        fi
+
+        echo "$recovery_result" > "$worker_dir/recovery-attempted"
+
+        if [ "$recovery_result" = "PASS" ]; then
+            _log_ts "INFO: Recovery completed successfully for $task_id"
+        else
+            _log_ts "WARN: Recovery returned $recovery_result for $task_id (exit $_exit_code)"
+        fi
+    ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+
+    local bg_pid=$!
+
+    # Clean up exported vars
+    unset _RECOVERY_WIGGUM_HOME _RECOVERY_WORKER_DIR _RECOVERY_PROJECT_DIR _RECOVERY_TASK_ID
+
+    # Track the background process via file (persists across bridge invocations)
+    mkdir -p "$RALPH_DIR/orchestrator"
+    local pending_file="$RALPH_DIR/orchestrator/recovery-pending"
+    {
+        flock -x 200
+        echo "$bg_pid|$worker_dir|$task_id" >> "$pending_file"
+    } 200>"$pending_file.lock"
+
+    activity_log "worker.recovery_started" "$(basename "$worker_dir")" "$task_id" "pid=$bg_pid"
+}
+
+# Poll completed recovery background processes
+#
+# Reads recovery-pending file, checks which processes have finished,
+# and cleans up.
+_poll_pending_recoveries() {
+    local pending_file="$RALPH_DIR/orchestrator/recovery-pending"
+    [ -s "$pending_file" ] || return 0
+
+    local lines=""
+    {
+        flock -x 200
+        lines=$(cat "$pending_file")
+        : > "$pending_file"
+    } 200>"$pending_file.lock"
+
+    local remaining=""
+    while IFS='|' read -r pid worker_dir task_id; do
+        [ -n "$pid" ] || continue
+        if kill -0 "$pid" 2>/dev/null; then
+            # Still running — keep tracking
+            remaining+="$pid|$worker_dir|$task_id"$'\n'
+        else
+            # Completed — check result
+            local result="UNKNOWN"
+            if [ -f "$worker_dir/recovery-attempted" ]; then
+                result=$(cat "$worker_dir/recovery-attempted" 2>/dev/null)
+            fi
+            log "failure-recovery: $task_id completed (result=$result)"
+            activity_log "worker.recovery_completed" "$(basename "$worker_dir")" "$task_id" "result=$result"
+        fi
+    done <<< "$lines"
+
+    # Write back still-running processes
+    if [ -n "$remaining" ]; then
+        {
+            flock -x 200
+            echo -n "$remaining" >> "$pending_file"
+        } 200>"$pending_file.lock"
+    fi
+}
+
+# Count active recovery processes (running PIDs in recovery-pending)
+_count_active_recoveries() {
+    local pending_file="$RALPH_DIR/orchestrator/recovery-pending"
+    local count=0
+
+    if [ -s "$pending_file" ]; then
+        while IFS='|' read -r pid _rest; do
+            [ -n "$pid" ] || continue
+            kill -0 "$pid" 2>/dev/null && ((++count))
+        done < "$pending_file"
+    fi
+
+    # Also count workers with fresh recovery-in-progress markers
+    local now_ts stale_threshold=1800
+    now_ts=$(epoch_now)
+    for dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -f "$dir/recovery-in-progress" ] || continue
+        local marker_ts
+        marker_ts=$(cat "$dir/recovery-in-progress" 2>/dev/null)
+        marker_ts="${marker_ts:-0}"
+        [ "$(( now_ts - marker_ts ))" -lt "$stale_threshold" ] && ((++count))
+    done
+
+    echo "$count"
 }
 
 # =============================================================================

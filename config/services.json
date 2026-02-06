@@ -361,14 +361,14 @@
     },
     {
       "id": "failure-recovery",
-      "description": "Run recovery pipeline for failed workers and trigger resume",
+      "description": "Launch recovery agents for failed workers (background, up to RECOVERY_WORKER_LIMIT)",
       "phase": "periodic",
       "order": 75,
-      "timeout": 1800,
+      "timeout": 60,
       "schedule": {
         "type": "interval",
-        "interval": 120,
-        "jitter": 15,
+        "interval": 30,
+        "jitter": 5,
         "run_on_startup": true
       },
       "execution": {

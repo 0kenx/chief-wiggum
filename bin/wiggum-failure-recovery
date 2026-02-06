@@ -91,7 +91,21 @@ find_failed_workers() {
         is_worker_running "$worker_dir" && continue
 
         # Skip if recovery already in progress (recovery pipeline running)
-        [ -f "$worker_dir/recovery-in-progress" ] && continue
+        # Clean up stale markers from interrupted recovery processes
+        if [ -f "$worker_dir/recovery-in-progress" ]; then
+            local marker_ts
+            marker_ts=$(cat "$worker_dir/recovery-in-progress" 2>/dev/null)
+            marker_ts="${marker_ts:-0}"
+            local now_ts
+            now_ts=$(epoch_now)
+            local stale_threshold=1800  # 30 minutes
+            if [ "$(( now_ts - marker_ts ))" -gt "$stale_threshold" ]; then
+                rm -f "$worker_dir/recovery-in-progress"
+                log_warn "Removed stale recovery-in-progress marker for $(basename "$worker_dir")"
+            else
+                continue
+            fi
+        fi
 
         # Check recovery marker - if present, check if it succeeded
         if [ -f "$worker_dir/$RECOVERY_MARKER" ]; then
