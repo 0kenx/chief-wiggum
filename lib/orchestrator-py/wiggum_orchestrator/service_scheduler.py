@@ -7,6 +7,7 @@ with in-memory scheduling (time.time() + dict lookup, zero forks).
 from __future__ import annotations
 
 import random
+import subprocess
 import time
 
 from wiggum_orchestrator import logging_bridge as log
@@ -31,6 +32,8 @@ class ServiceScheduler:
         self._executor = executor
         self._cb = circuit_breaker
         self._startup_complete = False
+        # Background processes: service_id -> (Popen, ServiceConfig)
+        self._background_procs: dict[str, tuple[subprocess.Popen, ServiceConfig]] = {}
 
     def run_phase(self, phase: str) -> bool:
         """Run services for a phase.
@@ -110,6 +113,9 @@ class ServiceScheduler:
             self._run_startup_services(now)
             self._startup_complete = True
 
+        # Poll background processes for completion
+        self._poll_background_procs()
+
         for svc in self._registry.get_periodic_services():
             if not self._should_run_periodic(svc, now):
                 continue
@@ -119,14 +125,24 @@ class ServiceScheduler:
         return True
 
     def _run_startup_services(self, now: float) -> None:
-        """Run periodic services with run_on_startup on first tick."""
+        """Run periodic services with run_on_startup on first tick.
+
+        Services with timeout > 60s run in background to avoid blocking
+        the scheduler. Their results are checked on subsequent ticks.
+        """
         for svc in self._registry.get_periodic_services():
             if not svc.run_on_startup:
                 continue
             if svc.schedule_type not in ("interval", "cron"):
                 continue
-            log.log_debug(f"Startup run: {svc.id}")
-            self._run_single_service(svc)
+
+            # Long-timeout services run in background to avoid blocking
+            if svc.timeout > 60:
+                log.log_debug(f"Startup run (background): {svc.id}")
+                self._run_single_service_background(svc)
+            else:
+                log.log_debug(f"Startup run: {svc.id}")
+                self._run_single_service(svc)
 
     def _should_run_periodic(self, svc: ServiceConfig, now: float) -> bool:
         """Check if a periodic service should run this tick."""
@@ -194,6 +210,46 @@ class ServiceScheduler:
         else:
             self._state.mark_failed(svc.id)
             self._cb.record_failure(svc)
+
+    def _run_single_service_background(self, svc: ServiceConfig) -> None:
+        """Execute a service in background (non-blocking)."""
+        # Skip if already running in background
+        if svc.id in self._background_procs:
+            proc, _ = self._background_procs[svc.id]
+            if proc.poll() is None:
+                log.log_debug(f"Service {svc.id} already running in background")
+                return
+
+        if svc.exec_type == "function":
+            proc = self._executor.run_function_background(svc)
+            self._background_procs[svc.id] = (proc, svc)
+            self._state.mark_started(svc.id, pid=proc.pid)
+            log.log_debug(f"Started {svc.id} in background (PID {proc.pid})")
+        else:
+            # Fall back to synchronous for non-function types
+            log.log_warn(f"Background not supported for {svc.exec_type}, running sync")
+            self._run_single_service(svc)
+
+    def _poll_background_procs(self) -> None:
+        """Check background processes for completion."""
+        completed = []
+        for svc_id, (proc, svc) in self._background_procs.items():
+            rc = proc.poll()
+            if rc is not None:
+                # Process completed
+                completed.append(svc_id)
+                if rc == 0:
+                    self._state.mark_completed(svc.id)
+                    self._cb.record_success(svc)
+                    log.log_debug(f"Background service {svc.id} completed (rc=0)")
+                else:
+                    self._state.mark_failed(svc.id)
+                    self._cb.record_failure(svc)
+                    log.log_warn(f"Background service {svc.id} failed (rc={rc})")
+
+        # Remove completed from tracking
+        for svc_id in completed:
+            del self._background_procs[svc_id]
 
     def _conditions_met(self, svc: ServiceConfig) -> bool:
         """Check service conditions (env vars, file existence)."""
