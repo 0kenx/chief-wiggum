@@ -376,12 +376,9 @@ svc_orch_rate_limit_guard() {
 
 # Parse kanban and update scheduler state
 svc_orch_scheduler_tick() {
-    # Skip scheduler_tick entirely when kanban hasn't changed
-    local _mtime
-    _mtime=$(stat -c %Y "$RALPH_DIR/kanban.md" 2>/dev/null || stat -f %m "$RALPH_DIR/kanban.md" 2>/dev/null || echo "0")
-    if [[ "$_mtime" == "${_KANBAN_CACHE_MTIME:-}" ]] && [[ -n "${_KANBAN_CACHE:-}" ]]; then
-        return 0
-    fi
+    # Always run scheduler_tick — it rebuilds SCHED_UNIFIED_QUEUE which includes
+    # resume candidates from worker directories (independent of kanban changes).
+    # Kanban parsing is already cached internally by _get_cached_metadata().
     scheduler_tick
 }
 
