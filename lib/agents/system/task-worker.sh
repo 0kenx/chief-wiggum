@@ -498,6 +498,8 @@ _update_kanban_status() {
         fi
         # Update GitHub issue and PR labels to failed
         github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+        # Post failure summary to GitHub issue (non-blocking)
+        _post_task_failure_to_github "$worker_dir" "$task_id" || true
         log_error "Task worker $worker_id failed task $task_id"
     fi
 
@@ -507,4 +509,67 @@ _update_kanban_status() {
     # Update metrics.json with latest worker data
     log_debug "Exporting metrics to metrics.json"
     export_metrics "$RALPH_DIR" 2>/dev/null || true
+}
+
+# Post failure summary to GitHub issue
+#
+# Builds a markdown table from pipeline result files and posts it
+# to the linked GitHub issue via github_issue_post_failure_summary.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task ID
+#
+# Returns: 0 on success, 1 on failure or if no sync state
+_post_task_failure_to_github() {
+    local worker_dir="$1"
+    local task_id="$2"
+
+    # Skip if no results directory
+    [ -d "$worker_dir/results" ] || return 0
+
+    # Skip if no sync state (no GitHub integration)
+    [ -f "$RALPH_DIR/github-sync-state.json" ] || return 0
+
+    # Build summary from result files
+    local summary="### Pipeline Results
+
+| Step | Result | Duration |
+|------|--------|----------|"
+
+    local result_file
+    while IFS= read -r result_file; do
+        [ -n "$result_file" ] || continue
+        [ -f "$result_file" ] || continue
+
+        local basename_file
+        basename_file=$(basename "$result_file")
+
+        # Extract step_id from filename: <epoch>-<step_id>-result.json
+        local step_id
+        step_id=$(echo "$basename_file" | sed -E 's/^[0-9]+-(.+)-result\.json$/\1/')
+
+        local gate_result elapsed_ms
+        gate_result=$(jq -r '.outputs.gate_result // "UNKNOWN"' "$result_file" 2>/dev/null)
+        gate_result="${gate_result:-UNKNOWN}"
+        elapsed_ms=$(jq -r '.elapsed_ms // 0' "$result_file" 2>/dev/null)
+        elapsed_ms="${elapsed_ms:-0}"
+
+        # Format duration
+        local duration_s=$((elapsed_ms / 1000))
+        local duration_str
+        if [ "$duration_s" -lt 60 ]; then
+            duration_str="${duration_s}s"
+        elif [ "$duration_s" -lt 3600 ]; then
+            duration_str="$((duration_s / 60))m $((duration_s % 60))s"
+        else
+            duration_str="$((duration_s / 3600))h $(( (duration_s % 3600) / 60 ))m"
+        fi
+
+        summary+="
+| $step_id | $gate_result | $duration_str |"
+    done < <(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | sort)
+
+    source "$WIGGUM_HOME/lib/github/issue-writer.sh"
+    github_issue_post_failure_summary "$RALPH_DIR" "$task_id" "$summary"
 }

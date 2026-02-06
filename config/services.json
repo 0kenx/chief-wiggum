@@ -384,6 +384,30 @@
       }
     },
     {
+      "id": "github-resume-trigger",
+      "description": "Process wiggum:resume-request labels on failed tasks to trigger resume",
+      "phase": "periodic",
+      "order": 76,
+      "timeout": 60,
+      "schedule": {
+        "type": "interval",
+        "interval": 60,
+        "jitter": 5,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_orch_github_resume_trigger"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      },
+      "condition": {
+        "env_not_equals": { "WIGGUM_TASK_SOURCE_MODE": "local" }
+      }
+    },
+    {
       "id": "memory-extract",
       "description": "Dispatch pending workers for memory analysis (writes context file)",
       "phase": "periodic",

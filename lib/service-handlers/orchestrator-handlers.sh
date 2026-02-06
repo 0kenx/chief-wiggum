@@ -120,6 +120,11 @@ svc_orch_failure_recovery() {
     orch_failure_recovery "$@"
 }
 
+# Process wiggum:resume-request labels on failed tasks
+svc_orch_github_resume_trigger() {
+    orch_github_resume_trigger "$@"
+}
+
 # Rotate oversized global log files
 svc_orch_log_rotation() {
     log_rotation_check_all

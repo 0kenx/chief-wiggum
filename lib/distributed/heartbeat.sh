@@ -252,6 +252,17 @@ heartbeat_update_all() {
         # Derive task_id from issue
         local task_id="GH-$issue_number"
 
+        # Check for step-completed event to force immediate update
+        local worker_dir=""
+        if [ -d "$ralph_dir/workers" ]; then
+            worker_dir=$(find "$ralph_dir/workers" -maxdepth 1 -type d \
+                -name "worker-${task_id}-*" 2>/dev/null | head -1)
+        fi
+        if [ -n "$worker_dir" ] && [ -f "$worker_dir/step-completed-event" ]; then
+            _HEARTBEAT_LAST[$issue_number]=0
+            rm -f "$worker_dir/step-completed-event"
+        fi
+
         # Check if we need to update (throttle to avoid API spam)
         local last="${_HEARTBEAT_LAST[$issue_number]:-0}"
         local now

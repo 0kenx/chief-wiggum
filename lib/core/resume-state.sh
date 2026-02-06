@@ -226,3 +226,35 @@ resume_state_max_exceeded() {
 
     [ "$attempts" -ge "$max" ]
 }
+
+# Reset resume state for a user-initiated retry
+#
+# Clears terminal flag and cooldown while preserving attempt_count and
+# history. Appends a USER_RETRY history entry for audit trail.
+#
+# Args:
+#   worker_dir - Worker directory path
+resume_state_reset_for_user_retry() {
+    local worker_dir="$1"
+
+    local now
+    now=$(epoch_now)
+
+    local state
+    state=$(resume_state_read "$worker_dir")
+
+    state=$(echo "$state" | jq \
+        --argjson now "$now" \
+        '.terminal = false
+        | .terminal_reason = ""
+        | .cooldown_until = 0
+        | .history += [{
+            at: $now,
+            decision: "USER_RETRY",
+            pipeline: null,
+            step: null,
+            reason: "User-initiated retry via wiggum:resume-request label"
+        }]')
+
+    resume_state_write "$worker_dir" "$state"
+}

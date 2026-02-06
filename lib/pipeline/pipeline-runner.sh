@@ -873,6 +873,9 @@ _pipeline_run_step() {
     # Track phase timing
     _phase_start "$step_id"
 
+    # Write step start time for heartbeat progress display
+    epoch_now > "$worker_dir/step-start-time"
+
     # Export step ID for result file naming
     export WIGGUM_STEP_ID="$step_id"
 
@@ -1010,6 +1013,9 @@ _pipeline_run_step() {
     log_kv "Finished" "$(iso_now)"
 
     activity_log "step.completed" "$_worker_id" "${WIGGUM_TASK_ID:-}" "step_id=$step_id" "agent=$step_agent" "result=${gate_result:-UNKNOWN}"
+
+    # Emit step-completed event for heartbeat to pick up
+    echo "${step_id}|${gate_result:-UNKNOWN}" > "$worker_dir/step-completed-event"
 
     # Clear step context exports
     _clear_step_context

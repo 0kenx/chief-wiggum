@@ -1242,6 +1242,119 @@ _is_recovery_tracked_and_running() {
 }
 
 # =============================================================================
+# GitHub Resume Trigger
+# =============================================================================
+
+# Process wiggum:resume-request labels on failed tasks
+#
+# Scans for failed tasks that have the wiggum:resume-request label on their
+# linked GitHub issue. Resets worker state and re-queues for normal resume
+# flow. The resume-decide service (30s) picks up the worker.
+#
+# Globals:
+#   RALPH_DIR   - Required
+#   PROJECT_DIR - Required
+#   WIGGUM_HOME - Required
+#
+# Returns: 0 on success
+orch_github_resume_trigger() {
+    local ralph_dir="${RALPH_DIR:-}"
+    local project_dir="${PROJECT_DIR:-}"
+
+    [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
+    [ -n "$project_dir" ] || { log_error "PROJECT_DIR not set"; return 1; }
+
+    local kanban_file="$ralph_dir/kanban.md"
+    [ -f "$kanban_file" ] || return 0
+    [ -d "$ralph_dir/workers" ] || return 0
+    [ -f "$ralph_dir/github-sync-state.json" ] || return 0
+
+    local failed_tasks
+    failed_tasks=$(get_failed_tasks "$kanban_file")
+    [ -n "$failed_tasks" ] || return 0
+
+    source "$WIGGUM_HOME/lib/core/resume-state.sh"
+    source "$WIGGUM_HOME/lib/github/issue-writer.sh"
+    source "$WIGGUM_HOME/lib/github/issue-state.sh"
+
+    while IFS= read -r task_id; do
+        [ -n "$task_id" ] || continue
+
+        # Look up issue number from sync state
+        local entry
+        entry=$(github_sync_state_get_task "$ralph_dir" "$task_id")
+        [ "$entry" != "null" ] || continue
+
+        local issue_number
+        issue_number=$(echo "$entry" | jq -r '.issue_number')
+        [ -n "$issue_number" ] && [ "$issue_number" != "null" ] || continue
+
+        # Fetch labels and check for wiggum:resume-request
+        local labels label_exit=0
+        labels=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue view "$issue_number" \
+            --json labels --jq '.labels[].name' 2>/dev/null) || label_exit=$?
+        if [ "$label_exit" -ne 0 ]; then
+            continue
+        fi
+        echo "$labels" | grep -qx "wiggum:resume-request" || continue
+
+        # Skip if failure-recovery is running for this worker
+        local worker_dir=""
+        worker_dir=$(find_worker_by_task_id "$ralph_dir" "$task_id")
+        [ -n "$worker_dir" ] || continue
+
+        if [ -f "$worker_dir/recovery-in-progress" ]; then
+            if _is_recovery_tracked_and_running "$worker_dir"; then
+                log_debug "github-resume-trigger: skipping $task_id - recovery in progress"
+                continue
+            fi
+        fi
+
+        # Skip if workspace doesn't exist
+        [ -d "$worker_dir/workspace" ] || continue
+
+        # Skip if worker is still running
+        is_worker_running "$worker_dir" && continue
+
+        log "github-resume-trigger: processing resume request for $task_id (#$issue_number)"
+
+        # Reset worker state
+        resume_state_reset_for_user_retry "$worker_dir"
+        rm -f "$worker_dir/resume-decision.json" \
+              "$worker_dir/resume-decision.json.consumed" \
+              "$worker_dir/recovery-attempted"
+        find "$worker_dir" -maxdepth 1 -name 'stop-reason-*' -delete
+
+        # Update kanban: [*] -> [=]
+        update_kanban_status "$ralph_dir/kanban.md" "$task_id" "=" || true
+
+        # Update GitHub issue: reopen, swap labels, remove resume-request
+        github_issue_reopen "$issue_number" || true
+        github_issue_set_status_label "$issue_number" "wiggum:in-progress" "wiggum:failed" || true
+        github_issue_remove_label "$issue_number" "wiggum:resume-request" || true
+
+        # Post confirmation comment
+        github_issue_post_comment "$issue_number" \
+            "wiggum: resume requested — task re-queued for execution." || true
+
+        # Update sync state
+        local updated_entry
+        updated_entry=$(echo "$entry" | jq \
+            --arg status "=" \
+            --arg state "open" \
+            '.last_synced_status = $status | .last_remote_state = $state')
+        github_sync_state_set_task "$ralph_dir" "$task_id" "$updated_entry"
+
+        activity_log "worker.github_resume_triggered" "$(basename "$worker_dir")" "$task_id" \
+            "issue=$issue_number"
+        scheduler_mark_event
+
+    done <<< "$failed_tasks"
+
+    return 0
+}
+
+# =============================================================================
 # Worker Spawn and Lifecycle Functions
 #
 # Extracted from wiggum-run to keep the entry point minimal.

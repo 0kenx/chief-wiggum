@@ -86,6 +86,7 @@ GITHUB_LABELS=(
     "wiggum:pending-approval|d4c5f9|Task awaiting review/approval"
     "wiggum:completed|0e8a16|Task completed successfully"
     "wiggum:failed|d93f0b|Task failed"
+    "wiggum:resume-request|ff69b4|Request resume of failed task"
     "wiggum:not-planned|c0c0c0|Task will not be implemented"
     # Priority labels
     "priority:critical|b60205|Highest priority - immediate attention"
