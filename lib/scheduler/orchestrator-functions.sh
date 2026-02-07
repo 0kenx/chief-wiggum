@@ -1396,6 +1396,10 @@ orch_github_resume_trigger() {
         # (which only holds open issues) is stale and claim would fail lookup.
         task_source_invalidate_cache
 
+        # Warm the reopened issue into the cache immediately — the full cache
+        # refresh may not see it yet due to GitHub API eventual consistency.
+        task_source_warm_issue "$issue_number" || true
+
         # Re-claim task in distributed mode (server label removed during shutdown)
         scheduler_claim_task "$task_id" || true
 

@@ -395,3 +395,26 @@ task_source_invalidate_cache() {
     esac
     return 0
 }
+
+# Warm a single issue into the cache by number
+#
+# Fetches the issue from the API and inserts it into the cache so that
+# subsequent lookups can find it immediately (e.g. after reopening an issue
+# whose state hasn't propagated to list queries yet).
+#
+# Args:
+#   issue_number - GitHub issue number
+#
+# Returns: 0 on success, 1 on failure or non-github adapter
+task_source_warm_issue() {
+    local issue_number="$1"
+
+    case "${_TASK_SOURCE_ADAPTER:-}" in
+        github|hybrid)
+            _github_warm_issue "$issue_number"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}

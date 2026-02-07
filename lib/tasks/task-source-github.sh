@@ -193,6 +193,33 @@ _github_invalidate_cache() {
     _GH_CACHE_TIMESTAMP=0
 }
 
+# Warm a single issue into the cache by number
+#
+# Fetches the issue from the API and inserts it into the cache so that
+# subsequent lookups (e.g. _github_find_issue_by_task_id) can find it
+# without waiting for a full cache refresh.
+#
+# Args:
+#   issue_number - GitHub issue number
+#
+# Returns: 0 on success, 1 on fetch failure
+_github_warm_issue() {
+    local issue_number="$1"
+
+    local result exit_code=0
+    result=$(timeout "$_GH_TIMEOUT" gh issue view "$issue_number" \
+        --json number,title,body,labels,assignees,state,updatedAt \
+        2>&1) || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        log_debug "Failed to warm issue #$issue_number into cache: $result"
+        return 1
+    fi
+
+    _GH_ISSUE_CACHE[$issue_number]="$result"
+    return 0
+}
+
 # Get issue from cache or fetch
 #
 # Args:
