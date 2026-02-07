@@ -194,7 +194,10 @@ _scheduler_reclaim_restored_workers() {
         _github_refresh_cache 2>/dev/null || true
     fi
 
-    local server_id="${WIGGUM_SERVER_ID:-}"
+    local server_id=""
+    if declare -F task_source_get_server_id &>/dev/null; then
+        server_id=$(task_source_get_server_id)
+    fi
     [ -n "$server_id" ] || return 0
 
     local reclaimed=0
