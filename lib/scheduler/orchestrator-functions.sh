@@ -1282,6 +1282,10 @@ orch_github_resume_trigger() {
     source "$WIGGUM_HOME/lib/core/resume-state.sh"
     source "$WIGGUM_HOME/lib/github/issue-writer.sh"
     source "$WIGGUM_HOME/lib/github/issue-state.sh"
+    source "$WIGGUM_HOME/lib/github/issue-config.sh"
+
+    # Load config for allowed user IDs (if not already loaded)
+    [ -n "${GITHUB_SYNC_ALLOWED_USER_IDS:-}" ] || load_github_sync_config
 
     while IFS= read -r task_id; do
         [ -n "$task_id" ] || continue
@@ -1303,6 +1307,26 @@ orch_github_resume_trigger() {
             continue
         fi
         echo "$labels" | grep -qx "wiggum:resume-request" || continue
+
+        # Check who added the resume-request label (whitelist guard)
+        if [ -n "${GITHUB_SYNC_ALLOWED_USER_IDS:-}" ]; then
+            local actor_info=""
+            actor_info=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api \
+                "repos/{owner}/{repo}/issues/${issue_number}/events" \
+                --jq '[.[] | select(.event == "labeled" and .label.name == "wiggum:resume-request")] | last | "\(.actor.id // "")|\(.actor.login // "unknown")"' \
+                2>/dev/null) || true
+
+            local actor_id="${actor_info%%|*}"
+            local actor_login="${actor_info#*|}"
+
+            if [ -z "$actor_id" ] || ! github_sync_is_author_allowed "$actor_id"; then
+                log_warn "github-resume-trigger: rejecting resume request for $task_id — user ${actor_login:-unknown} (id: ${actor_id:-unknown}) not in allowed_user_ids"
+                github_issue_remove_label "$issue_number" "wiggum:resume-request" || true
+                github_issue_post_comment "$issue_number" \
+                    "wiggum: resume request rejected — user not authorized. Contact a project maintainer." || true
+                continue
+            fi
+        fi
 
         # Skip if failure-recovery is running for this worker
         local worker_dir=""
