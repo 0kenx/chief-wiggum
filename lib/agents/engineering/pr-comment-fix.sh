@@ -81,7 +81,6 @@ agent_run() {
         agent_setup_context "$worker_dir" "$workspace" "$project_dir"
         agent_log_complete "$worker_dir" 0 "$start_time"
         agent_write_result "$worker_dir" "SKIP" '{"push_succeeded":false,"comments_fixed":0,"comments_pending":0,"comments_skipped":0}'
-        git_state_set "$worker_dir" "fix_completed" "engineering.pr-comment-fix" "No comments to fix"
         return 0
     fi
 
@@ -158,15 +157,6 @@ agent_run() {
         "$commit_sha" "$push_succeeded" "$comments_fixed" "$comments_pending" "$comments_skipped")
 
     agent_write_result "$worker_dir" "$gate_result" "$outputs_json"
-
-    # Update git state on success
-    if [ "$gate_result" = "PASS" ]; then
-        local state_reason="All comments addressed"
-        if [ "$push_succeeded" = "true" ]; then
-            state_reason="All comments addressed, push succeeded"
-        fi
-        git_state_set "$worker_dir" "fix_completed" "engineering.pr-comment-fix" "$state_reason"
-    fi
 
     return $loop_result
 }

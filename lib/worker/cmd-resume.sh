@@ -22,6 +22,7 @@ source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
 source "$WIGGUM_HOME/lib/core/resume-state.sh"
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
 source "$WIGGUM_HOME/lib/github/issue-sync.sh"
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 # Check if a step completed (has a result file) vs was interrupted (no result)
 #
@@ -589,9 +590,9 @@ _handle_abort() {
     _msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     _msg ""
 
-    # Mark task as [*] failed
-    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+    # Mark task as [*] failed (lifecycle: git-state → failed, kanban → *, sync github)
+    lifecycle_is_loaded || lifecycle_load
+    emit_event "$worker_dir" "resume.abort" "cmd-resume._handle_abort" || true
 
     # Mark resume state as terminal
     resume_state_set_terminal "$worker_dir" "Unrecoverable failure — aborted by resume-decide"

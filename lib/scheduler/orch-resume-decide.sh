@@ -13,6 +13,7 @@ set -euo pipefail
 _ORCH_RESUME_DECIDE_LOADED=1
 
 source "$WIGGUM_HOME/lib/core/atomic-write.sh"
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 # Check if a pipeline step completed (has a result file) vs was interrupted
 #
@@ -49,8 +50,8 @@ _resume_decide_handle_abort() {
     local reason="${3:-Unrecoverable — auto-aborted}"
 
     resume_state_increment "$worker_dir" "ABORT" "" "" "Auto-abort: $reason"
-    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+    lifecycle_is_loaded || lifecycle_load
+    emit_event "$worker_dir" "resume.abort" "orch-resume-decide._resume_decide_handle_abort" || true
     resume_state_set_terminal "$worker_dir" "$reason"
     rm -f "$worker_dir/resume-decision.json"
     activity_log "worker.resume_abort" "$(basename "$worker_dir")" "$task_id"
@@ -228,8 +229,8 @@ _resume_decide_for_worker() {
             ;;
         ABORT)
             resume_state_increment "$worker_dir" "ABORT" "" "" "Resume-decide: unrecoverable failure"
-            update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+            lifecycle_is_loaded || lifecycle_load
+            emit_event "$worker_dir" "resume.abort" "orch-resume-decide._resume_decide_for_worker.ABORT" || true
             resume_state_set_terminal "$worker_dir" "Unrecoverable failure — aborted by resume-decide"
             rm -f "$worker_dir/resume-decision.json"
             log_error "Task $task_id marked FAILED by resume-decide (unrecoverable)"
@@ -246,8 +247,8 @@ _resume_decide_for_worker() {
             ;;
         *)
             resume_state_increment "$worker_dir" "ABORT" "" "" "Unknown decision: $decision"
-            update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+            lifecycle_is_loaded || lifecycle_load
+            emit_event "$worker_dir" "resume.abort" "orch-resume-decide._resume_decide_for_worker.unknown" || true
             resume_state_set_terminal "$worker_dir" "Unknown decision '$decision' — treated as ABORT"
             rm -f "$worker_dir/resume-decision.json"
             log_error "Task $task_id: unknown resume decision '$decision' — treated as ABORT"
@@ -416,8 +417,8 @@ _poll_pending_decides() {
             if resume_state_max_exceeded "$worker_dir"; then
                 resume_state_set_terminal "$worker_dir" \
                     "Max resume attempts exceeded after decide errors (last exit: $decide_exit)"
-                update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-                github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$worker_dir" "resume.abort" "orch-resume-decide._poll_pending_decides" || true
                 log_error "Task $task_id marked FAILED — max resume attempts exceeded (decide exit: $decide_exit)"
                 activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$task_id" \
                     "exit_code=$decide_exit reason=max_attempts_exceeded"
@@ -517,8 +518,8 @@ _recover_stranded_decisions() {
                     resume_state_set_terminal "$worker_dir" "Recovered: work complete, task marked [P]"
                 else
                     # No workspace, no PR — work was lost
-                    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-                    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+                    lifecycle_is_loaded || lifecycle_load
+                    emit_event "$worker_dir" "resume.abort" "orch-resume-decide._recover_stranded.complete_lost" || true
                     resume_state_set_terminal "$worker_dir" "Recovered: COMPLETE but no workspace or PR — work lost"
                     log_error "Task $task_id COMPLETE decision but no workspace or PR — marking failed"
                 fi
@@ -529,8 +530,8 @@ _recover_stranded_decisions() {
                 ;;
             ABORT)
                 resume_state_increment "$worker_dir" "ABORT" "" "" "Recovered stranded ABORT"
-                update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-                github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$worker_dir" "resume.abort" "orch-resume-decide._recover_stranded.ABORT" || true
                 resume_state_set_terminal "$worker_dir" "Recovered: aborted by resume-decide"
                 rm -f "$worker_dir/resume-decision.json"
                 activity_log "worker.resume_abort" "$worker_id" "$task_id" "recovered=true"
@@ -545,8 +546,8 @@ _recover_stranded_decisions() {
                 ;;
             *)
                 resume_state_increment "$worker_dir" "ABORT" "" "" "Recovered unknown decision: $decision"
-                update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-                github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$worker_dir" "resume.abort" "orch-resume-decide._recover_stranded.unknown" || true
                 resume_state_set_terminal "$worker_dir" "Recovered: unknown decision '$decision'"
                 rm -f "$worker_dir/resume-decision.json"
                 scheduler_mark_event
@@ -796,8 +797,8 @@ _poll_pending_resumes() {
                 if resume_state_max_exceeded "$worker_dir"; then
                     resume_state_set_terminal "$worker_dir" \
                         "Max resume attempts exceeded after repeated errors (last exit: $resume_exit)"
-                    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
-                    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+                    lifecycle_is_loaded || lifecycle_load
+                    emit_event "$worker_dir" "resume.abort" "orch-resume-decide._poll_pending_resumes" || true
                     log_error "Task $task_id marked FAILED — max resume attempts exceeded (exit code: $resume_exit)"
                     activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$task_id" \
                         "exit_code=$resume_exit reason=max_attempts_exceeded"

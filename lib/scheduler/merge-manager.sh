@@ -7,6 +7,9 @@
 #   - Transitioning state for retry/resolution
 #   - Updating kanban status on success
 #   - Queueing conflicts for multi-PR coordination
+#
+# State transitions are driven by the lifecycle engine (emit_event).
+# See config/worker-lifecycle.json for the spec.
 set -euo pipefail
 
 [ -n "${_MERGE_MANAGER_LOADED:-}" ] && return 0
@@ -21,32 +24,8 @@ source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
-
-# Check if a failed worker should be marked permanently failed in kanban
-#
-# Called after setting git-state to "failed". If the worker has exceeded
-# max recovery attempts, marks the kanban task as [*] (failed).
-#
-# Args:
-#   worker_dir  - Worker directory path
-#   kanban_file - Path to kanban.md
-#   task_id     - Task identifier
-_mm_check_permanent_failure() {
-    local worker_dir="$1"
-    local kanban_file="$2"
-    local task_id="$3"
-
-    local _recovery_count
-    _recovery_count=$(git_state_get_recovery_attempts "$worker_dir")
-    _recovery_count="${_recovery_count:-0}"
-
-    if [ "$_recovery_count" -ge "${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}" ]; then
-        update_kanban_failed "$kanban_file" "$task_id"
-        source "$WIGGUM_HOME/lib/github/issue-sync.sh"
-        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
-        log_error "$task_id: permanently failed after $_recovery_count recovery attempts"
-    fi
-}
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
+source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 
 # Seconds to wait for GitHub to report PR as mergeable after a push
 MERGE_POLL_TIMEOUT="${WIGGUM_MERGE_POLL_TIMEOUT:-30}"
@@ -185,7 +164,46 @@ _cleanup_merged_pr_worktree() {
     log "Worker archived to history for $worker_name"
 }
 
+# Emit merge.conflict + conflict.needs_resolve events
+#
+# Shared by pre-merge conflict detection and post-merge conflict handling.
+# Computes affected files for multi-PR tracking before emitting events.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   pr_number  - PR number
+#   error_msg  - Error description for audit trail
+_mm_emit_conflict() {
+    local worker_dir="$1"
+    local pr_number="$2"
+    local error_msg="$3"
+
+    local affected_files='[]'
+    local workspace="$worker_dir/workspace"
+    if [ -d "$workspace" ]; then
+        local changed_files
+        changed_files=$(git -C "$workspace" diff --name-only origin/main 2>/dev/null | head -50 || true)
+        if [ -n "$changed_files" ]; then
+            affected_files=$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(length > 0))')
+        fi
+    fi
+
+    local data_json
+    data_json=$(jq -n \
+        --arg e "$error_msg" \
+        --argjson pr "$pr_number" \
+        --argjson af "$affected_files" \
+        '{error: $e, pr_number: $pr, affected_files: $af}')
+
+    emit_event "$worker_dir" "merge.conflict" "merge-manager.attempt_pr_merge" "$data_json"
+    emit_event "$worker_dir" "conflict.needs_resolve" "merge-manager.attempt_pr_merge"
+}
+
 # Attempt to merge a PR for a worker
+#
+# Uses the lifecycle engine (emit_event) for all state transitions.
+# The engine handles guard evaluation, kanban updates, and side effects
+# according to config/worker-lifecycle.json.
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -194,12 +212,15 @@ _cleanup_merged_pr_worktree() {
 #
 # Returns:
 #   0 - Merge succeeded
-#   1 - Merge conflict (needs resolver)
+#   1 - Merge conflict (needs resolver) or retry needed
 #   2 - Other failure (unrecoverable)
 attempt_pr_merge() {
     local worker_dir="$1"
     local task_id="$2"
     local ralph_dir="$3"
+
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
 
     local pr_number
     pr_number=$(git_state_get_pr "$worker_dir")
@@ -223,20 +244,21 @@ attempt_pr_merge() {
         return 2
     fi
 
-    # Check if we've already exceeded max attempts BEFORE incrementing
-    local merge_attempts
-    merge_attempts=$(git_state_get_merge_attempts "$worker_dir")
-    if [ "$merge_attempts" -ge "$MAX_MERGE_ATTEMPTS" ]; then
-        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Max merge attempts ($MAX_MERGE_ATTEMPTS) already reached"
-        _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
-        log_error "Max merge attempts already reached for $task_id (at $merge_attempts attempts)"
+    # Attempt to start merge via lifecycle engine.
+    # Guard merge_attempts_lt_max determines the path:
+    #   pass → merging + inc_merge_attempts
+    #   fail → failed  + check_permanent (fallback)
+    emit_event "$worker_dir" "merge.start" "merge-manager.attempt_pr_merge"
+
+    local post_start_state
+    post_start_state=$(git_state_get "$worker_dir")
+    if [ "$post_start_state" = "failed" ]; then
+        log_error "Max merge attempts reached for $task_id - cannot attempt merge"
         return 2
     fi
 
-    git_state_set "$worker_dir" "merging" "merge-manager.attempt_pr_merge" "Attempting merge of PR #$pr_number"
-    git_state_inc_merge_attempts "$worker_dir"
-    ((++merge_attempts))
-
+    local merge_attempts
+    merge_attempts=$(git_state_get_merge_attempts "$worker_dir")
     log "Attempting merge for $task_id PR #$pr_number (attempt $merge_attempts/$MAX_MERGE_ATTEMPTS)"
 
     # Wait for GitHub to determine mergeable status before attempting merge.
@@ -248,30 +270,16 @@ attempt_pr_merge() {
     if [ "$poll_result" -eq 1 ]; then
         # PR has conflicts - skip straight to conflict handling
         log "PR #$pr_number has conflicts (detected before merge attempt)"
-        git_state_set_error "$worker_dir" "Merge conflict detected via mergeable status"
-        git_state_set "$worker_dir" "merge_conflict" "merge-manager.attempt_pr_merge" "PR has conflicts (pre-merge check)"
+        _mm_emit_conflict "$worker_dir" "$pr_number" "Merge conflict detected via mergeable status"
 
-        local affected_files='[]'
-        local workspace="$worker_dir/workspace"
-        if [ -d "$workspace" ]; then
-            local changed_files
-            changed_files=$(git -C "$workspace" diff --name-only origin/main 2>/dev/null | head -50 || true)
-            if [ -n "$changed_files" ]; then
-                affected_files=$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(length > 0))')
-            fi
-        fi
-        conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$affected_files"
-
-        if [ "$merge_attempts" -lt "$MAX_MERGE_ATTEMPTS" ]; then
-            git_state_set "$worker_dir" "needs_resolve" "merge-manager.attempt_pr_merge" "Conflict resolver required"
-            log "Merge conflict for $task_id - will spawn resolver"
-            return 1
-        else
-            git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Max merge attempts ($MAX_MERGE_ATTEMPTS) exceeded"
-            _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
+        local conflict_state
+        conflict_state=$(git_state_get "$worker_dir")
+        if [ "$conflict_state" = "failed" ]; then
             log_error "Max merge attempts exceeded for $task_id"
             return 2
         fi
+        log "Merge conflict for $task_id - will spawn resolver"
+        return 1
     fi
     # poll_result=2 (timeout/unknown) - proceed with merge attempt anyway
 
@@ -282,45 +290,17 @@ attempt_pr_merge() {
     merge_output=$(gh pr merge "$pr_number" --squash 2>&1) || merge_exit=$?
 
     if [ $merge_exit -eq 0 ]; then
-        git_state_set "$worker_dir" "merged" "merge-manager.attempt_pr_merge" "PR #$pr_number merged successfully"
         log "PR #$pr_number merged successfully for $task_id"
-
-        # Update kanban status to complete
-        if [ -f "$ralph_dir/kanban.md" ]; then
-            update_kanban_status "$ralph_dir/kanban.md" "$task_id" "x"
-        fi
-
-        # Sync issue + PR labels before cleanup (worker dir must still exist for PR lookup)
-        source "$WIGGUM_HOME/lib/github/issue-sync.sh"
-        github_issue_sync_task_status "$ralph_dir" "$task_id" "x" || true
-
-        # Clean up batch coordination state before removing workspace
-        _cleanup_batch_state "$worker_dir" "$task_id" "$ralph_dir"
-
-        # Clean up worktree
-        _cleanup_merged_pr_worktree "$worker_dir"
+        emit_event "$worker_dir" "merge.succeeded" "merge-manager.attempt_pr_merge" \
+            "$(jq -n --argjson pr "$pr_number" '{pr_number: $pr}')"
         return 0
     fi
 
     # Check if PR was already merged (gh returns error but this is actually success)
     if echo "$merge_output" | grep -qi "already merged"; then
-        git_state_set "$worker_dir" "merged" "merge-manager.attempt_pr_merge" "PR #$pr_number was already merged"
         log "PR #$pr_number was already merged for $task_id"
-
-        # Update kanban status to complete
-        if [ -f "$ralph_dir/kanban.md" ]; then
-            update_kanban_status "$ralph_dir/kanban.md" "$task_id" "x"
-        fi
-
-        # Sync issue + PR labels before cleanup (worker dir must still exist for PR lookup)
-        source "$WIGGUM_HOME/lib/github/issue-sync.sh"
-        github_issue_sync_task_status "$ralph_dir" "$task_id" "x" || true
-
-        # Clean up batch coordination state before removing workspace
-        _cleanup_batch_state "$worker_dir" "$task_id" "$ralph_dir"
-
-        # Clean up worktree
-        _cleanup_merged_pr_worktree "$worker_dir"
+        emit_event "$worker_dir" "merge.already_merged" "merge-manager.attempt_pr_merge" \
+            "$(jq -n --argjson pr "$pr_number" '{pr_number: $pr}')"
         return 0
     fi
 
@@ -330,100 +310,70 @@ attempt_pr_merge() {
     # "local changes would be overwritten" = dirty working tree, NOT a conflict
     # Only "conflict" or "cannot be merged" with actual conflict markers = real conflict
 
-    # "Out of date" — branch is behind main. Not a conflict — recover via
-    # rebase + force-push. Safe because task branches are single-owner.
+    # "Out of date" — branch is behind main. Rebase recovery via guard.
+    # Guard _guard_rebase_succeeded does fetch+rebase+force-push as a side effect.
+    # If guard passes: → needs_merge (ready for retry)
+    # If guard fails:  → failed + set_error + check_permanent (fallback)
     if echo "$merge_output" | grep -qiE "(out of date|branch.*behind|is not up to date)"; then
         log "Branch out of date for $task_id — attempting rebase recovery"
-        local workspace="$worker_dir/workspace"
-        if [ -d "$workspace" ]; then
-            # Fetch latest main and rebase onto it
-            git -C "$workspace" fetch origin main 2>/dev/null || true
+        emit_event "$worker_dir" "merge.out_of_date" "merge-manager.attempt_pr_merge" \
+            "$(jq -n --arg e "Branch out of date and rebase recovery failed: $merge_output" \
+                     --arg ws "$worker_dir/workspace" \
+                     '{error: $e, workspace: $ws}')"
 
-            local rebase_exit=0
-            git -C "$workspace" rebase origin/main 2>/dev/null || rebase_exit=$?
-
-            if [ $rebase_exit -eq 0 ]; then
-                # Rebase succeeded — force-push with lease (safe: single-owner branch)
-                local push_exit=0
-                git -C "$workspace" push --force-with-lease 2>/dev/null || push_exit=$?
-
-                if [ $push_exit -eq 0 ]; then
-                    log "Rebase recovery succeeded for $task_id — retrying merge"
-                    git_state_set "$worker_dir" "needs_merge" "merge-manager.attempt_pr_merge" "Rebased and pushed, ready for merge retry"
-                    return 1  # Signal retry needed (not a conflict, not a fatal failure)
-                else
-                    log_warn "Force-push failed after rebase for $task_id"
-                fi
-            else
-                # Rebase failed (conflicts) — abort rebase, fall through to failure
-                git -C "$workspace" rebase --abort 2>/dev/null || true
-                log_warn "Rebase recovery failed for $task_id — conflicts during rebase"
-            fi
+        local ood_state
+        ood_state=$(git_state_get "$worker_dir")
+        if [ "$ood_state" = "needs_merge" ]; then
+            log "Rebase recovery succeeded for $task_id — retrying merge"
+            return 1
         fi
-
-        # Recovery failed — fall through to permanent failure
-        git_state_set_error "$worker_dir" "Branch out of date and rebase recovery failed: $merge_output"
-        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Branch is out of date - rebase recovery failed"
-        _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
         log_error "Merge failed for $task_id: branch out of date, rebase recovery failed"
         return 2
     fi
 
+    # Dirty working tree — hard failure
     if echo "$merge_output" | grep -qiE "(local changes.*overwritten|uncommitted changes|working tree.*not clean)"; then
-        git_state_set_error "$worker_dir" "Dirty working tree: $merge_output"
-        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Working tree has uncommitted changes"
-        _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
+        emit_event "$worker_dir" "merge.hard_fail" "merge-manager.attempt_pr_merge" \
+            "$(jq -n --arg e "Dirty working tree: $merge_output" '{error: $e}')"
         log_error "Merge failed for $task_id: working tree has uncommitted changes"
         return 2
     fi
 
-    # Check if failure is due to actual merge conflict
+    # Actual merge conflict
     if echo "$merge_output" | grep -qiE "(conflict|cannot be merged)"; then
-        git_state_set_error "$worker_dir" "Merge conflict: $merge_output"
-        git_state_set "$worker_dir" "merge_conflict" "merge-manager.attempt_pr_merge" "Merge failed due to conflict"
+        _mm_emit_conflict "$worker_dir" "$pr_number" "Merge conflict: $merge_output"
 
-        # Get affected files for multi-PR tracking
-        local affected_files='[]'
-        local workspace="$worker_dir/workspace"
-        if [ -d "$workspace" ]; then
-            # Get list of files changed in this branch vs main
-            local changed_files
-            changed_files=$(git -C "$workspace" diff --name-only origin/main 2>/dev/null | head -50 || true)
-            if [ -n "$changed_files" ]; then
-                affected_files=$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(length > 0))')
-            fi
-        fi
-
-        # Add to conflict queue for multi-PR coordination
-        conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$affected_files"
-
-        if [ "$merge_attempts" -lt "$MAX_MERGE_ATTEMPTS" ]; then
-            git_state_set "$worker_dir" "needs_resolve" "merge-manager.attempt_pr_merge" "Conflict resolver required"
-            log "Merge conflict for $task_id - will spawn resolver"
-            return 1
-        else
-            git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Max merge attempts ($MAX_MERGE_ATTEMPTS) exceeded"
-            _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
+        local conflict_state
+        conflict_state=$(git_state_get "$worker_dir")
+        if [ "$conflict_state" = "failed" ]; then
             log_error "Max merge attempts exceeded for $task_id"
             return 2
         fi
+        log "Merge conflict for $task_id - will spawn resolver"
+        return 1
     fi
 
     # "not mergeable" is transient after a push - GitHub may still be processing.
-    # Retry if we have attempts remaining instead of failing permanently.
+    # Guard merge_attempts_lt_max determines the path:
+    #   pass → needs_merge (will retry)
+    #   fail → failed + set_error + check_permanent (fallback)
     if echo "$merge_output" | grep -qiE "not mergeable"; then
-        if [ "$merge_attempts" -lt "$MAX_MERGE_ATTEMPTS" ]; then
-            git_state_set_error "$worker_dir" "Transient: $merge_output"
-            git_state_set "$worker_dir" "needs_merge" "merge-manager.attempt_pr_merge" "PR not yet mergeable - will retry (attempt $merge_attempts/$MAX_MERGE_ATTEMPTS)"
+        emit_event "$worker_dir" "merge.transient_fail" "merge-manager.attempt_pr_merge" \
+            "$(jq -n --arg e "Transient: $merge_output" '{error: $e}')"
+
+        local transient_state
+        transient_state=$(git_state_get "$worker_dir")
+        if [ "$transient_state" = "needs_merge" ]; then
             log_warn "Merge not yet ready for $task_id (attempt $merge_attempts/$MAX_MERGE_ATTEMPTS) - will retry"
             return 1
         fi
+        log_error "Max merge attempts exceeded for $task_id"
+        return 2
     fi
 
     # Other merge failure (unrecoverable)
-    git_state_set_error "$worker_dir" "Merge failed: $merge_output"
-    git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Merge failed: ${merge_output:0:100}"
-    _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
+    emit_event "$worker_dir" "merge.hard_fail" "merge-manager.attempt_pr_merge" \
+        "$(jq -n --arg e "Merge failed: $merge_output" '{error: $e}')"
     log_error "Merge failed for $task_id: $merge_output"
     return 2
 }

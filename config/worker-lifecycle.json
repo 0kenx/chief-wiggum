@@ -1,0 +1,95 @@
+{
+  "version": "1.0",
+  "description": "Worker lifecycle state machine for Chief Wiggum orchestrator",
+
+  "states": {
+    "none":                { "type": "initial" },
+    "needs_fix":           { "type": "waiting" },
+    "fixing":              { "type": "running" },
+    "fix_completed":       { "type": "transient" },
+    "needs_merge":         { "type": "waiting" },
+    "merging":             { "type": "running" },
+    "merge_conflict":      { "type": "transient" },
+    "needs_resolve":       { "type": "waiting" },
+    "needs_multi_resolve": { "type": "waiting" },
+    "resolving":           { "type": "running" },
+    "resolved":            { "type": "transient" },
+    "merged":              { "type": "terminal" },
+    "failed":              { "type": "terminal_recoverable" }
+  },
+
+  "effects": {
+    "set_error":           { "fn": "git_state_set_error",            "args": ["worker_dir", "data.error"] },
+    "inc_merge_attempts":  { "fn": "git_state_inc_merge_attempts",   "args": ["worker_dir"] },
+    "inc_recovery":        { "fn": "git_state_inc_recovery_attempts","args": ["worker_dir"] },
+    "reset_merge":         { "fn": "git_state_reset_merge_attempts", "args": ["worker_dir"] },
+    "sync_github":         { "fn": "github_issue_sync_task_status",  "args": ["ralph_dir", "task_id", "kanban"] },
+    "cleanup_worktree":    { "fn": "_cleanup_merged_pr_worktree",    "args": ["worker_dir"] },
+    "cleanup_batch":       { "fn": "_cleanup_batch_state",           "args": ["worker_dir", "task_id", "ralph_dir"] },
+    "add_conflict_queue":  { "fn": "conflict_queue_add",             "args": ["ralph_dir", "task_id", "worker_dir", "data.pr_number", "data.affected_files"] },
+    "rm_conflict_queue":   { "fn": "conflict_queue_remove",          "args": ["ralph_dir", "task_id"] },
+    "release_claim":       { "fn": "scheduler_release_task",         "args": ["task_id"] },
+    "check_permanent":     { "fn": "_check_permanent_failure",       "args": ["worker_dir", "kanban_file", "task_id"] }
+  },
+
+  "guards": {
+    "merge_attempts_lt_max":    { "fn": "_guard_merge_attempts_lt_max",    "args": ["worker_dir"] },
+    "recovery_attempts_lt_max": { "fn": "_guard_recovery_attempts_lt_max", "args": ["worker_dir"] },
+    "rebase_succeeded":         { "fn": "_guard_rebase_succeeded",         "args": ["worker_dir", "data.workspace"] }
+  },
+
+  "transitions": [
+    { "event": "worker.spawned",        "from": "none",       "to": "needs_merge",  "kanban": "=" },
+
+    { "event": "fix.detected",          "from": "none",       "to": "needs_fix" },
+    { "event": "fix.detected",          "from": "needs_merge","to": "needs_fix" },
+    { "event": "fix.started",           "from": "needs_fix",  "to": "fixing" },
+    { "event": "fix.pass",              "from": "fixing",     "to": "needs_merge",  "chain": "fix_completed", "effects": ["inc_merge_attempts"] },
+    { "event": "fix.skip",              "from": "fixing",     "to": "needs_merge",  "chain": "fix_completed" },
+    { "event": "fix.partial",           "from": "fixing",     "to": "needs_fix" },
+    { "event": "fix.fail",              "from": "fixing",     "to": "failed",       "effects": ["check_permanent"] },
+    { "event": "fix.timeout",           "from": "fixing",     "to": "needs_fix" },
+    { "event": "fix.already_merged",    "from": "needs_fix",  "to": "merged",       "kanban": "x", "effects": ["sync_github"] },
+
+    { "event": "merge.start",           "from": "needs_merge","to": "merging",      "guard": "merge_attempts_lt_max", "effects": ["inc_merge_attempts"] },
+    { "event": "merge.start",           "from": "needs_merge","to": "failed",       "effects": ["check_permanent"] },
+    { "event": "merge.succeeded",       "from": "merging",    "to": "merged",       "kanban": "x", "effects": ["sync_github", "cleanup_batch", "cleanup_worktree", "release_claim"] },
+    { "event": "merge.already_merged",  "from": "merging",    "to": "merged",       "kanban": "x", "effects": ["sync_github", "cleanup_batch", "cleanup_worktree", "release_claim"] },
+    { "event": "merge.conflict",        "from": "merging",    "to": "merge_conflict","effects": ["set_error", "add_conflict_queue"] },
+    { "event": "merge.out_of_date",     "from": "merging",    "to": "needs_merge",  "guard": "rebase_succeeded" },
+    { "event": "merge.out_of_date",     "from": "merging",    "to": "failed",       "effects": ["set_error", "check_permanent"] },
+    { "event": "merge.transient_fail",  "from": "merging",    "to": "needs_merge",  "guard": "merge_attempts_lt_max" },
+    { "event": "merge.transient_fail",  "from": "merging",    "to": "failed",       "effects": ["set_error", "check_permanent"] },
+    { "event": "merge.hard_fail",       "from": "merging",    "to": "failed",       "effects": ["set_error", "check_permanent"] },
+
+    { "event": "conflict.needs_resolve","from": "merge_conflict","to": "needs_resolve","guard": "merge_attempts_lt_max" },
+    { "event": "conflict.needs_resolve","from": "merge_conflict","to": "failed",      "effects": ["check_permanent"] },
+    { "event": "conflict.needs_multi",  "from": "merge_conflict","to": "needs_multi_resolve" },
+
+    { "event": "resolve.started",       "from": "needs_resolve",      "to": "resolving" },
+    { "event": "resolve.started",       "from": "needs_multi_resolve","to": "resolving" },
+    { "event": "resolve.succeeded",     "from": "resolving",  "to": "needs_merge",  "chain": "resolved", "effects": ["rm_conflict_queue"] },
+    { "event": "resolve.fail",          "from": "resolving",          "to": "failed",       "effects": ["check_permanent"] },
+    { "event": "resolve.fail",          "from": "needs_resolve",      "to": "failed",       "effects": ["check_permanent"] },
+    { "event": "resolve.fail",          "from": "needs_multi_resolve","to": "failed",       "effects": ["check_permanent"] },
+    { "event": "resolve.timeout",       "from": "resolving",  "to": "needs_resolve" },
+    { "event": "resolve.stuck_reset",   "from": "resolving",  "to": "needs_resolve", "effects": ["inc_merge_attempts"] },
+    { "event": "resolve.already_merged","from": "needs_resolve",      "to": "merged",      "kanban": "x", "effects": ["sync_github"] },
+    { "event": "resolve.already_merged","from": "needs_multi_resolve","to": "merged",      "kanban": "x", "effects": ["sync_github"] },
+    { "event": "resolve.max_exceeded",  "from": "needs_resolve",      "to": "failed",      "effects": ["check_permanent"] },
+    { "event": "resolve.max_exceeded",  "from": "needs_multi_resolve","to": "failed",      "effects": ["check_permanent"] },
+    { "event": "resolve.batch_failed",  "from": "needs_multi_resolve","to": "needs_resolve" },
+    { "event": "resolve.batch_failed",  "from": "needs_resolve",      "to": "needs_resolve" },
+
+    { "event": "recovery.to_resolve",   "from": "failed",     "to": "needs_resolve","guard": "recovery_attempts_lt_max", "effects": ["inc_recovery", "reset_merge"] },
+    { "event": "recovery.to_fix",       "from": "failed",     "to": "needs_fix",    "guard": "recovery_attempts_lt_max", "effects": ["inc_recovery"] },
+    { "event": "recovery.to_resolve",   "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["check_permanent"] },
+    { "event": "recovery.to_fix",       "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["check_permanent"] },
+    { "event": "user.resume",           "from": "failed",     "to": "needs_merge",  "kanban": "=" },
+    { "event": "permanent_failure",     "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["sync_github"] },
+
+    { "event": "resume.abort",          "from": "*",          "to": "failed",       "kanban": "*", "effects": ["sync_github"] },
+    { "event": "resume.retry",          "from": "*",          "to": null,           "kanban": "=" },
+    { "event": "task.reclaim",          "from": "*",          "to": null,           "kanban": " " }
+  ]
+}

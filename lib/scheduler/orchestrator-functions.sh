@@ -1374,8 +1374,8 @@ orch_github_resume_trigger() {
             git_state_set_error "$worker_dir" ""
             # Transition out of "failed" so merge-manager will retry
             if git_state_is "$worker_dir" "failed"; then
-                git_state_set "$worker_dir" "needs_merge" \
-                    "github-resume-trigger" "User-initiated retry — counters reset"
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$worker_dir" "user.resume" "github-resume-trigger" || true
             fi
         fi
 
@@ -1384,7 +1384,8 @@ orch_github_resume_trigger() {
               "$worker_dir/recovery-attempted"
         find "$worker_dir" -maxdepth 1 -name 'stop-reason-*' -delete
 
-        # Update kanban: [*] -> [=]
+        # Ensure kanban is [=] (emit_event handles failed→needs_merge case;
+        # this is a safety net for workers not in failed state)
         update_kanban_status "$ralph_dir/kanban.md" "$task_id" "=" || true
 
         # Update GitHub issue: reopen, swap labels, remove resume-request

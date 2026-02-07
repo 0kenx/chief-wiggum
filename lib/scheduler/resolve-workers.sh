@@ -4,6 +4,9 @@
 # Handles merge conflict resolution workers: spawning (simple and batch),
 # completion, and timeout handling. Extracted from priority-workers.sh
 # to reduce module size.
+#
+# State transitions are driven by the lifecycle engine (emit_event).
+# See config/worker-lifecycle.json for the spec.
 set -euo pipefail
 
 [ -n "${_RESOLVE_WORKERS_LOADED:-}" ] && return 0
@@ -11,6 +14,7 @@ _RESOLVE_WORKERS_LOADED=1
 
 # Source shared priority worker functions
 source "$WIGGUM_HOME/lib/scheduler/priority-workers.sh"
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 # Auto-advance a batch past any tasks that are already merged
 #
@@ -133,6 +137,9 @@ spawn_resolve_workers() {
 
     local kanban_file="$ralph_dir/kanban.md"
 
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
+
     # Sync file-based capacity tracking with actual pool state
     # This handles cases where workers exited unexpectedly
     _priority_capacity_sync "$ralph_dir"
@@ -159,16 +166,13 @@ spawn_resolve_workers() {
                 worker_id=$(basename "$worker_dir")
                 task_id=$(get_task_id_from_worker "$worker_id")
 
-                # Increment merge_attempts so the MAX_MERGE_ATTEMPTS escape hatch
-                # can trigger — without this, a resolver that crashes on every spawn
-                # loops forever: resolving → stuck reset → needs_resolve → respawn
-                git_state_inc_merge_attempts "$worker_dir" 2>/dev/null || true
+                # Read current attempts (inc_merge_attempts effect runs during emit)
                 local attempts
                 attempts=$(git_state_get_merge_attempts "$worker_dir" 2>/dev/null || echo "0")
                 attempts="${attempts:-0}"
 
-                log "Resetting stuck resolver for $task_id (was in 'resolving' but no agent running, attempt $attempts/${MAX_MERGE_ATTEMPTS:-3})"
-                git_state_set "$worker_dir" "needs_resolve" "priority-workers.spawn_resolve_workers" "Reset stuck resolver (no agent process found, attempt $attempts)"
+                log "Resetting stuck resolver for $task_id (was in 'resolving' but no agent running, attempt $((attempts + 1))/${MAX_MERGE_ATTEMPTS:-3})"
+                emit_event "$worker_dir" "resolve.stuck_reset" "resolve-workers.spawn_resolve_workers"
             fi
         fi
     done
@@ -222,8 +226,7 @@ spawn_resolve_workers() {
         merge_attempts=$(git_state_get_merge_attempts "$worker_dir" 2>/dev/null || echo "0")
         if [ "$merge_attempts" -ge "${MAX_MERGE_ATTEMPTS:-3}" ]; then
             log_error "Max merge attempts ($merge_attempts) reached for $task_id - marking as failed"
-            git_state_set "$worker_dir" "failed" "priority-workers.spawn_resolve_workers" "Max merge attempts exceeded after resolution"
-            _check_permanent_failure "$worker_dir" "$kanban_file" "$task_id"
+            emit_event "$worker_dir" "resolve.max_exceeded" "resolve-workers.spawn_resolve_workers"
             # Clean up batch context if present
             if [ -f "$worker_dir/batch-context.json" ]; then
                 rm -f "$worker_dir/batch-context.json"
@@ -255,7 +258,7 @@ spawn_resolve_workers() {
 
             if [ "$merge_status" = "merged" ]; then
                 log "Resolver not needed for $task_id - PR is already merged (workspace cleaned up)"
-                git_state_set "$worker_dir" "merged" "priority-workers.spawn_resolve_workers" "PR confirmed merged during resolve attempt"
+                emit_event "$worker_dir" "resolve.already_merged" "resolve-workers.spawn_resolve_workers"
             else
                 log_error "Cannot spawn resolver for $task_id: workspace missing and reconstruction failed (PR status: $merge_status)"
             fi
@@ -307,17 +310,15 @@ _spawn_simple_resolve_worker() {
             local current_state
             current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "unknown")
             if [[ "$current_state" != "merged" && "$current_state" != "failed" ]]; then
-                git_state_set "$worker_dir" "failed" "priority-workers._spawn_simple_resolve_worker" "Workspace missing and reconstruction failed"
-                local _rdir
-                _rdir=$(dirname "$(dirname "$worker_dir")")
-                _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
+                emit_event "$worker_dir" "resolve.fail" "resolve-workers._spawn_simple_resolve_worker" \
+                    '{"error":"Workspace missing and reconstruction failed"}'
             fi
             return 1
         fi
     fi
 
-    # Transition state
-    git_state_set "$worker_dir" "resolving" "priority-workers.spawn_resolve_workers" "Simple resolver spawned"
+    # Transition state: needs_resolve → resolving
+    emit_event "$worker_dir" "resolve.started" "resolve-workers._spawn_simple_resolve_worker"
 
     log "Spawning simple conflict resolver for $task_id..."
 
@@ -387,10 +388,11 @@ _spawn_batch_resolve_worker() {
             current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "unknown")
             if [[ "$current_state" != "merged" && "$current_state" != "failed" ]]; then
                 if [ "$merge_status" = "merged" ]; then
-                    git_state_set "$worker_dir" "merged" "priority-workers._spawn_batch_resolve_worker" "PR confirmed merged"
+                    emit_event "$worker_dir" "resolve.already_merged" "resolve-workers._spawn_batch_resolve_worker"
                 else
-                    git_state_set "$worker_dir" "failed" "priority-workers._spawn_batch_resolve_worker" "Workspace missing and reconstruction failed, PR status: $merge_status"
-                    _check_permanent_failure "$worker_dir" "$(dirname "$(dirname "$worker_dir")")/kanban.md" "$task_id"
+                    local data_json
+                    data_json=$(jq -n --arg e "Workspace missing and reconstruction failed, PR status: $merge_status" '{error: $e}')
+                    emit_event "$worker_dir" "resolve.fail" "resolve-workers._spawn_batch_resolve_worker" "$data_json"
                 fi
             fi
             return 1
@@ -409,16 +411,16 @@ _spawn_batch_resolve_worker() {
         if [ "$turn_result" -eq 2 ]; then
             log "Batch resolver for $task_id: batch $batch_id failed - cleaning up"
             rm -f "$worker_dir/batch-context.json"
-            # Re-categorize this task on next cycle
-            git_state_set "$worker_dir" "needs_resolve" "priority-workers._spawn_batch_resolve_worker" "Batch failed, needs re-evaluation"
+            # Demote from batch to simple resolve for re-evaluation
+            emit_event "$worker_dir" "resolve.batch_failed" "resolve-workers._spawn_batch_resolve_worker"
         else
             log "Batch resolver for $task_id: waiting for turn (batch: $batch_id, position $((position + 1)) of $total)"
         fi
         return 1  # Not my turn - return 1 so capacity is released
     fi
 
-    # Transition state
-    git_state_set "$worker_dir" "resolving" "priority-workers.spawn_resolve_workers" "Batch resolver spawned (batch: $batch_id, position: $((position + 1))/$total)"
+    # Transition state: needs_resolve/needs_multi_resolve → resolving
+    emit_event "$worker_dir" "resolve.started" "resolve-workers._spawn_batch_resolve_worker"
 
     log "Spawning batch resolver for $task_id (batch: $batch_id, position $((position + 1)) of $total)..."
 
@@ -445,8 +447,8 @@ _spawn_batch_resolve_worker() {
         log "Batch resolver spawned for $task_id (PID: $resolver_pid)"
     else
         log_error "Failed to get worker PID for $task_id - agent.pid not created"
-        git_state_set "$worker_dir" "failed" "priority-workers.spawn_resolve_workers" "Worker failed to start"
-        _check_permanent_failure "$worker_dir" "$(dirname "$(dirname "$worker_dir")")/kanban.md" "$task_id"
+        emit_event "$worker_dir" "resolve.fail" "resolve-workers._spawn_batch_resolve_worker" \
+            '{"error":"Worker failed to start"}'
         return 1
     fi
 }
@@ -471,6 +473,9 @@ create_orphan_pr_workspaces() {
     if [ ! -s "$orphan_file" ]; then
         return 0
     fi
+
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
 
     log "Processing orphaned PRs needing workspace creation..."
 
@@ -540,9 +545,9 @@ create_orphan_pr_workspaces() {
         # Also fetch fresh comments
         "$WIGGUM_HOME/bin/wiggum-pr" comments "$task_id" sync 2>/dev/null || true
 
-        # Queue for fix processing
+        # Queue for fix processing and transition state: none → needs_fix
         echo "$task_id" >> "$ralph_dir/orchestrator/tasks-needing-fix.txt"
-        git_state_set "$worker_dir" "needs_fix" "priority-workers.create_orphan_pr_workspaces" "Workspace created from PR branch"
+        emit_event "$worker_dir" "fix.detected" "resolve-workers.create_orphan_pr_workspaces"
 
         log "  $task_id: Workspace created, queued for fix"
         processed+=("$task_id")
@@ -581,13 +586,14 @@ handle_resolve_worker_completion() {
     local worker_dir="$1"
     local task_id="$2"
 
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
+
     # Check if conflicts are resolved
     local workspace="$worker_dir/workspace"
     if [ ! -d "$workspace" ]; then
-        git_state_set "$worker_dir" "failed" "priority-workers.handle_resolve_worker_completion" "Workspace not found"
-        local _rdir
-        _rdir=$(dirname "$(dirname "$worker_dir")")
-        _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
+        emit_event "$worker_dir" "resolve.fail" "resolve-workers.handle_resolve_worker_completion" \
+            '{"error":"Workspace not found"}'
         return 1
     fi
 
@@ -595,18 +601,11 @@ handle_resolve_worker_completion() {
     remaining_conflicts=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null || true)
 
     if [ -z "$remaining_conflicts" ]; then
-        git_state_set "$worker_dir" "resolved" "priority-workers.handle_resolve_worker_completion" "All conflicts resolved"
-
-        # Need to commit and push the resolution
+        # Commit and push the resolution before transitioning state
         log "Conflicts resolved for $task_id - committing resolution..."
 
-        # Derive paths from worker_dir (works correctly with worktrees)
-        # worker_dir = project/.ralph/workers/worker-XXX/
-        # ralph_dir  = project/.ralph/
-        # project_dir = project/
-        local ralph_dir
+        local ralph_dir project_dir
         ralph_dir=$(dirname "$(dirname "$worker_dir")")
-        local project_dir
         project_dir=$(dirname "$ralph_dir")
 
         (
@@ -615,19 +614,15 @@ handle_resolve_worker_completion() {
             "$WIGGUM_HOME/bin/wiggum-pr" push "$task_id" 2>&1 | sed "s/^/  [push-$task_id] /"
         )
 
-        # Remove from conflict queue (ralph_dir already computed above)
-        conflict_queue_remove "$ralph_dir" "$task_id"
-
-        # Ready for another merge attempt
-        git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_resolve_worker_completion" "Ready for merge retry"
+        # Transition: resolving → resolved (chain) → needs_merge + rm_conflict_queue effect
+        emit_event "$worker_dir" "resolve.succeeded" "resolve-workers.handle_resolve_worker_completion"
         return 0
     else
         local count
         count=$(echo "$remaining_conflicts" | wc -l)
-        git_state_set "$worker_dir" "failed" "priority-workers.handle_resolve_worker_completion" "$count files still have conflicts"
-        local _rdir
-        _rdir=$(dirname "$(dirname "$worker_dir")")
-        _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
+        local data_json
+        data_json=$(jq -n --arg e "$count files still have conflicts" '{error: $e}')
+        emit_event "$worker_dir" "resolve.fail" "resolve-workers.handle_resolve_worker_completion" "$data_json"
         log_error "Resolver failed for $task_id - $count files still have conflicts"
         return 1
     fi
@@ -644,6 +639,9 @@ handle_resolve_worker_timeout() {
     local task_id="$2"
     local timeout="${3:-3600}"
 
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
+
     # Don't clobber terminal/completed states - the resolve may have finished
     # before the timeout fired
     local current_state
@@ -656,5 +654,5 @@ handle_resolve_worker_timeout() {
     esac
 
     log_warn "Resolve worker for $task_id timed out after ${timeout}s - resetting to needs_resolve for retry"
-    git_state_set "$worker_dir" "needs_resolve" "priority-workers" "Resolve worker timed out after ${timeout}s - reset for retry"
+    emit_event "$worker_dir" "resolve.timeout" "resolve-workers.handle_resolve_worker_timeout"
 }

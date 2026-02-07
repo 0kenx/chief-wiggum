@@ -793,8 +793,8 @@ get_resumable_workers() {
                 _term_tid2=$(get_task_id_from_worker "$(basename "$worker_dir")")
                 if _has_repeated_step_failures "$worker_dir"; then
                     resume_state_set_terminal "$worker_dir" "Repeated failures at same pipeline step"
-                    update_kanban_failed "$RALPH_DIR/kanban.md" "$_term_tid2" || true
-                    github_issue_sync_task_status "$RALPH_DIR" "$_term_tid2" "*" || true
+                    lifecycle_is_loaded || lifecycle_load
+                    emit_event "$worker_dir" "resume.abort" "scheduler.get_resumable_workers" || true
                     log_error "Worker $(basename "$worker_dir") repeated step failures — marked terminal"
                     activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$_term_tid2" "reason=repeated_step_failures"
                     scheduler_mark_event
@@ -860,8 +860,8 @@ get_workers_needing_decide() {
                 echo "$(epoch_now)" > "$worker_dir/stop-reason-workspace-deleted"
                 resume_state_increment "$worker_dir" "ABORT" "" "" "Workspace deleted — auto-abort"
                 resume_state_set_terminal "$worker_dir" "Workspace deleted during execution"
-                update_kanban_failed "$RALPH_DIR/kanban.md" "$_wdel_tid" || true
-                github_issue_sync_task_status "$RALPH_DIR" "$_wdel_tid" "*" || true
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$worker_dir" "resume.abort" "scheduler.get_workers_needing_decide.workspace_deleted" || true
                 log_error "Worker $(basename "$worker_dir") workspace deleted — marked terminal"
                 activity_log "worker.workspace_deleted" "$(basename "$worker_dir")" "$_wdel_tid"
                 scheduler_mark_event
@@ -883,8 +883,8 @@ get_workers_needing_decide() {
                 _term_tid=$(get_task_id_from_worker "$(basename "$worker_dir")")
                 if _has_repeated_step_failures "$worker_dir"; then
                     resume_state_set_terminal "$worker_dir" "Repeated failures at same pipeline step"
-                    update_kanban_failed "$RALPH_DIR/kanban.md" "$_term_tid" || true
-                    github_issue_sync_task_status "$RALPH_DIR" "$_term_tid" "*" || true
+                    lifecycle_is_loaded || lifecycle_load
+                    emit_event "$worker_dir" "resume.abort" "scheduler.get_workers_needing_decide.repeated_failures" || true
                     log_error "Worker $(basename "$worker_dir") repeated step failures — marked terminal"
                     activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$_term_tid" "reason=repeated_step_failures"
                     scheduler_mark_event
@@ -902,8 +902,8 @@ get_workers_needing_decide() {
                 local _max_tid
                 _max_tid=$(get_task_id_from_worker "$(basename "$worker_dir")")
                 resume_state_set_terminal "$worker_dir" "Max resume attempts exceeded"
-                update_kanban_failed "$RALPH_DIR/kanban.md" "$_max_tid" || true
-                github_issue_sync_task_status "$RALPH_DIR" "$_max_tid" "*" || true
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$worker_dir" "resume.abort" "scheduler.get_workers_needing_decide.max_attempts" || true
                 log_error "Worker $(basename "$worker_dir") max resume attempts exceeded — marked terminal"
                 activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$_max_tid" "reason=max_attempts"
                 scheduler_mark_event

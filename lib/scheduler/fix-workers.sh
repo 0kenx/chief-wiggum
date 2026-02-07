@@ -3,6 +3,9 @@
 #
 # Handles PR comment fix workers: spawning, completion, and timeout handling.
 # Extracted from priority-workers.sh to reduce module size.
+#
+# State transitions are driven by the lifecycle engine (emit_event).
+# See config/worker-lifecycle.json for the spec.
 set -euo pipefail
 
 [ -n "${_FIX_WORKERS_LOADED:-}" ] && return 0
@@ -10,6 +13,7 @@ _FIX_WORKERS_LOADED=1
 
 # Source shared priority worker functions
 source "$WIGGUM_HOME/lib/scheduler/priority-workers.sh"
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 # Check for tasks needing fixes and spawn fix workers
 #
@@ -39,6 +43,9 @@ spawn_fix_workers() {
     local kanban_file="$ralph_dir/kanban.md"
 
     [ -d "$ralph_dir/workers" ] || return 0
+
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
 
     # Sync file-based capacity tracking with actual pool state
     # This handles cases where workers exited unexpectedly
@@ -146,7 +153,7 @@ spawn_fix_workers() {
 
             if [ "$merge_status" = "merged" ]; then
                 log "Fix worker not needed for $task_id - PR is already merged (workspace cleaned up)"
-                git_state_set "$worker_dir" "merged" "priority-workers.spawn_fix_workers" "PR confirmed merged during fix attempt"
+                emit_event "$worker_dir" "fix.already_merged" "fix-workers.spawn_fix_workers"
             else
                 log_error "Cannot spawn fix worker for $task_id: workspace missing and reconstruction failed (PR status: $merge_status)"
             fi
@@ -155,7 +162,7 @@ spawn_fix_workers() {
         fi
 
         # Transition state to fixing
-        git_state_set "$worker_dir" "fixing" "priority-workers.spawn_fix_workers" "Fix worker spawned"
+        emit_event "$worker_dir" "fix.started" "fix-workers.spawn_fix_workers"
 
         log "Spawning fix worker for $task_id..."
 
@@ -182,7 +189,7 @@ spawn_fix_workers() {
         else
             log_warn "Fix agent for $task_id did not produce agent.pid after 2s wait"
             # Revert state so it can be retried
-            git_state_set "$worker_dir" "needs_fix" "priority-workers.spawn_fix_workers" "Agent failed to start"
+            emit_event "$worker_dir" "fix.timeout" "fix-workers.spawn_fix_workers"
             _priority_capacity_release "$ralph_dir"
         fi
     done
@@ -201,6 +208,9 @@ spawn_fix_workers() {
 handle_fix_worker_completion() {
     local worker_dir="$1"
     local task_id="$2"
+
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
 
     # Find the fix agent result. Try specific pipeline step results first,
     # then fall back to generic search for backward compatibility.
@@ -223,7 +233,7 @@ handle_fix_worker_completion() {
 
     if [ -z "$result_file" ]; then
         log_warn "No fix agent result for $task_id - fix agent may not have run"
-        git_state_set "$worker_dir" "needs_fix" "priority-workers.handle_fix_worker_completion" "No result file found"
+        emit_event "$worker_dir" "fix.timeout" "fix-workers.handle_fix_worker_completion"
         return 1
     fi
 
@@ -245,33 +255,27 @@ handle_fix_worker_completion() {
     fi
 
     if [ "$gate_result" = "PASS" ] && [ "$push_succeeded" = "true" ]; then
-        git_state_set "$worker_dir" "fix_completed" "priority-workers.handle_fix_worker_completion" "Push verified"
-        git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_fix_worker_completion" "Ready for merge attempt"
+        emit_event "$worker_dir" "fix.pass" "fix-workers.handle_fix_worker_completion"
         log "Fix completed for $task_id - ready for merge"
         return 0
     elif [ "$gate_result" = "PASS" ]; then
         # Fix succeeded but push status unclear - proceed to merge anyway.
         # attempt_pr_merge handles failures gracefully with proper state transitions.
-        git_state_set "$worker_dir" "fix_completed" "priority-workers.handle_fix_worker_completion" "Fix passed, push status unclear"
-        git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_fix_worker_completion" "Ready for merge attempt (push status unverified)"
+        emit_event "$worker_dir" "fix.pass" "fix-workers.handle_fix_worker_completion"
         log_warn "Fix completed for $task_id - push status unclear, proceeding to merge"
         return 0
     elif [ "$gate_result" = "SKIP" ]; then
         # No comments to fix - transition to merge
-        git_state_set "$worker_dir" "fix_completed" "priority-workers.handle_fix_worker_completion" "No comments to fix (SKIP)"
-        git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_fix_worker_completion" "Ready for merge attempt"
+        emit_event "$worker_dir" "fix.skip" "fix-workers.handle_fix_worker_completion"
         log "Fix skipped for $task_id (no comments) - ready for merge"
         return 0
     elif [ "$gate_result" = "FIX" ]; then
         # Partial fix - some comments addressed but not all
-        git_state_set "$worker_dir" "needs_fix" "priority-workers.handle_fix_worker_completion" "Partial fix, needs more work"
+        emit_event "$worker_dir" "fix.partial" "fix-workers.handle_fix_worker_completion"
         log_warn "Partial fix for $task_id - will retry"
         return 1
     else
-        git_state_set "$worker_dir" "failed" "priority-workers.handle_fix_worker_completion" "Fix agent returned: $gate_result"
-        local _rdir
-        _rdir=$(dirname "$(dirname "$worker_dir")")
-        _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
+        emit_event "$worker_dir" "fix.fail" "fix-workers.handle_fix_worker_completion"
         log_error "Fix failed for $task_id (result: $gate_result)"
         return 1
     fi
@@ -288,6 +292,9 @@ handle_fix_worker_timeout() {
     local task_id="$2"
     local timeout="${3:-3600}"
 
+    # Ensure lifecycle spec is loaded
+    lifecycle_is_loaded || lifecycle_load
+
     # Don't clobber terminal/completed states - the fix may have finished
     # before the timeout fired
     local current_state
@@ -300,5 +307,5 @@ handle_fix_worker_timeout() {
     esac
 
     log_warn "Fix worker for $task_id timed out after ${timeout}s - resetting to needs_fix for retry"
-    git_state_set "$worker_dir" "needs_fix" "priority-workers" "Fix worker timed out after ${timeout}s - reset for retry"
+    emit_event "$worker_dir" "fix.timeout" "fix-workers.handle_fix_worker_timeout"
 }

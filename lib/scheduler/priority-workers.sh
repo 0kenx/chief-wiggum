@@ -21,6 +21,7 @@ source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 # =============================================================================
 # Priority Worker Capacity Management
@@ -170,10 +171,10 @@ _check_permanent_failure() {
     _recovery_count="${_recovery_count:-0}"
 
     if [ "$_recovery_count" -ge "${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}" ]; then
-        update_kanban_failed "$kanban_file" "$task_id"
-        source "$WIGGUM_HOME/lib/github/issue-sync.sh"
-        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
         log_error "$task_id: permanently failed after $_recovery_count recovery attempts"
+        # Ensure lifecycle spec is loaded (this effect may be called from emit_event)
+        lifecycle_is_loaded || lifecycle_load
+        emit_event "$worker_dir" "permanent_failure" "priority-workers._check_permanent_failure"
     fi
 }
 
@@ -218,42 +219,30 @@ recover_failed_workers() {
             fi
         fi
 
-        # Check recovery attempts
-        local recovery_count
-        recovery_count=$(git_state_get_recovery_attempts "$worker_dir")
-        recovery_count="${recovery_count:-0}"
-
-        if [ "$recovery_count" -ge "$max_recovery" ]; then
-            update_kanban_failed "$kanban_file" "$task_id"
-            source "$WIGGUM_HOME/lib/github/issue-sync.sh"
-            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
-            log_error "$task_id: permanently failed after $recovery_count recovery attempts - marking [*]"
-            continue
-        fi
+        # Ensure lifecycle spec is loaded
+        lifecycle_is_loaded || lifecycle_load
 
         # Classify failure reason from last transition
         local last_reason
         last_reason=$(jq -r '.transitions[-1].reason // ""' "$worker_dir/git-state.json" 2>/dev/null)
 
-        git_state_inc_recovery_attempts "$worker_dir"
-
-        if echo "$last_reason" | grep -qiE "(merge|conflict)"; then
-            # Merge/conflict related failure - reset merge attempts and retry resolution
-            git_state_reset_merge_attempts "$worker_dir"
-            git_state_set "$worker_dir" "needs_resolve" "priority-workers.recover_failed_workers" \
-                "Recovery attempt $((recovery_count + 1)): re-entering resolve cycle (was: $last_reason)"
-            log "Recovered $task_id from failed state -> needs_resolve (attempt $((recovery_count + 1))/$max_recovery)"
-        elif echo "$last_reason" | grep -qiE "UNKNOWN"; then
-            # Unknown result - retry via fix cycle
-            git_state_set "$worker_dir" "needs_fix" "priority-workers.recover_failed_workers" \
-                "Recovery attempt $((recovery_count + 1)): re-entering fix cycle (was: $last_reason)"
-            log "Recovered $task_id from failed state -> needs_fix (attempt $((recovery_count + 1))/$max_recovery)"
+        # The lifecycle guards handle max recovery check:
+        # - If recovery_attempts_lt_max passes: transition to needs_resolve/needs_fix
+        #   with inc_recovery + reset_merge effects
+        # - If guard fails: falls through to failed→failed with check_permanent effect
+        if echo "$last_reason" | grep -qiE "UNKNOWN"; then
+            emit_event "$worker_dir" "recovery.to_fix" "priority-workers.recover_failed_workers"
         else
-            # Other failure (workspace missing, agent crash, etc.) - try resolve
-            git_state_reset_merge_attempts "$worker_dir"
-            git_state_set "$worker_dir" "needs_resolve" "priority-workers.recover_failed_workers" \
-                "Recovery attempt $((recovery_count + 1)): re-entering resolve cycle (was: $last_reason)"
-            log "Recovered $task_id from failed state -> needs_resolve (attempt $((recovery_count + 1))/$max_recovery)"
+            emit_event "$worker_dir" "recovery.to_resolve" "priority-workers.recover_failed_workers"
+        fi
+
+        local post_state
+        post_state=$(git_state_get "$worker_dir")
+        if [ "$post_state" != "failed" ]; then
+            local recovery_count
+            recovery_count=$(git_state_get_recovery_attempts "$worker_dir")
+            recovery_count="${recovery_count:-0}"
+            log "Recovered $task_id from failed state -> $post_state (attempt $recovery_count/$max_recovery)"
         fi
     done
 }
