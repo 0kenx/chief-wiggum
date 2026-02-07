@@ -110,17 +110,25 @@ heartbeat_update_task() {
 $progress_table"
     fi
 
-    # Find existing heartbeat comment (use databaseId for REST API compatibility)
-    local comments comment_id=""
-    comments=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue view "$issue_number" \
+    # Find last heartbeat comment: update only if it belongs to this server,
+    # otherwise create a new one (don't overwrite another server's heartbeat)
+    local last_comment=""
+    last_comment=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue view "$issue_number" \
         --json comments \
-        --jq '.comments[] | select(.body | contains("<!-- wiggum:heartbeat -->")) | .databaseId' \
+        --jq '[.comments[] | select(.body | contains("<!-- wiggum:heartbeat -->"))] | last // empty' \
         2>/dev/null) || true
 
-    comment_id=$(echo "$comments" | head -1)
+    local comment_id=""
+    if [ -n "$last_comment" ]; then
+        local comment_server=""
+        comment_server=$(echo "$last_comment" | jq -r \
+            '.body | capture("\\*\\*Server:\\*\\* (?<s>[^\\n]*)") | .s // empty' 2>/dev/null) || true
+        if [ "$comment_server" = "$server_id" ]; then
+            comment_id=$(echo "$last_comment" | jq -r '.databaseId // empty' 2>/dev/null) || true
+        fi
+    fi
 
     if [ -n "$comment_id" ]; then
-        # Update existing comment
         gh api \
             --method PATCH \
             "/repos/{owner}/{repo}/issues/comments/$comment_id" \
@@ -129,7 +137,6 @@ $progress_table"
             return 1
         }
     else
-        # Create new comment
         gh issue comment "$issue_number" --body "$heartbeat_body" 2>/dev/null || {
             log_warn "Failed to create heartbeat comment for #$issue_number"
             return 1
