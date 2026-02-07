@@ -1392,6 +1392,10 @@ orch_github_resume_trigger() {
         github_issue_set_status_label "$issue_number" "wiggum:in-progress" "wiggum:failed" || true
         github_issue_remove_label "$issue_number" "wiggum:resume-request" || true
 
+        # Invalidate issue cache — the issue was just reopened so the cache
+        # (which only holds open issues) is stale and claim would fail lookup.
+        task_source_invalidate_cache
+
         # Re-claim task in distributed mode (server label removed during shutdown)
         scheduler_claim_task "$task_id" || true
 

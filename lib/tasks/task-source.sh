@@ -380,3 +380,18 @@ task_source_verify_ownership() {
             ;;
     esac
 }
+
+# Invalidate any internal caches
+#
+# Call this after externally modifying issue state (e.g. reopening a closed
+# issue) so that subsequent lookups see the updated state.
+#
+# Returns: 0 always
+task_source_invalidate_cache() {
+    case "${_TASK_SOURCE_ADAPTER:-}" in
+        github|hybrid)
+            _github_invalidate_cache 2>/dev/null || true
+            ;;
+    esac
+    return 0
+}
