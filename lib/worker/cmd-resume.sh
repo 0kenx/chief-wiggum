@@ -93,7 +93,7 @@ do_resume() {
         existing_pid=$(cat "$worker_dir/agent.pid" 2>/dev/null)
         if kill -0 "$existing_pid" 2>/dev/null; then
             echo "Error: Worker $worker_id is already running (PID: $existing_pid)"
-            exit $EXIT_ERROR
+            exit "$EXIT_ERROR"
         fi
     fi
 
@@ -103,7 +103,7 @@ do_resume() {
         resume_pid=$(cat "$worker_dir/resume.pid" 2>/dev/null)
         if [[ "$resume_pid" =~ ^[0-9]+$ ]] && kill -0 "$resume_pid" 2>/dev/null; then
             echo "Error: Resume already in progress for $worker_id (PID: $resume_pid)"
-            exit $EXIT_ERROR
+            exit "$EXIT_ERROR"
         fi
         # Stale resume.pid — clean up
         rm -f "$worker_dir/resume.pid"
@@ -128,7 +128,7 @@ do_resume() {
         echo "This would cause workspace boundary violations."
         echo "Please commit or stash your changes first."
         echo ""
-        exit $EXIT_ERROR
+        exit "$EXIT_ERROR"
     fi
 
     # Check for workspace violations
@@ -155,7 +155,7 @@ do_resume() {
                 echo "To force resume (clears violation status):"
                 echo "  wiggum worker resume $worker_id -f"
                 echo ""
-                exit $EXIT_ERROR
+                exit "$EXIT_ERROR"
             fi
         fi
     fi
@@ -163,14 +163,14 @@ do_resume() {
     # Check PRD exists
     if [ ! -f "$worker_dir/prd.md" ]; then
         echo "Error: PRD not found at $worker_dir/prd.md"
-        exit $EXIT_ERROR
+        exit "$EXIT_ERROR"
     fi
 
     # Check workspace exists
     if [ ! -d "$worker_dir/workspace" ]; then
         echo "Error: Workspace not found at $worker_dir/workspace"
         echo "The worktree may have been cleaned up."
-        exit $EXIT_ERROR
+        exit "$EXIT_ERROR"
     fi
 
     _msg "Resuming worker $worker_id for task $task_id"
@@ -199,7 +199,7 @@ do_resume() {
         resume_state_set_terminal "$worker_dir" "Cost budget exceeded"
         update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
         log_error "Task $task_id marked FAILED — cost budget exceeded"
-        exit $EXIT_ERROR
+        exit "$EXIT_ERROR"
     fi
 
     # === STEP 2: Convert logs to conversations (if needed for resume-decide) ===
@@ -250,7 +250,7 @@ do_resume() {
     if [ -n "$pipeline_file" ]; then
         pipeline_load "$pipeline_file" || {
             _msg "Error: Failed to load pipeline config: $pipeline_file"
-            exit $EXIT_ERROR
+            exit "$EXIT_ERROR"
         }
     else
         pipeline_load_builtin_defaults
@@ -286,7 +286,7 @@ do_resume() {
         done
         _msg "Error: Invalid resume step '$resume_step'"
         _msg "Valid steps from pipeline '$PIPELINE_NAME': $valid_steps"
-        exit $EXIT_ERROR
+        exit "$EXIT_ERROR"
     fi
 
     log "Resume decision: RETRY from '$resume_step' step (index $step_idx)"
@@ -344,6 +344,8 @@ do_resume() {
     # === Mark task in-progress ===
     # Move task back to [=] (e.g., from [*] failed) so kanban reflects active work
     update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+    # Sync PR label: remove wiggum:failed, add wiggum:in-progress
+    github_pr_sync_task_status "$RALPH_DIR" "$task_id" "=" "*" || true
 
     # === Launch system.task-worker ===
     _msg "Launching system.task-worker from step: $resume_step"
@@ -480,7 +482,7 @@ _read_resume_decision() {
 
     if [ -z "$decision" ]; then
         log_error "Resume-decide produced no parseable decision after all extraction attempts"
-        exit $EXIT_ERROR
+        exit "$EXIT_ERROR"
     fi
 }
 
@@ -567,7 +569,7 @@ _handle_complete() {
     activity_log "resume.complete" "$worker_id" "$task_id" "pr_url=${pr_url:-none}"
     _msg ""
 
-    exit $EXIT_RESUME_COMPLETE
+    exit "$EXIT_RESUME_COMPLETE"
 }
 
 # Handle ABORT decision: mark task [*] failed
@@ -606,7 +608,7 @@ _handle_abort() {
     activity_log "resume.abort" "$worker_id" "$task_id"
     _msg ""
 
-    exit $EXIT_RESUME_ABORT
+    exit "$EXIT_RESUME_ABORT"
 }
 
 # Handle DEFER decision: write cooldown, no kanban change
@@ -647,5 +649,5 @@ _handle_defer() {
     activity_log "resume.defer" "$worker_id" "$task_id" "cooldown=${RESUME_COOLDOWN_SECONDS}"
     _msg ""
 
-    exit $EXIT_RESUME_DEFER
+    exit "$EXIT_RESUME_DEFER"
 }
