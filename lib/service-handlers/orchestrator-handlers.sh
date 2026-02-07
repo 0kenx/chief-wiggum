@@ -562,6 +562,9 @@ svc_orch_task_spawner() {
                 fi
             fi
 
+            # Re-claim task in distributed mode (server label removed during shutdown)
+            scheduler_claim_task "$task_id" || true
+
             log "Launching resume worker for $task_id (pipeline at: '$resume_step')"
             if _launch_resume_worker "$worker_dir" "$task_id"; then
                 pool_add "$SPAWNED_WORKER_PID" "$worker_type" "$task_id"

@@ -1378,6 +1378,9 @@ orch_github_resume_trigger() {
         github_issue_set_status_label "$issue_number" "wiggum:in-progress" "wiggum:failed" || true
         github_issue_remove_label "$issue_number" "wiggum:resume-request" || true
 
+        # Re-claim task in distributed mode (server label removed during shutdown)
+        scheduler_claim_task "$task_id" || true
+
         # Post confirmation comment
         github_issue_post_comment "$issue_number" \
             "wiggum: resume requested — task re-queued for execution." || true
