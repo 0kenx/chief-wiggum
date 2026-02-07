@@ -103,8 +103,9 @@ test_reset_after_terminal_allows_resume() {
     resume_state_increment "$TEST_WORKER_DIR" "RETRY" "" "" "Attempt"
     resume_state_set_terminal "$TEST_WORKER_DIR" "Max exceeded"
 
-    # Verify terminal
+    # Verify terminal and at max
     resume_state_is_terminal "$TEST_WORKER_DIR"
+    resume_state_max_exceeded "$TEST_WORKER_DIR"
 
     # Reset
     resume_state_reset_for_user_retry "$TEST_WORKER_DIR"
@@ -113,6 +114,11 @@ test_reset_after_terminal_allows_resume() {
     local is_terminal=0
     resume_state_is_terminal "$TEST_WORKER_DIR" || is_terminal=$?
     assert_equals "1" "$is_terminal" "Should not be terminal after user retry reset"
+
+    # Should no longer be at max
+    local max_exceeded=0
+    resume_state_max_exceeded "$TEST_WORKER_DIR" || max_exceeded=$?
+    assert_equals "1" "$max_exceeded" "Should not be at max after user retry reset"
 
     # terminal_reason should be cleared
     local state
