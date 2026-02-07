@@ -131,6 +131,22 @@ $progress_table"
             '.body | capture("\\*\\*Server:\\*\\* (?<s>[^\\n]*)") | .s // empty' 2>/dev/null) || true
         if [ "$comment_server" = "$server_id" ]; then
             comment_id=$(echo "$last_comment" | jq -r '.databaseId // empty' 2>/dev/null) || true
+
+            # Skip if this server's last heartbeat was within 60 seconds (server-side dedup)
+            local comment_updated_at=""
+            comment_updated_at=$(echo "$last_comment" | jq -r '.updatedAt // empty' 2>/dev/null) || true
+            if [ -n "$comment_updated_at" ]; then
+                local comment_epoch=0
+                comment_epoch=$(date -d "$comment_updated_at" +%s 2>/dev/null) || \
+                    comment_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$comment_updated_at" +%s 2>/dev/null) || true
+                comment_epoch="${comment_epoch:-0}"
+                local now_epoch
+                now_epoch=$(epoch_now)
+                if [ "$comment_epoch" -gt 0 ] && [ $((now_epoch - comment_epoch)) -lt 60 ]; then
+                    log_debug "heartbeat: skipping #$issue_number - last update ${comment_updated_at} was <60s ago (pid=$$)"
+                    return 0
+                fi
+            fi
         fi
     fi
 
