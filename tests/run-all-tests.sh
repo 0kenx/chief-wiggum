@@ -164,11 +164,15 @@ run_suite() {
             FAILED_SUITES=$((FAILED_SUITES + 1))
             FAILED_SUITE_NAMES+=("$name")
             printf " FAILED (%ds)\n" "$duration"
-            while IFS= read -r line; do
-                if [[ "$line" == *"✗"* ]]; then
-                    printf "      %s\n" "$line"
-                fi
-            done < "$output_file"
+            # Show error-relevant lines from common tools:
+            #   ✗         - bash test assertion failures
+            #   ^In .+line- shellcheck file:line references
+            #   ^--       - shellcheck error descriptions (SC codes)
+            #   FAILED    - pytest failures
+            #   Found .+  - ruff/shellcheck error summaries
+            grep -E '✗|\^--|^In .+ line [0-9]|FAILED|Found [0-9]+ error' "$output_file" | head -50 | while IFS= read -r line; do
+                printf "      %s\n" "$line"
+            done
         fi
 
         rm -f "$output_file"

@@ -3,6 +3,7 @@
 
 # Common patterns
 *.log
+!tui/tests/fixtures/**/*.log
 *.pid
 *.swp
 *.swo

@@ -282,6 +282,69 @@ GHEOF
 }
 
 # =============================================================================
+# _check_pipeline_results() Tests
+# =============================================================================
+
+# Helper: write a mock step result file
+_write_step_result() {
+    local worker_dir="$1"
+    local step_id="$2"
+    local gate_result="$3"
+
+    mkdir -p "$worker_dir/results"
+    local epoch
+    epoch=$(date +%s)
+    echo "{\"outputs\":{\"gate_result\":\"$gate_result\"}}" \
+        > "$worker_dir/results/${epoch}-${step_id}-result.json"
+}
+
+test_pipeline_gate_blocks_test_fix() {
+    _write_step_result "$WORKER_DIR" "test" "FIX"
+
+    local result=0
+    _check_pipeline_results "$WORKER_DIR" "TASK-001" || result=$?
+
+    assert_equals "1" "$result" "Should block merge when test result is FIX"
+}
+
+test_pipeline_gate_blocks_test_fail() {
+    _write_step_result "$WORKER_DIR" "test" "FAIL"
+
+    local result=0
+    _check_pipeline_results "$WORKER_DIR" "TASK-001" || result=$?
+
+    assert_equals "1" "$result" "Should block merge when test result is FAIL"
+}
+
+test_pipeline_gate_blocks_validation_fail() {
+    _write_step_result "$WORKER_DIR" "test" "PASS"
+    _write_step_result "$WORKER_DIR" "validation" "FAIL"
+
+    local result=0
+    _check_pipeline_results "$WORKER_DIR" "TASK-001" || result=$?
+
+    assert_equals "1" "$result" "Should block merge when validation result is FAIL"
+}
+
+test_pipeline_gate_allows_test_unknown() {
+    # No result files at all — should allow merge
+    local result=0
+    _check_pipeline_results "$WORKER_DIR" "TASK-001" || result=$?
+
+    assert_equals "0" "$result" "Should allow merge when no test result exists (UNKNOWN)"
+}
+
+test_pipeline_gate_allows_all_pass() {
+    _write_step_result "$WORKER_DIR" "test" "PASS"
+    _write_step_result "$WORKER_DIR" "validation" "PASS"
+
+    local result=0
+    _check_pipeline_results "$WORKER_DIR" "TASK-001" || result=$?
+
+    assert_equals "0" "$result" "Should allow merge when all results are PASS"
+}
+
+# =============================================================================
 # Run All Tests
 # =============================================================================
 
@@ -298,6 +361,13 @@ run_test test_not_mergeable_is_retryable
 run_test test_not_mergeable_fails_permanently_at_max_attempts
 run_test test_conflict_detected_by_poll_skips_merge_call
 run_test test_successful_merge_after_poll
+
+# _check_pipeline_results tests
+run_test test_pipeline_gate_blocks_test_fix
+run_test test_pipeline_gate_blocks_test_fail
+run_test test_pipeline_gate_blocks_validation_fail
+run_test test_pipeline_gate_allows_test_unknown
+run_test test_pipeline_gate_allows_all_pass
 
 print_test_summary
 exit_with_test_result
