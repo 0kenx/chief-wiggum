@@ -277,6 +277,40 @@ _check_merge_approved() {
     return 1
 }
 
+# Check pipeline results gate before allowing merge
+#
+# Blocks merge if test or validation results indicate failure.
+# UNKNOWN results are allowed (fix workers don't write test results,
+# custom pipelines may omit the test step).
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task identifier (for logging)
+#
+# Returns:
+#   0 - Pipeline results pass (or unknown)
+#   1 - Pipeline results block merge
+_check_pipeline_results() {
+    local worker_dir="$1"
+    local task_id="$2"
+
+    local test_result
+    test_result=$(agent_read_step_result "$worker_dir" "test")
+    if [ "$test_result" = "FIX" ] || [ "$test_result" = "FAIL" ]; then
+        log_debug "Merge blocked for $task_id - test result: $test_result"
+        return 1
+    fi
+
+    local validation_result
+    validation_result=$(agent_read_step_result "$worker_dir" "validation")
+    if [ "$validation_result" = "FAIL" ]; then
+        log_debug "Merge blocked for $task_id - validation result: FAIL"
+        return 1
+    fi
+
+    return 0
+}
+
 # Attempt to merge a PR for a worker
 #
 # Uses the lifecycle engine (emit_event) for all state transitions.
@@ -303,6 +337,12 @@ attempt_pr_merge() {
     # Gate: require approved review before attempting merge
     if ! _check_merge_approved "$worker_dir" "$task_id"; then
         log_debug "PR merge blocked for $task_id - no approved review"
+        return 1
+    fi
+
+    # Gate: require passing pipeline results before attempting merge
+    if ! _check_pipeline_results "$worker_dir" "$task_id"; then
+        log_debug "PR merge blocked for $task_id - pipeline results not passing"
         return 1
     fi
 

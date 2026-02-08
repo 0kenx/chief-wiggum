@@ -241,6 +241,18 @@ Check that the right types of tests exist:
 | Feature doesn't work as PRD specified | FIX |
 | Critical bug prevents functionality | FIX |
 | Missing integration tests | FIX |
+| Tests fail due to changes in this PR | FIX |
+
+**Test Failure Attribution**
+
+When tests fail, determine whether this PR caused the failures:
+
+1. Read the test error messages (undefined function, type mismatch, missing field, etc.)
+2. Cross-reference with `git diff` — do the errors reference APIs/types changed in the diff?
+3. If the diff shows changes that directly cause the failures (renamed function, removed field,
+   changed signature) → **FIX** (this PR broke those tests)
+4. If the failing tests reference code NOT changed in the diff → note as pre-existing, do not
+   count against this PR's verdict
 
 ## FAIL Criteria (unfixable issues)
 
