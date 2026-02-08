@@ -64,7 +64,7 @@ jobs:
   e2e-test:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: [unit-test, integration-test]
+    needs: [unit-test, integration-test, tui-test, orchestrator-py-test]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
   tui-test:
     name: TUI Python Tests
     runs-on: ubuntu-latest
-    needs: shellcheck
+    needs: python-lint
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
   orchestrator-py-test:
     name: Orchestrator Python Tests
     runs-on: ubuntu-latest
-    needs: shellcheck
+    needs: python-lint
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
