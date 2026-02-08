@@ -343,11 +343,11 @@ claim_get_heartbeat_time() {
     # Extract timestamp
     local timestamp
     timestamp=$(echo "$comment_body" | grep -oE '\*\*Last Update:\*\* [0-9T:+-]+' | \
-                sed 's/.*: //' | head -1)
+                sed 's/^.*\*\* //' | head -1)
 
     if [ -n "$timestamp" ]; then
         # Convert ISO to epoch
-        epoch_from_iso "$timestamp"
+        date_parse_epoch "$timestamp"
     else
         echo "0"
     fi

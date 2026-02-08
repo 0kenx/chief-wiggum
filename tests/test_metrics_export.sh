@@ -12,6 +12,12 @@ source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/utils/calculate-cost.sh"
 source "$WIGGUM_HOME/lib/utils/metrics-export.sh"
 
+# Helper: set a far-future mtime to invalidate stat-based cache fingerprints
+# without sleeping. The cache uses stat mtime+size, so any different mtime works.
+_touch_future() {
+    touch -t 203001010000.00 "$1"
+}
+
 TEST_DIR=""
 setup() {
     TEST_DIR=$(mktemp -d)
@@ -306,9 +312,9 @@ test_export_metrics_cache_invalidation_on_new_log() {
     local first_cost
     first_cost=$(jq '.summary.total_cost' "$ralph_dir/metrics.json")
 
-    # Add another log file (sleep 1s to ensure different mtime)
-    sleep 1
+    # Add another log file with different mtime to invalidate cache
     _create_iteration_log "$w1" 2 3000 1500 180000 0.20
+    _touch_future "$w1/logs/teststep-2.log"
 
     # Second export should pick up new log
     export_metrics "$ralph_dir" > /dev/null 2>&1
@@ -335,13 +341,13 @@ test_export_metrics_cache_invalidation_on_prd_change() {
     first_status=$(jq -r '.workers[0].status' "$ralph_dir/metrics.json")
     assert_equals "in_progress" "$first_status" "Should be in_progress initially"
 
-    # Update PRD to mark success (sleep 1s to ensure different mtime)
-    sleep 1
+    # Update PRD to mark success (far-future mtime to invalidate cache)
     cat > "$w1/prd.md" << 'EOF'
 # Task PRD
 - [x] Implement feature
 - [x] Write tests
 EOF
+    _touch_future "$w1/prd.md"
 
     # Second export should pick up status change
     export_metrics "$ralph_dir" > /dev/null 2>&1
@@ -390,9 +396,9 @@ test_export_metrics_cache_invalidation_on_pr_url() {
     first_pr=$(jq -r '.workers[0].pr_url' "$ralph_dir/metrics.json")
     assert_equals "" "$first_pr" "PR URL should be empty initially"
 
-    # Add PR URL (sleep 1s to ensure different mtime)
-    sleep 1
+    # Add PR URL (far-future mtime to invalidate cache)
     echo "https://github.com/example/repo/pull/42" > "$w1/pr_url.txt"
+    _touch_future "$w1/pr_url.txt"
 
     # Second export should pick up PR URL
     export_metrics "$ralph_dir" > /dev/null 2>&1

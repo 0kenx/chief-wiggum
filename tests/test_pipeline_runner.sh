@@ -28,6 +28,18 @@ _phase_end() { :; }
 _commit_subagent_changes() { :; }
 export -f _phase_start _phase_end _commit_subagent_changes
 
+# Source modules once at top level (pipeline-runner.sh has _pipeline_runner_reset
+# for per-test state cleanup, avoiding expensive re-sourcing of the module chain)
+export LOG_FILE="/dev/null"
+source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
+source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+# Monotonic counter for unique result filenames (avoids forking date +%s)
+_MOCK_EPOCH=0
+_mock_epoch() { echo "$(( ++_MOCK_EPOCH ))"; }
+
 setup() {
     TEST_DIR=$(mktemp -d)
     export LOG_FILE="$TEST_DIR/test.log"
@@ -37,14 +49,8 @@ setup() {
     mkdir -p "$TEST_DIR/project/.ralph/logs"
     mkdir -p "$TEST_DIR/worker/workspace" "$TEST_DIR/worker/logs" "$TEST_DIR/worker/results"
 
-    # Reset loaded state to allow fresh sourcing
-    unset _PIPELINE_LOADER_LOADED _PIPELINE_RUNNER_LOADED _ACTIVITY_LOG_LOADED _AGENT_BASE_LOADED 2>/dev/null || true
-
-    source "$WIGGUM_HOME/lib/core/logger.sh"
-    source "$WIGGUM_HOME/lib/utils/activity-log.sh"
     activity_init "$TEST_DIR/project"
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 }
 
 teardown() {
@@ -75,7 +81,7 @@ agent_run() {
     echo "${agent_name}" >> "$TEST_DIR/agent_invocations.txt"
     # Write result file in correct format: <epoch>-<step_id>-result.json
     local step_id="\${WIGGUM_STEP_ID:-unknown}"
-    local epoch=\$(date +%s)
+    local epoch=\$(_mock_epoch)
     mkdir -p "\$worker_dir/results"
     echo '{"outputs": {"gate_result": "${result}"}}' > "\$worker_dir/results/\${epoch}-\${step_id}-result.json"
 }
@@ -114,7 +120,7 @@ agent_run() {
     local result="\${results[\$idx]}"
     echo \$((count + 1)) > "\$counter_file"
     local step_id="\${WIGGUM_STEP_ID:-unknown}"
-    local epoch=\$(date +%s)
+    local epoch=\$(_mock_epoch)
     mkdir -p "\$worker_dir/results"
     echo "{\"outputs\": {\"gate_result\": \"\$result\"}}" > "\$worker_dir/results/\${epoch}-\${step_id}-result.json"
 }
@@ -137,7 +143,7 @@ run_sub_agent() {
         # Write a PASS result by default in correct format
         local step_id="${WIGGUM_STEP_ID:-unknown}"
         local epoch
-        epoch=$(date +%s)
+        epoch=$(_mock_epoch)
         mkdir -p "$worker_dir/results"
         echo '{"outputs": {"gate_result": "PASS"}}' > "$worker_dir/results/${epoch}-${step_id}-result.json"
     fi
@@ -196,8 +202,7 @@ test_pipeline_enabled_by_skips() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     # Don't set ENABLE_GATED_STEP
     unset ENABLE_GATED_STEP 2>/dev/null || true
@@ -223,8 +228,7 @@ test_pipeline_enabled_by_runs() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     export ENABLE_GATED_STEP="true"
     : > "$TEST_DIR/agent_invocations.txt"
@@ -251,8 +255,7 @@ test_pipeline_on_result_fail_abort() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -280,8 +283,7 @@ test_pipeline_no_handler_continues() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -310,8 +312,7 @@ test_pipeline_jump_to_named_step() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
@@ -336,8 +337,7 @@ test_pipeline_max_visits_abort() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -365,8 +365,7 @@ test_pipeline_max_visits_next() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -408,8 +407,7 @@ test_pipeline_inline_agent_fix_loop() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -462,8 +460,7 @@ test_pipeline_inline_max_exceeded() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -493,8 +490,7 @@ test_pipeline_jump_prev() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -527,8 +523,7 @@ test_pipeline_stop_aborts() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -560,8 +555,7 @@ test_pipeline_on_max_loop_detection() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -596,8 +590,7 @@ test_pipeline_start_from_step() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "step-2"
@@ -621,8 +614,7 @@ test_pipeline_writes_pipeline_config() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
@@ -661,8 +653,7 @@ test_pipeline_config_updates_current_step() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
@@ -703,8 +694,7 @@ test_pipeline_config_includes_inline_handlers() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
@@ -730,8 +720,7 @@ test_pipeline_aborts_on_missing_workspace() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     local exit_code=0
@@ -751,8 +740,7 @@ test_pipeline_emits_activity_events() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
@@ -786,8 +774,7 @@ test_pipeline_circuit_breaker_escalates_repeated_fix() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     # Set low threshold for testing
     export WIGGUM_CIRCUIT_BREAKER_THRESHOLD=3
@@ -831,8 +818,7 @@ test_pipeline_circuit_breaker_resets_on_different_result() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     export WIGGUM_CIRCUIT_BREAKER_THRESHOLD=3
     _PIPELINE_CIRCUIT_BREAKER_THRESHOLD=3
@@ -862,8 +848,7 @@ test_pipeline_workspace_disappears_before_agent() {
         ]
     }'
 
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     # Override run_sub_agent to delete workspace before the mock agent runs
     # This simulates the workspace being deleted mid-pipeline

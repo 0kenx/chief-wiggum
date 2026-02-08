@@ -271,11 +271,18 @@ test_spec_terminal_states_reachable_from_initial() {
 test_spec_guarded_transitions_have_fallback() {
     # For each (event, from) pair that has a guarded transition, there should be
     # a subsequent unguarded transition for the same (event, from) as fallback.
+    # Exception: terminal_recoverable states (e.g. "failed") intentionally lack
+    # fallbacks — guard failure means "stay in current state" by design.
     local missing_fallback=0
 
     # Get all guarded (event, from) pairs
     while IFS=$'\x1e' read -r event from; do
         [ -n "$event" ] || continue
+
+        # Skip terminal_recoverable states — guard failure = silent drop (stay failed)
+        local from_type
+        from_type=$(jq -r --arg s "$from" '.states[$s].type // ""' "$SPEC_FILE")
+        [[ "$from_type" == "terminal_recoverable" ]] && continue
 
         # Check if there's an unguarded transition for same event+from
         local has_fallback

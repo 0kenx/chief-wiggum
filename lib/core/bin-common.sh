@@ -34,11 +34,11 @@ _validate_wiggum_home() {
         if [ ! -f "$home/$f" ]; then
             echo "Error: Invalid WIGGUM_HOME - missing $f" >&2
             echo "WIGGUM_HOME='$home' does not appear to be a valid Chief Wiggum installation" >&2
-            exit 1
+            return 1
         fi
     done
 }
-_validate_wiggum_home "$WIGGUM_HOME"
+_validate_wiggum_home "$WIGGUM_HOME" || exit 1
 
 # Set up standard paths
 PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
