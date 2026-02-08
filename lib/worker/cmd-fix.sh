@@ -172,6 +172,13 @@ do_worker_fix() {
             _log_ts "INFO: Running agent $_WORKER_AGENT_TYPE"
             _exit_code=0
             run_agent "$_WORKER_AGENT_TYPE" "$_WORKER_DIR" "$_WORKER_PROJECT_DIR" || _exit_code=$?
+
+            # Self-complete: transition lifecycle state before EXIT trap removes agent.pid
+            if [ -n "$_WORKER_PIPELINE" ]; then
+                source "$WIGGUM_HOME/lib/worker/worker-complete.sh" 2>/dev/null || true
+                worker_complete_fix "$_WORKER_DIR" "$_WORKER_TASK_ID" 2>/dev/null || true
+            fi
+
             if [ $_exit_code -ne 0 ]; then
                 _log_ts "ERROR: run_agent failed with exit code $_exit_code"
                 exit 1

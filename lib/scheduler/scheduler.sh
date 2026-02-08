@@ -237,6 +237,30 @@ _scheduler_reclaim_restored_workers() {
 # Uses the resolve.startup_reset lifecycle event (resets merge attempts
 # instead of incrementing — server restart is not a resolution failure).
 # Scans worker directories directly (no issue cache or API needed).
+# Check if a worker's results directory contains completion artifacts
+#
+# Looks for commit-push or merge result files that indicate the fix
+# pipeline progressed to the push/merge stage. Used to distinguish
+# workers that completed their pipeline (but self-complete didn't fire
+# due to a crash) from workers that died mid-pipeline.
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 0 if completion results found, 1 otherwise
+_worker_has_completion_results() {
+    local worker_dir="$1"
+    [ -d "$worker_dir/results" ] || return 1
+
+    # Check for commit-push or pr-fix result files with a gate_result
+    local result_file=""
+    result_file=$(find "$worker_dir/results" -maxdepth 1 \
+        \( -name "*-commit-push-result.json" -o -name "*-pr-fix-result.json" \) \
+        -type f 2>/dev/null | head -1)
+
+    [ -n "$result_file" ]
+}
+
 # Reset dead workers stuck in running/transient states
 #
 # At startup, workers whose agent processes died remain in "running" states
@@ -274,11 +298,30 @@ _scheduler_reset_dead_workers() {
 
         # Determine which event to emit based on current state
         local event=""
+        local task_id
+        task_id=$(get_task_id_from_worker "$worker_name")
+
         case "$current_git_state" in
             # Running states that need reset
             resolving)
                 event="resolve.startup_reset" ;;
-            fixing|merging)
+            fixing)
+                # Re-read state in case worker self-completed between scan and check
+                local recheck_state
+                recheck_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "none")
+                if [[ "$recheck_state" != "fixing" ]]; then
+                    log_debug "reset_dead: $worker_name already transitioned to $recheck_state - skip"
+                    continue
+                fi
+                # Check if pipeline completed but self-complete didn't fire (crash edge case)
+                if _worker_has_completion_results "$worker_dir"; then
+                    log "Detected completed fix pipeline for $task_id - running completion handler instead of reset"
+                    handle_fix_worker_completion "$worker_dir" "$task_id" || true
+                    ((++reset_count)) || true
+                    continue
+                fi
+                event="startup.reset" ;;
+            merging)
                 event="startup.reset" ;;
             # Transient states stuck without a running agent
             merge_conflict)
@@ -292,8 +335,6 @@ _scheduler_reset_dead_workers() {
                 continue ;;
         esac
 
-        local task_id
-        task_id=$(get_task_id_from_worker "$worker_name")
         if emit_event "$worker_dir" "$event" "scheduler.restore"; then
             log "Reset dead worker $task_id via $event (was $current_git_state)"
             ((++reset_count)) || true

@@ -65,6 +65,7 @@ teardown() {
 # We extract them to avoid loading the full dependency chain
 _load_resume_helpers() {
     # Extract the helper functions directly
+    # shellcheck disable=SC1090  # Dynamic source from heredoc for test isolation
     source <(cat << 'HELPERS_EOF'
 #!/usr/bin/env bash
 # Extracted helper functions from cmd-resume.sh for testing

@@ -668,8 +668,8 @@ test_meta_handlers_threshold_counting() {
 
     svc_meta_init
 
-    local state_file
-    state_file=$(_meta_state_file)
+    # Verify state file exists after init
+    _meta_state_file > /dev/null
 
     # First completion
     svc_meta_count_completion

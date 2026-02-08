@@ -372,10 +372,24 @@ orch_cleanup_main_workers() {
 orch_cleanup_fix_workers() {
     local timeout="${1:-1800}"
 
-    # Default completion callback
+    # Default completion callback (idempotent — skips if worker already self-completed)
     _fix_completion() {
         local worker_dir="$1"
         local task_id="$2"
+
+        # Skip if worker already self-completed via worker-complete.sh
+        local current_state
+        current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "")
+        case "$current_state" in
+            fix_completed|needs_merge|merged|failed)
+                log_debug "Fix completion: $task_id already at $current_state - skipping handler"
+                # Still attempt merge if applicable
+                if [[ "$current_state" == "needs_merge" ]]; then
+                    attempt_pr_merge "$worker_dir" "$task_id" "$RALPH_DIR" || true
+                fi
+                return 0
+                ;;
+        esac
 
         if handle_fix_worker_completion "$worker_dir" "$task_id"; then
             if git_state_is "$worker_dir" "needs_merge"; then
@@ -1654,9 +1668,23 @@ _handle_main_worker_completion() {
 }
 
 # Handle fix worker completion (callback for pool_cleanup_finished)
+# Idempotent: skips if worker already self-completed via worker-complete.sh
 _handle_fix_worker_completion() {
     local worker_dir="$1"
     local task_id="$2"
+
+    # Skip if worker already self-completed
+    local current_state
+    current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "")
+    case "$current_state" in
+        fix_completed|needs_merge|merged|failed)
+            log_debug "Fix completion: $task_id already at $current_state - skipping handler"
+            if [[ "$current_state" == "needs_merge" ]]; then
+                attempt_pr_merge "$worker_dir" "$task_id" "$RALPH_DIR" || true
+            fi
+            return 0
+            ;;
+    esac
 
     if handle_fix_worker_completion "$worker_dir" "$task_id"; then
         # Fix succeeded - attempt merge if needed

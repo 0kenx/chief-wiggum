@@ -6,6 +6,7 @@
 #   ./test-runner.sh                  # Run all tests
 #   ./test-runner.sh --filter lock    # Run only tests matching "lock"
 #   ./test-runner.sh --filter lock,kanban  # Run tests matching "lock" or "kanban"
+#   ./test-runner.sh --filter "lock|kanban" # Pipe-separated also works
 #   ./test-runner.sh path/to/test.sh  # Run specific test file
 
 set -euo pipefail
@@ -214,10 +215,14 @@ main() {
         test_files=("${POSITIONAL_ARGS[@]}")
     fi
 
-    # Apply filter if specified (supports comma-separated patterns)
+    # Apply filter if specified (supports comma-separated or pipe-separated patterns)
     if [ -n "$FILTER_PATTERN" ]; then
         local filtered_files=()
-        IFS=',' read -ra filter_patterns <<< "$FILTER_PATTERN"
+        # Normalize: strip backslash escapes (\|) and replace | with , so
+        # both "a,b" and "a|b" and "a\|b" work as multi-pattern filters.
+        local normalized_filter="${FILTER_PATTERN//\\|/,}"
+        normalized_filter="${normalized_filter//|/,}"
+        IFS=',' read -ra filter_patterns <<< "$normalized_filter"
         for test_file in "${test_files[@]}"; do
             local name
             name=$(basename "$test_file")

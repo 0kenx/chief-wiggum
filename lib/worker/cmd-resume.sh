@@ -384,6 +384,8 @@ do_resume() {
     export _WORKER_MAX_ITERATIONS="$MAX_ITERATIONS"
     export _WORKER_MAX_TURNS="$MAX_TURNS"
     export _WORKER_RESUME_STEP="$resume_step"
+    export _WORKER_PIPELINE="${effective_pipeline:-}"
+    export _WORKER_TASK_ID="$task_id"
 
     # Read report path from result file (standard mechanism)
     local resume_instructions_path=""
@@ -415,6 +417,13 @@ do_resume() {
         _exit_code=0
         run_agent "system.task-worker" "$_WORKER_DIR" "$_WORKER_PROJECT_DIR" 30 "$_WORKER_MAX_ITERATIONS" "$_WORKER_MAX_TURNS" \
             "$_WORKER_RESUME_STEP" "$_WORKER_RESUME_INSTRUCTIONS" || _exit_code=$?
+
+        # Self-complete: transition lifecycle state before EXIT trap removes agent.pid
+        if [[ "${_WORKER_PIPELINE:-}" == "fix" ]]; then
+            source "$WIGGUM_HOME/lib/worker/worker-complete.sh" 2>/dev/null || true
+            worker_complete_fix "$_WORKER_DIR" "$_WORKER_TASK_ID" 2>/dev/null || true
+        fi
+
         if [ $_exit_code -ne 0 ]; then
             _log_ts "ERROR: run_agent failed with exit code $_exit_code"
             exit 1
@@ -424,7 +433,7 @@ do_resume() {
     # Clean up exported worker variables from parent environment
     unset _WORKER_WIGGUM_HOME _WORKER_DIR _WORKER_PROJECT_DIR \
           _WORKER_MAX_ITERATIONS _WORKER_MAX_TURNS _WORKER_RESUME_STEP \
-          _WORKER_RESUME_INSTRUCTIONS
+          _WORKER_RESUME_INSTRUCTIONS _WORKER_PIPELINE _WORKER_TASK_ID
 
     # Wait briefly for agent.pid to be created
     local wait_count=0

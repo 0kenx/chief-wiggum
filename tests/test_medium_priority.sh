@@ -324,6 +324,7 @@ EOF
 | `shared.py` | MODIFY | Shared |
 EOF
 
+    # shellcheck disable=SC2034  # active_workers is passed by name to get_conflicting_tasks
     local -A active_workers=([12345]="TASK-002" [67890]="TASK-003")
 
     local output

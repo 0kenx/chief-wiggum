@@ -24,10 +24,14 @@ setup() {
     TEST_DIR=$(mktemp -d)
     MOCK_GH_DIR=$(mktemp -d)
 
-    # Reset mock data
+    # Reset mock data (used by mock gh script via exported env)
+    # shellcheck disable=SC2034
     MOCK_GH_ISSUE_LABELS=()
+    # shellcheck disable=SC2034
     MOCK_GH_ISSUE_ASSIGNEES=()
+    # shellcheck disable=SC2034
     MOCK_GH_ISSUE_COMMENTS=()
+    # shellcheck disable=SC2034
     MOCK_GH_ISSUE_EXISTS=()
 
     # Create mock gh script
