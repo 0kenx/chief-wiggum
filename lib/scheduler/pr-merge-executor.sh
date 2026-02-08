@@ -393,11 +393,11 @@ pr_merge_handle_remaining() {
         done < <(echo "$conflicts_with_prs" | jq -r '.[]')
 
         if [ "$has_multi_conflict" = "true" ]; then
-            # Check current state - don't interrupt active resolution or post-resolution states
+            # Check current state - don't interrupt active resolution
             local current_git_state
             current_git_state=$(git_state_get "$worker_dir")
             case "$current_git_state" in
-                resolving|resolved|needs_merge|merging)
+                resolving|resolved|merging)
                     log "  $task_id: active resolution (state=$current_git_state) - skipping"
                     ((++needs_multi_resolve))
                     continue
@@ -427,11 +427,11 @@ pr_merge_handle_remaining() {
             }
             ((++needs_multi_resolve))
         else
-            # Check current state - don't interrupt active resolution or post-resolution states
+            # Check current state - don't interrupt active resolution
             local current_git_state
             current_git_state=$(git_state_get "$worker_dir")
             case "$current_git_state" in
-                resolving|resolved|needs_merge|merging)
+                resolving|resolved|merging)
                     log "  $task_id: active resolution (state=$current_git_state) - skipping"
                     ((++needs_resolve))
                     continue
