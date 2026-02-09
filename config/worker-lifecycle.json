@@ -74,6 +74,7 @@
 
     { "event": "resolve.started",       "from": "needs_resolve",      "to": "resolving" },
     { "event": "resolve.started",       "from": "needs_multi_resolve","to": "resolving" },
+    { "event": "resolve.started",       "from": "resolving",          "to": null },
     { "event": "resolve.succeeded",     "from": "resolving",  "to": "needs_merge",  "chain": "resolved", "effects": ["rm_conflict_queue"] },
     { "event": "resolve.fail",          "from": "resolving",          "to": "failed",       "effects": ["check_permanent"] },
     { "event": "resolve.fail",          "from": "needs_resolve",      "to": "failed",       "effects": ["check_permanent"] },
@@ -88,6 +89,7 @@
     { "event": "resolve.batch_failed",  "from": "needs_multi_resolve","to": "needs_resolve" },
     { "event": "resolve.batch_failed",  "from": "needs_resolve",      "to": "needs_resolve" },
 
+    { "event": "pr.conflict_detected",  "from": "merge_conflict",    "to": "needs_resolve" },
     { "event": "pr.conflict_detected",  "from": "none",              "to": "needs_resolve", "effects": ["add_conflict_queue"] },
     { "event": "pr.conflict_detected",  "from": "needs_merge",       "to": "needs_resolve", "effects": ["add_conflict_queue"] },
     { "event": "pr.conflict_detected",  "from": "needs_fix",         "to": "needs_resolve", "effects": ["add_conflict_queue"] },

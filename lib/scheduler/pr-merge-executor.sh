@@ -397,7 +397,7 @@ pr_merge_handle_remaining() {
             local current_git_state
             current_git_state=$(git_state_get "$worker_dir")
             case "$current_git_state" in
-                resolving|resolved|merging)
+                resolving|resolved|merging|merge_conflict)
                     log "  $task_id: active resolution (state=$current_git_state) - skipping"
                     ((++needs_multi_resolve))
                     continue
@@ -431,7 +431,7 @@ pr_merge_handle_remaining() {
             local current_git_state
             current_git_state=$(git_state_get "$worker_dir")
             case "$current_git_state" in
-                resolving|resolved|merging)
+                resolving|resolved|merging|merge_conflict)
                     log "  $task_id: active resolution (state=$current_git_state) - skipping"
                     ((++needs_resolve))
                     continue

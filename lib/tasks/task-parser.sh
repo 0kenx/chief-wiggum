@@ -808,6 +808,7 @@ $(awk -v task="$task_id" '
     $0 ~ "\\*\\*\\[" task "\\]\\*\\*" {found=1; next}
     found && /^  - Description:/ {sub(/^  - Description: /, ""); desc=$0; next}
     found && /^  - Priority:/ {sub(/^  - Priority: /, ""); priority=$0; next}
+    found && /^  - Complexity:/ {sub(/^  - Complexity: /, ""); complexity=$0; next}
     found && /^  - Dependencies:/ {sub(/^  - Dependencies: /, ""); deps=$0; next}
     found && /^  - Scope:?/ {in_scope=1; in_oos=0; in_ac=0; next}
     found && /^  - Out of Scope:?/ {in_scope=0; in_oos=1; in_ac=0; next}
@@ -827,7 +828,7 @@ $(awk -v task="$task_id" '
         ac[++ac_count] = $0
         next
     }
-    found && /^  - / && !/^  - (Description|Priority|Dependencies|Scope|Out of Scope|Acceptance Criteria):?/ {
+    found && /^  - / && !/^  - (Description|Priority|Complexity|Dependencies|Scope|Out of Scope|Acceptance Criteria):?/ {
         in_scope=0; in_oos=0; in_ac=0
     }
     found && /^- \[/ {exit}
@@ -835,6 +836,7 @@ $(awk -v task="$task_id" '
     END {
         if (desc) print "## Description\n" desc "\n"
         if (priority) print "## Priority\n" priority "\n"
+        if (complexity) print "## Complexity\n" complexity "\n"
         if (deps && deps != "none") print "## Dependencies\n" deps "\n"
 
         # Output Scope items (what to do)

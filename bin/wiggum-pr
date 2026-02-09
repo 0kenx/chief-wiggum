@@ -24,6 +24,7 @@ source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 source "$WIGGUM_HOME/lib/github/pr-labels.sh"
 source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 source "$WIGGUM_HOME/lib/scheduler/pr-merge-data.sh"
+source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 show_help() {
@@ -455,7 +456,7 @@ cmd_global_sync() {
                     current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "none")
                     # Only emit if not already being resolved
                     case "$current_state" in
-                        needs_resolve|needs_multi_resolve|resolving|resolved)
+                        needs_resolve|needs_multi_resolve|resolving|resolved|merge_conflict)
                             log_debug "  $task_id: conflict detected but already $current_state"
                             ;;
                         *)

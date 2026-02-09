@@ -315,6 +315,11 @@ ResolveStartedFromNeedsMulti ==
     /\ state' = "resolving"
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
+\* resolve.started: resolving -> null (idempotent re-entry, no state change)
+ResolveStartedFromResolving ==
+    /\ state = "resolving"
+    /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban>>
+
 \* resolve.succeeded: resolving -> needs_merge (chains through resolved, atomic)
 \* Effect: rm_conflict_queue (abstracted away)
 ResolveSucceeded ==
@@ -415,6 +420,12 @@ ResolveBatchFailedFromNeedsResolve ==
 \* =========================================================================
 \* Actions - PR Events
 \* =========================================================================
+
+\* pr.conflict_detected: merge_conflict -> needs_resolve (redundant detection, no effects)
+PrConflictFromMergeConflict ==
+    /\ state = "merge_conflict"
+    /\ state' = "needs_resolve"
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
 \* pr.conflict_detected: none -> needs_resolve
 PrConflictFromNone ==
@@ -644,7 +655,9 @@ Next ==
     \/ ResolveMaxExceededFromNeedsMulti
     \/ ResolveBatchFailedFromNeedsMulti
     \/ ResolveBatchFailedFromNeedsResolve
+    \/ ResolveStartedFromResolving
     \* PR events
+    \/ PrConflictFromMergeConflict
     \/ PrConflictFromNone
     \/ PrConflictFromNeedsMerge
     \/ PrConflictFromNeedsFix

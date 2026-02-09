@@ -39,11 +39,15 @@ setup() {
     GITHUB_SYNC_PRIORITY_LABELS='{"priority:critical":"CRITICAL","priority:high":"HIGH","priority:medium":"MEDIUM","priority:low":"LOW"}'
     # shellcheck disable=SC2089 # JSON strings, not bash arrays
     GITHUB_SYNC_STATUS_LABELS='{"wiggum:in-progress":"=","wiggum:pending-approval":"P","wiggum:completed":"x","wiggum:failed":"*","wiggum:not-planned":"N"}'
+    # shellcheck disable=SC2089 # JSON strings, not bash arrays
+    GITHUB_SYNC_COMPLEXITY_LABELS='{"complexity:high":"HIGH","complexity:medium":"MEDIUM","complexity:low":"LOW"}'
     GITHUB_SYNC_CLOSE_ON="x"
     export GITHUB_SYNC_ENABLED GITHUB_SYNC_ALLOWED_USER_IDS
     export GITHUB_SYNC_LABEL_FILTER GITHUB_SYNC_DEFAULT_PRIORITY
     # shellcheck disable=SC2090 # JSON strings passed to jq, not bash expansions
     export GITHUB_SYNC_PRIORITY_LABELS GITHUB_SYNC_STATUS_LABELS GITHUB_SYNC_CLOSE_ON
+    # shellcheck disable=SC2090
+    export GITHUB_SYNC_COMPLEXITY_LABELS
 
     # Create a basic kanban file
     cat > "$TEST_DIR/.ralph/kanban.md" << 'EOF'
@@ -511,6 +515,61 @@ test_get_priority_label() {
 }
 
 # =============================================================================
+# Complexity from Labels
+# =============================================================================
+
+test_complexity_from_labels() {
+    local result
+    result=$(github_sync_get_complexity_from_labels '[{"name":"wiggum"},{"name":"complexity:high"}]')
+    assert_equals "HIGH" "$result" "Should extract HIGH from labels"
+}
+
+test_complexity_from_labels_none() {
+    local result
+    result=$(github_sync_get_complexity_from_labels '[{"name":"wiggum"},{"name":"bug"}]')
+    assert_equals "" "$result" "Should return empty with no complexity labels"
+}
+
+test_get_complexity_label() {
+    local label
+    label=$(_get_complexity_label "HIGH")
+    assert_equals "complexity:high" "$label" "Should map HIGH to complexity:high"
+
+    label=$(_get_complexity_label "LOW")
+    assert_equals "complexity:low" "$label" "Should map LOW to complexity:low"
+
+    label=$(_get_complexity_label "")
+    assert_equals "" "$label" "Should return empty for empty complexity"
+}
+
+test_parse_kanban_task_fields_with_complexity() {
+    local kanban="$TEST_DIR/.ralph/kanban_comp_test.md"
+    cat > "$kanban" << 'EOF'
+# Kanban Board
+
+## TASKS
+
+- [ ] **[COMP-1]** Task with complexity
+  - Description: A complex task
+  - Priority: HIGH
+  - Complexity: MEDIUM
+  - Dependencies: none
+EOF
+
+    local result
+    result=$(_parse_kanban_task_fields "$kanban" "COMP-1")
+
+    assert_not_empty "$result" "Should return non-empty JSON"
+
+    local complexity priority
+    complexity=$(echo "$result" | jq -r '.complexity')
+    priority=$(echo "$result" | jq -r '.priority')
+
+    assert_equals "MEDIUM" "$complexity" "Should extract complexity"
+    assert_equals "HIGH" "$priority" "Should extract priority"
+}
+
+# =============================================================================
 # Read-Only Operations Must Not Modify kanban.md
 # =============================================================================
 
@@ -805,6 +864,10 @@ run_test test_sync_up_create_already_tracked
 run_test test_sync_up_create_no_untracked
 run_test test_build_issue_body
 run_test test_get_priority_label
+run_test test_complexity_from_labels
+run_test test_complexity_from_labels_none
+run_test test_get_complexity_label
+run_test test_parse_kanban_task_fields_with_complexity
 run_test test_readonly_list_task_ids
 run_test test_readonly_parse_kanban_fields
 run_test test_readonly_kanban_task_exists

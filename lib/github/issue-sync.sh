@@ -209,7 +209,7 @@ _parse_kanban_task_fields() {
     # Extract raw tab-separated values via awk, then build JSON safely with jq
     local raw
     raw=$(awk -v tid="$task_id" '
-    BEGIN { found = 0; brief = ""; desc = ""; pri = "MEDIUM"; deps = "none"; status = " " }
+    BEGIN { found = 0; brief = ""; desc = ""; pri = "MEDIUM"; deps = "none"; comp = ""; status = " " }
 
     # Match the task line
     $0 ~ "^- \\[.\\] \\*\\*\\[" tid "\\]\\*\\*" {
@@ -239,6 +239,12 @@ _parse_kanban_task_fields() {
         pri = $0
         next
     }
+    found && /^  - Complexity:/ {
+        sub(/^  - Complexity:[[:space:]]*/, "")
+        gsub(/[[:space:]]+$/, "")
+        comp = $0
+        next
+    }
     found && /^  - Dependencies:/ {
         sub(/^  - Dependencies:[[:space:]]*/, "")
         gsub(/[[:space:]]+$/, "")
@@ -252,15 +258,15 @@ _parse_kanban_task_fields() {
 
     END {
         if (brief != "" || desc != "") {
-            print brief "\x1e" desc "\x1e" pri "\x1e" deps "\x1e" status
+            print brief "\x1e" desc "\x1e" pri "\x1e" deps "\x1e" status "\x1e" comp
         }
     }
     ' "$kanban_file")
 
     [ -n "$raw" ] || return 0
 
-    local _brief _desc _pri _deps _status
-    IFS=$'\x1e' read -r _brief _desc _pri _deps _status <<< "$raw"
+    local _brief _desc _pri _deps _status _comp
+    IFS=$'\x1e' read -r _brief _desc _pri _deps _status _comp <<< "$raw"
 
     jq -n \
         --arg brief "${_brief:-}" \
@@ -268,12 +274,14 @@ _parse_kanban_task_fields() {
         --arg priority "${_pri:-MEDIUM}" \
         --arg dependencies "${_deps:-none}" \
         --arg status "${_status:- }" \
+        --arg complexity "${_comp:-}" \
         '{
             brief: $brief,
             description: $description,
             priority: $priority,
             dependencies: $dependencies,
-            status: $status
+            status: $status,
+            complexity: $complexity
         }'
 }
 
@@ -473,6 +481,13 @@ github_issue_sync_down() {
         fi
         # Fallback to default if still empty
         priority="${priority:-$GITHUB_SYNC_DEFAULT_PRIORITY}"
+
+        # Complexity from labels takes precedence over body
+        local label_complexity
+        label_complexity=$(github_sync_get_complexity_from_labels "$labels_json")
+        if [ -n "$label_complexity" ]; then
+            complexity="$label_complexity"
+        fi
 
         # Check kanban status
         if _kanban_task_exists "$kanban_file" "$task_id"; then
@@ -805,6 +820,30 @@ _get_priority_label() {
     fi
 }
 
+# Get the complexity label name for a complexity string
+#
+# Args:
+#   complexity - Complexity string (e.g., "HIGH")
+#
+# Returns: label name on stdout (e.g., "complexity:high"), or empty
+_get_complexity_label() {
+    local complexity="$1"
+    local mapping="${GITHUB_SYNC_COMPLEXITY_LABELS:-}"
+
+    # Guard: need a non-trivial JSON object
+    [[ -n "$mapping" && "$mapping" != "{}" ]] || return 0
+
+    local result
+    result=$(echo "$mapping" | \
+        jq -r --arg comp "$complexity" \
+        'to_entries[] | select(.value == $comp) | .key' 2>/dev/null) || true
+
+    # Only output valid label names (must contain a letter)
+    if [[ -n "$result" && "$result" =~ [a-zA-Z] ]]; then
+        echo "$result"
+    fi
+}
+
 # Create GitHub issues for untracked kanban tasks and sync them
 #
 # Args:
@@ -912,12 +951,13 @@ github_issue_sync_up_create() {
             continue
         fi
 
-        local brief description priority dependencies status
+        local brief description priority dependencies status complexity
         brief=$(echo "$fields" | jq -r '.brief // ""')
         description=$(echo "$fields" | jq -r '.description // ""')
         priority=$(echo "$fields" | jq -r '.priority // "MEDIUM"')
         dependencies=$(echo "$fields" | jq -r '.dependencies // "none"')
         status=$(echo "$fields" | jq -r '.status // " "')
+        complexity=$(echo "$fields" | jq -r '.complexity // ""')
 
         # Build issue body (full task block from kanban)
         local body
@@ -927,9 +967,13 @@ github_issue_sync_up_create() {
         local priority_label
         priority_label=$(_get_priority_label "$priority")
 
+        # Determine complexity label
+        local complexity_label
+        complexity_label=$(_get_complexity_label "$complexity")
+
         # Create the issue
         local issue_number
-        if issue_number=$(github_issue_create "$task_id" "$brief" "$body" "$priority_label"); then
+        if issue_number=$(github_issue_create "$task_id" "$brief" "$body" "$priority_label" "$complexity_label"); then
             echo "Created issue #$issue_number for $task_id"
 
             # Add state entry

@@ -95,21 +95,24 @@ _github_issue_parse_body_to_files() {
     /^[Pp]riority[[:space:]]*:/ {
         sub(/^[Pp]riority[[:space:]]*:[[:space:]]*/, "")
         gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-        print toupper($0) > out_dir "/priority"
+        outfile = out_dir "/priority"
+        print toupper($0) > outfile
         current_section = ""; pending_field = ""
         next
     }
     /^[Cc]omplexity[[:space:]]*:/ {
         sub(/^[Cc]omplexity[[:space:]]*:[[:space:]]*/, "")
         gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-        print toupper($0) > out_dir "/complexity"
+        outfile = out_dir "/complexity"
+        print toupper($0) > outfile
         current_section = ""; pending_field = ""
         next
     }
     /^[Dd]ependencies[[:space:]]*:/ {
         sub(/^[Dd]ependencies[[:space:]]*:[[:space:]]*/, "")
         gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-        print > out_dir "/dependencies"
+        outfile = out_dir "/dependencies"
+        print > outfile
         current_section = ""; pending_field = ""
         next
     }
@@ -159,10 +162,11 @@ _github_issue_parse_body_to_files() {
             if ($0 !~ /^[[:space:]]*$/) {
                 val = $0
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+                outfile = out_dir "/" pending_field
                 if (pending_field == "priority" || pending_field == "complexity") {
-                    print toupper(val) > out_dir "/" pending_field
+                    print toupper(val) > outfile
                 } else {
-                    print val > out_dir "/" pending_field
+                    print val > outfile
                 }
                 pending_field = ""
             }
@@ -170,9 +174,11 @@ _github_issue_parse_body_to_files() {
         }
 
         if (current_section != "") {
-            print >> out_dir "/" current_section
+            outfile = out_dir "/" current_section
+            print >> outfile
         } else if (!past_preamble) {
-            print >> out_dir "/description"
+            outfile = out_dir "/description"
+            print >> outfile
         }
         # else: discard (content under unrecognized heading like ## Checklist)
     }

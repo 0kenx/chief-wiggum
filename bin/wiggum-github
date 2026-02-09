@@ -93,6 +93,10 @@ GITHUB_LABELS=(
     "priority:high|d93f0b|High priority"
     "priority:medium|fbca04|Medium priority (default)"
     "priority:low|c2e0c6|Low priority"
+    # Complexity labels
+    "complexity:high|5319e7|High complexity task"
+    "complexity:medium|1d76db|Medium complexity task"
+    "complexity:low|bfd4f2|Low complexity task"
 )
 
 # Create a single GitHub label

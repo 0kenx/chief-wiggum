@@ -194,6 +194,10 @@ _lifecycle_run_effects() {
             esac
         done
 
+        if ! declare -f "$fn" &>/dev/null; then
+            log_debug "lifecycle: effect '$effect_name' skipped ($fn not loaded)"
+            continue
+        fi
         "$fn" "${resolved_args[@]}" 2>/dev/null || log_warn "lifecycle: effect '$effect_name' failed (non-fatal)"
     done
 }
