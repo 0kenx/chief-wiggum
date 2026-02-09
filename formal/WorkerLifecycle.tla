@@ -102,12 +102,14 @@ FixDetectedFromNeedsMerge ==
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
 \* fix.detected: failed -> needs_fix (guarded: recovery_attempts_lt_max)
+\* kanban "=" (clear permanent failure marker on recovery)
 FixDetectedFromFailed ==
     /\ state = "failed"
     /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     /\ state' = "needs_fix"
     /\ recoveryAttempts' = recoveryAttempts + 1
-    /\ UNCHANGED <<mergeAttempts, kanban>>
+    /\ kanban' = "="
+    /\ UNCHANGED mergeAttempts
 
 \* fix.started: needs_fix -> fixing
 FixStarted ==
@@ -115,13 +117,23 @@ FixStarted ==
     /\ state' = "fixing"
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
-\* fix.pass: fixing -> needs_merge (chains through fix_completed, atomic)
-\* Effect: inc_merge_attempts
-FixPass ==
+\* fix.pass: fixing -> needs_merge (guarded: merge_attempts_lt_max)
+\* Chains through fix_completed, atomic. Effect: inc_merge_attempts
+FixPassGuarded ==
     /\ state = "fixing"
+    /\ mergeAttempts < MAX_MERGE_ATTEMPTS
     /\ state' = "needs_merge"
     /\ mergeAttempts' = mergeAttempts + 1
     /\ UNCHANGED <<recoveryAttempts, kanban>>
+
+\* fix.pass: fixing -> failed (fallback when merge budget exhausted)
+\* Effect: check_permanent
+FixPassFallback ==
+    /\ state = "fixing"
+    /\ mergeAttempts >= MAX_MERGE_ATTEMPTS
+    /\ state' = "failed"
+    /\ kanban' = KanbanAfterCheckPermanent(kanban)
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
 
 \* fix.skip: fixing -> needs_merge (chains through fix_completed, atomic)
 FixSkip ==
@@ -340,12 +352,23 @@ ResolveTimeout ==
     /\ state' = "needs_resolve"
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
-\* resolve.stuck_reset: resolving -> needs_resolve, effect: inc_merge_attempts
-ResolveStuckReset ==
+\* resolve.stuck_reset: resolving -> needs_resolve (guarded: merge_attempts_lt_max)
+\* Effect: inc_merge_attempts
+ResolveStuckResetGuarded ==
     /\ state = "resolving"
+    /\ mergeAttempts < MAX_MERGE_ATTEMPTS
     /\ state' = "needs_resolve"
     /\ mergeAttempts' = mergeAttempts + 1
     /\ UNCHANGED <<recoveryAttempts, kanban>>
+
+\* resolve.stuck_reset: resolving -> failed (fallback)
+\* Effect: check_permanent
+ResolveStuckResetFallback ==
+    /\ state = "resolving"
+    /\ mergeAttempts >= MAX_MERGE_ATTEMPTS
+    /\ state' = "failed"
+    /\ kanban' = KanbanAfterCheckPermanent(kanban)
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
 
 \* resolve.already_merged: needs_resolve -> merged, kanban "x"
 ResolveAlreadyMergedFromNeedsResolve ==
@@ -412,14 +435,14 @@ PrConflictFromNeedsFix ==
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
 \* pr.conflict_detected: failed -> needs_resolve (guarded: recovery_attempts_lt_max)
-\* Effects: inc_recovery, reset_merge
+\* Effects: inc_recovery, reset_merge. kanban "="
 PrConflictFromFailed ==
     /\ state = "failed"
     /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     /\ state' = "needs_resolve"
     /\ recoveryAttempts' = recoveryAttempts + 1
     /\ mergeAttempts' = 0
-    /\ UNCHANGED kanban
+    /\ kanban' = "="
 
 \* pr.multi_conflict_detected: none -> needs_multi_resolve
 PrMultiConflictFromNone ==
@@ -440,14 +463,14 @@ PrMultiConflictFromNeedsFix ==
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
 \* pr.multi_conflict_detected: failed -> needs_multi_resolve (guarded)
-\* Effects: inc_recovery, reset_merge
+\* Effects: inc_recovery, reset_merge. kanban "="
 PrMultiConflictFromFailed ==
     /\ state = "failed"
     /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     /\ state' = "needs_multi_resolve"
     /\ recoveryAttempts' = recoveryAttempts + 1
     /\ mergeAttempts' = 0
-    /\ UNCHANGED kanban
+    /\ kanban' = "="
 
 \* pr.comments_detected: none -> needs_fix
 PrCommentsFromNone ==
@@ -462,13 +485,14 @@ PrCommentsFromNeedsMerge ==
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
 
 \* pr.comments_detected: failed -> needs_fix (guarded: recovery_attempts_lt_max)
-\* Effect: inc_recovery
+\* Effect: inc_recovery. kanban "="
 PrCommentsFromFailed ==
     /\ state = "failed"
     /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     /\ state' = "needs_fix"
     /\ recoveryAttempts' = recoveryAttempts + 1
-    /\ UNCHANGED <<mergeAttempts, kanban>>
+    /\ kanban' = "="
+    /\ UNCHANGED mergeAttempts
 
 \* pr.retrack: none -> needs_merge
 PrRetrack ==
@@ -481,14 +505,14 @@ PrRetrack ==
 \* =========================================================================
 
 \* recovery.to_resolve: failed -> needs_resolve (guarded)
-\* Effects: inc_recovery, reset_merge
+\* Effects: inc_recovery, reset_merge. kanban "="
 RecoveryToResolveGuarded ==
     /\ state = "failed"
     /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     /\ state' = "needs_resolve"
     /\ recoveryAttempts' = recoveryAttempts + 1
     /\ mergeAttempts' = 0
-    /\ UNCHANGED kanban
+    /\ kanban' = "="
 
 \* recovery.to_resolve: failed -> failed (fallback), kanban "*"
 \* Effect: check_permanent
@@ -500,13 +524,14 @@ RecoveryToResolveFallback ==
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
 
 \* recovery.to_fix: failed -> needs_fix (guarded)
-\* Effect: inc_recovery
+\* Effect: inc_recovery. kanban "="
 RecoveryToFixGuarded ==
     /\ state = "failed"
     /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     /\ state' = "needs_fix"
     /\ recoveryAttempts' = recoveryAttempts + 1
-    /\ UNCHANGED <<mergeAttempts, kanban>>
+    /\ kanban' = "="
+    /\ UNCHANGED mergeAttempts
 
 \* recovery.to_fix: failed -> failed (fallback), kanban "*"
 \* Effect: check_permanent
@@ -578,7 +603,8 @@ Next ==
     \/ FixDetectedFromNeedsMerge
     \/ FixDetectedFromFailed
     \/ FixStarted
-    \/ FixPass
+    \/ FixPassGuarded
+    \/ FixPassFallback
     \/ FixSkip
     \/ FixPartial
     \/ FixFail
@@ -610,7 +636,8 @@ Next ==
     \/ ResolveFailFromNeedsResolve
     \/ ResolveFailFromNeedsMulti
     \/ ResolveTimeout
-    \/ ResolveStuckReset
+    \/ ResolveStuckResetGuarded
+    \/ ResolveStuckResetFallback
     \/ ResolveAlreadyMergedFromNeedsResolve
     \/ ResolveAlreadyMergedFromNeedsMulti
     \/ ResolveMaxExceededFromNeedsResolve
@@ -658,7 +685,7 @@ Fairness ==
                \/ ConflictNeedsMulti)
     /\ WF_vars(ResolveStartedFromNeedsResolve \/ ResolveStartedFromNeedsMulti)
     /\ WF_vars(ResolveSucceeded \/ ResolveFailFromResolving)
-    /\ WF_vars(FixPass \/ FixFail \/ FixSkip \/ FixPartial \/ FixTimeout)
+    /\ WF_vars(FixPassGuarded \/ FixPassFallback \/ FixFail \/ FixSkip \/ FixPartial \/ FixTimeout)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
