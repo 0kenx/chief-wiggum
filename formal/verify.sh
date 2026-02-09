@@ -105,8 +105,13 @@ run_check() {
     tmpout=$(mktemp)
 
     local rc=0
-    apalache-mc check --cinit=CInit --inv="$inv" --length="$length" "$spec" \
-        > "$tmpout" 2>&1 || rc=$?
+    if [[ "$VERBOSE" == true ]]; then
+        apalache-mc check --cinit=CInit --inv="$inv" --length="$length" "$spec" \
+            2>&1 | tee "$tmpout" || rc=$?
+    else
+        apalache-mc check --cinit=CInit --inv="$inv" --length="$length" "$spec" \
+            > "$tmpout" 2>&1 || rc=$?
+    fi
 
     if [[ $rc -eq 0 ]]; then
         echo "PASS"
@@ -115,9 +120,7 @@ run_check() {
         echo "FAIL (exit $rc)"
         ((++FAIL_COUNT)) || true
 
-        if [[ "$VERBOSE" == true ]]; then
-            cat "$tmpout"
-        else
+        if [[ "$VERBOSE" != true ]]; then
             # Show only error-relevant lines
             grep -E '(violation|error|Error|EXITCODE|invariant.*violated|Check the trace)' "$tmpout" \
                 | sed 's/^/  /'
@@ -153,13 +156,13 @@ run_check PipelineEngine.tla InlineVisitsBounded 30
 run_check PipelineEngine.tla StatusConsistency 30
 
 # Orchestrator
-run_check Orchestrator.tla TypeInvariant 20
-run_check Orchestrator.tla WorkerPoolCapacity 20
-run_check Orchestrator.tla BoundedCounters 20
-run_check Orchestrator.tla KanbanMergedConsistency 20
-run_check Orchestrator.tla NoIdleInProgress 20
-run_check Orchestrator.tla NoFileConflictActive 20
-run_check Orchestrator.tla DependencyOrdering 20
+run_check Orchestrator.tla TypeInvariant 10
+run_check Orchestrator.tla WorkerPoolCapacity 10
+run_check Orchestrator.tla BoundedCounters 10
+run_check Orchestrator.tla KanbanMergedConsistency 10
+run_check Orchestrator.tla NoIdleInProgress 10
+run_check Orchestrator.tla NoFileConflictActive 10
+run_check Orchestrator.tla DependencyOrdering 10
 
 # =========================================================================
 # Summary

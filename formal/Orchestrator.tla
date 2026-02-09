@@ -212,12 +212,24 @@ FixStarted(t) ==
     /\ wState' = [wState EXCEPT ![t] = "fixing"]
     /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
 
-\* Fix pass: fixing -> needs_merge (chain through fix_completed)
-FixPass(t) ==
+\* Fix pass: fixing -> needs_merge (guarded: merge_attempts < max)
+\* Reset wType to "main" -- worker re-enters merge cycle
+FixPassGuarded(t) ==
     /\ wState[t] = "fixing"
+    /\ mergeAttempts[t] < MaxMergeAttempts
     /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
     /\ mergeAttempts' = [mergeAttempts EXCEPT ![t] = mergeAttempts[t] + 1]
-    /\ UNCHANGED <<kanban, wType, recoveryAttempts>>
+    /\ wType' = [wType EXCEPT ![t] = "main"]
+    /\ UNCHANGED <<kanban, recoveryAttempts>>
+
+\* Fix pass fallback: fixing -> failed (merge budget exhausted)
+FixPassFallback(t) ==
+    /\ wState[t] = "fixing"
+    /\ mergeAttempts[t] >= MaxMergeAttempts
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] =
+        IF recoveryAttempts[t] >= MaxRecoveryAttempts THEN "*" ELSE kanban[t]]
+    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts>>
 
 \* Fix fail: fixing -> failed
 FixFail(t) ==
@@ -268,6 +280,7 @@ ResolveTimeout(t) ==
 \* =========================================================================
 
 \* Recovery from failed (guarded: recovery_attempts < max)
+\* Reset wType to "main" -- recovered worker re-enters merge cycle
 Recovery(t) ==
     /\ wState[t] = "failed"
     /\ recoveryAttempts[t] < MaxRecoveryAttempts
@@ -275,7 +288,7 @@ Recovery(t) ==
     /\ recoveryAttempts' = [recoveryAttempts EXCEPT ![t] = recoveryAttempts[t] + 1]
     /\ mergeAttempts' = [mergeAttempts EXCEPT ![t] = 0]
     /\ kanban' = [kanban EXCEPT ![t] = "="]
-    /\ UNCHANGED wType
+    /\ wType' = [wType EXCEPT ![t] = "main"]
 
 \* Recovery fallback: failed -> permanent failure
 RecoveryFallback(t) ==
@@ -339,7 +352,8 @@ Next ==
         \* Fix cycle
         \/ SpawnFixWorker(t)
         \/ FixStarted(t)
-        \/ FixPass(t)
+        \/ FixPassGuarded(t)
+        \/ FixPassFallback(t)
         \/ FixFail(t)
         \/ FixPartial(t)
         \* Resolve cycle
@@ -369,7 +383,7 @@ Fairness ==
                    \/ MergeConflictGuarded(t) \/ MergeConflictFallback(t)
                    \/ MergeOutOfDateOk(t) \/ MergeOutOfDateFail(t))
         /\ WF_vars(FixStarted(t))
-        /\ WF_vars(FixPass(t) \/ FixFail(t))
+        /\ WF_vars(FixPassGuarded(t) \/ FixPassFallback(t) \/ FixFail(t))
         /\ WF_vars(ResolveStarted(t))
         /\ WF_vars(ResolveSucceeded(t) \/ ResolveFail(t))
         /\ WF_vars(Recovery(t) \/ RecoveryFallback(t))
