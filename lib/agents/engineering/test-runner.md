@@ -120,24 +120,27 @@ ls tests/ 2>/dev/null
 
 **If no test framework exists -> SKIP**
 
-## Step 2: Verify Build First (Fallback — skip if CI scripts found)
+## Step 2: Verify Build First — Including Tests (Fallback — skip if CI scripts found)
 
-Before running tests, verify ALL codebases compile:
+Before running tests, verify **ALL code compiles — including test code**.
+
+`cargo check` / `go vet` only verify library code. Test files are separate compilation
+units with their own imports and types. You MUST compile tests too.
 
 ```bash
-# Run ALL applicable build commands
-[ -f Cargo.toml ] && cargo check
+# Run ALL applicable build commands (must include test compilation)
+[ -f Cargo.toml ] && cargo test --no-run --workspace
 [ -f package.json ] && npm run build
-[ -f go.mod ] && go build ./...
+[ -f go.mod ] && go test -run='^$' ./...
 ```
 
-| If Present | Build Command |
-|------------|---------------|
-| Cargo.toml | `cargo check` or `cargo build` |
-| package.json | `npm run build` or `npm run check` |
-| go.mod | `go build ./...` |
-| pyproject.toml | `mypy .` or type checker |
-| pom.xml | `mvn compile` |
+| If Present | Build Command | Why not just `check`? |
+|------------|---------------|-----------------------|
+| Cargo.toml | `cargo test --no-run --workspace` | `cargo check` skips test targets |
+| package.json | `npm run build` or `npm run check` | — |
+| go.mod | `go test -run='^$' ./...` | `go build` skips `_test.go` |
+| pyproject.toml | `mypy .` or type checker | — |
+| pom.xml | `mvn test-compile` | `mvn compile` skips test sources |
 
 **ANY build failure -> report as FIX** with compilation errors.
 
@@ -147,7 +150,7 @@ Before running tests, verify ALL codebases compile:
 
 ```bash
 # Run ALL applicable test commands
-[ -f Cargo.toml ] && cargo test
+[ -f Cargo.toml ] && cargo nextest
 [ -f package.json ] && npm test
 [ -f go.mod ] && go test ./...
 [ -f pyproject.toml ] && pytest
@@ -162,7 +165,7 @@ Read any shell scripts or test runners found there and execute them.
 
 | If Present | Test Command |
 |------------|--------------|
-| Cargo.toml | `cargo test` |
+| Cargo.toml | `cargo nextest` |
 | package.json | `npm test` |
 | go.mod | `go test ./...` |
 | pyproject.toml | `pytest` |
@@ -170,7 +173,7 @@ Read any shell scripts or test runners found there and execute them.
 | tests/ directory | Read scripts to discover and run test commands |
 
 **For polyglot projects:**
-- Run BOTH `cargo test` AND `npm test`
+- Run BOTH `cargo nextest` AND `npm test`
 - Report results from ALL test suites
 - **ANY test failure in ANY suite = FIX**
 
@@ -194,14 +197,31 @@ task. Pre-existing build errors, lint failures, and test failures covered by CI 
 must be reported so downstream fix agents can address them. A green CI is everyone's
 responsibility.
 
+**CRITICAL: If you cannot run tests (build broken, linker missing, toolchain error),
+report FIX with the exact error output — NOT FAIL. FAIL means "no code change can help."
+A broken build is always fixable and must be reported as FIX so the fix agent can
+address it.**
+
 ## Result Criteria
 
+**Default to FIX, not FAIL.** FIX sends the problem to a fix agent that can address it.
+FAIL aborts the pipeline with no recovery. Almost every issue is fixable.
+
 * **PASS**: Build succeeds AND all tests pass
-* **FIX**: Build fails OR any test fails:
-  - Compilation errors need to be fixed
-  - Test failures indicate code bugs that need fixing
-  - Report details clearly so generic-fix can address them
-* **FAIL**: Unrecoverable issues (test framework broken, circular dependencies, etc.)
+* **FIX** (use this for almost all failures):
+  - Compilation errors (missing imports, type errors, linker issues)
+  - Test failures (assertion errors, panics, timeouts)
+  - Build environment issues (missing tools, wrong toolchain)
+  - Flaky tests that fail intermittently
+  - Pre-existing failures unrelated to the current task
+  - Dependency resolution failures
+  - **When in doubt, use FIX** — it gives downstream agents a chance to resolve the issue
+* **FAIL**: Reserved for truly unrecoverable situations where no code change could help:
+  - Test framework itself is corrupted beyond repair
+  - Circular dependency in the build system that prevents any compilation
+  - Hardware/OS-level issues (disk full, permission denied on system paths)
+  - Do NOT use FAIL for: build errors, test failures, missing dependencies, linker
+    errors, or environment issues — these are all FIX
 * **SKIP**: No test framework exists or no tests to run
 
 ## Output Format

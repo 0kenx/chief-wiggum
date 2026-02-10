@@ -233,20 +233,28 @@ Examples:
 - Assert on spec-defined outcomes, not implementation details
 - If test fails, implementation doesn't conform to spec
 
-## Step 6: Verify Build First
+## Step 6: Verify Build First (Including Tests)
 
-Before running tests, verify the codebase compiles:
+Before running tests, verify **ALL code compiles — including test code**.
 
-| Language | Build Command |
-|----------|---------------|
-| Rust | `cargo check` or `cargo build` (allow for longer timeout) |
-| TypeScript/JS | `npm run build` or `tsc` |
-| Go | `go build ./...` |
-| Java | `mvn compile` |
+`cargo check` / `go vet` only verify library code. Test files live in separate
+compilation units and can have their own import errors, type mismatches, or missing
+symbols. You MUST use build commands that compile tests too.
+
+| Language | Build Command | Why not just `check`? |
+|----------|---------------|-----------------------|
+| Rust | `cargo test --no-run --workspace` | `cargo check` skips test targets entirely |
+| TypeScript/JS | `npm run build` or `tsc` | — |
+| Go | `go test -run=^$ ./...` (compiles without executing) | `go build` skips `_test.go` files |
+| Java | `mvn test-compile` | `mvn compile` skips test sources |
 
 **If the build fails**, fix the compilation errors yourself if they are straightforward
 (missing imports, type errors, syntax issues). Only report as FIX if the errors require
 deep architectural changes you cannot safely make.
+
+**CRITICAL: If compilation fails and you cannot fix it, you MUST report FIX (not PASS).
+Never fall back to "manual static analysis" when the build is broken — an uncompilable
+codebase is always a FIX, never a PASS.**
 
 ## Step 7: Run Tests
 
@@ -268,14 +276,24 @@ In both cases:
 
 ## Result Criteria
 
-* **PASS**: Integration/E2E tests written, all tests pass, implementation conforms to specs
-* **FIX**: Implementation doesn't conform to specifications:
-  - Build failures, compilation errors
+**Default to FIX, not FAIL.** FIX sends the problem to a fix agent that can address it.
+FAIL aborts the pipeline with no recovery. Almost every issue is fixable.
+
+* **PASS**: Integration/E2E tests written, all tests pass, implementation conforms to specs.
+  **PASS requires that tests actually compiled and ran.** You cannot report PASS based on
+  manual static analysis alone — if the build is broken, the result is FIX.
+* **FIX** (use this for almost all failures):
+  - Build failures, compilation errors (including test compilation)
   - Integration tests reveal spec non-conformance
   - Components don't interact as specs define
   - Data flows don't match documented architecture
   - Regressions in existing tests
-* **FAIL**: Truly unrecoverable issues (specs contradictory, impossible to verify)
+  - Build environment issues (missing tools, wrong toolchain, linker errors)
+  - **When in doubt, use FIX** — it gives downstream agents a chance to resolve the issue
+* **FAIL**: Reserved for truly unrecoverable situations where no code change could help:
+  - Specs are contradictory and no implementation can satisfy both
+  - Do NOT use FAIL for: build errors, missing tools, linker errors, or test failures —
+    these are all FIX
 * **SKIP**: No test framework exists, no relevant specs, or no integration points to test
 
 ## Output Format

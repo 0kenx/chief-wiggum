@@ -171,6 +171,74 @@ test_no_results_emits_timeout() {
 }
 
 # =============================================================================
+# worker_complete_fix() — Result Priority (task-worker > test-run > pr-fix)
+# =============================================================================
+
+test_test_run_fail_overrides_pr_fix_pass() {
+    git_state_set "$WORKER_DIR" "fixing" "test" "Setup"
+
+    # Stub effect that would fail in test env
+    _check_permanent_failure() { return 0; }
+
+    # pr-fix says PASS (earlier step succeeded)
+    cat > "$WORKER_DIR/results/1000-pr-fix-result.json" << 'JSON'
+{"outputs":{"gate_result":"PASS","push_succeeded":"true"}}
+JSON
+    # test-run says FAIL (later step failed — should win)
+    cat > "$WORKER_DIR/results/2000-test-run-result.json" << 'JSON'
+{"outputs":{"gate_result":"FAIL"}}
+JSON
+
+    worker_complete_fix "$WORKER_DIR" "TASK-001"
+
+    local state
+    state=$(git_state_get "$WORKER_DIR")
+    assert_equals "failed" "$state" "test-run FAIL should override pr-fix PASS"
+}
+
+test_task_worker_result_overrides_all() {
+    git_state_set "$WORKER_DIR" "fixing" "test" "Setup"
+
+    # pr-fix says PASS
+    cat > "$WORKER_DIR/results/1000-pr-fix-result.json" << 'JSON'
+{"outputs":{"gate_result":"PASS","push_succeeded":"true"}}
+JSON
+    # test-run says FAIL
+    cat > "$WORKER_DIR/results/2000-test-run-result.json" << 'JSON'
+{"outputs":{"gate_result":"FAIL"}}
+JSON
+    # task-worker says FIX (pipeline-level outcome — should win over all)
+    cat > "$WORKER_DIR/results/3000-system.task-worker-result.json" << 'JSON'
+{"outputs":{"gate_result":"FIX"}}
+JSON
+
+    worker_complete_fix "$WORKER_DIR" "TASK-001"
+
+    local state
+    state=$(git_state_get "$WORKER_DIR")
+    assert_equals "needs_fix" "$state" "task-worker FIX should override test-run FAIL and pr-fix PASS"
+}
+
+test_push_succeeded_from_pr_fix_when_task_worker_selected() {
+    git_state_set "$WORKER_DIR" "fixing" "test" "Setup"
+
+    # pr-fix has push_succeeded=true
+    cat > "$WORKER_DIR/results/1000-pr-fix-result.json" << 'JSON'
+{"outputs":{"gate_result":"PASS","push_succeeded":"true"}}
+JSON
+    # task-worker is selected (no push_succeeded field)
+    cat > "$WORKER_DIR/results/3000-system.task-worker-result.json" << 'JSON'
+{"outputs":{"gate_result":"PASS"}}
+JSON
+
+    worker_complete_fix "$WORKER_DIR" "TASK-001"
+
+    local state
+    state=$(git_state_get "$WORKER_DIR")
+    assert_equals "needs_merge" "$state" "Should find push_succeeded from pr-fix even when task-worker is primary"
+}
+
+# =============================================================================
 # worker_complete_fix() — Generic Result Fallback
 # =============================================================================
 
@@ -273,6 +341,11 @@ run_test test_skips_when_no_git_state
 
 # No results
 run_test test_no_results_emits_timeout
+
+# Result priority
+run_test test_test_run_fail_overrides_pr_fix_pass
+run_test test_task_worker_result_overrides_all
+run_test test_push_succeeded_from_pr_fix_when_task_worker_selected
 
 # Result fallback
 run_test test_generic_result_file_fallback

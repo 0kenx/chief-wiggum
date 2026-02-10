@@ -45,14 +45,35 @@ worker_complete_fix() {
     source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
     lifecycle_is_loaded || lifecycle_load
 
-    # Find the fix agent result (same logic as handle_fix_worker_completion)
+    # Find the fix pipeline result.
+    #
+    # Priority order (highest signal first):
+    #   1. task-worker result — contains the pipeline-level gate_result which
+    #      reflects the FINAL pipeline outcome (e.g. test-run FAIL → abort →
+    #      gate_result=FIX). This is the most accurate signal.
+    #   2. test-run result — if the pipeline ran a test step after pr-fix,
+    #      its result overrides pr-fix because tests are a later gate.
+    #   3. pr-fix result — only used when no later pipeline step ran.
+    #   4. newest result with gate_result — generic fallback.
     local result_file=""
+    local gate_result="FAIL"
+    local push_succeeded="false"
 
-    # 1. Try pr-fix result (has gate_result + push_succeeded)
     if [ -d "$worker_dir/results" ]; then
-        result_file=$(find "$worker_dir/results" -maxdepth 1 -name "*-pr-fix-result.json" -type f 2>/dev/null | sort -r | head -1)
+        # 1. Prefer task-worker result (pipeline-level outcome)
+        result_file=$(find "$worker_dir/results" -maxdepth 1 -name "*-system.task-worker-result.json" -type f 2>/dev/null | sort -r | head -1)
 
-        # 2. Fall back to generic search: newest result with gate_result field
+        # 2. Fall back to test-run result (later gate than pr-fix)
+        if [ -z "$result_file" ]; then
+            result_file=$(find "$worker_dir/results" -maxdepth 1 -name "*-test-run-result.json" -type f 2>/dev/null | sort -r | head -1)
+        fi
+
+        # 3. Fall back to pr-fix result
+        if [ -z "$result_file" ]; then
+            result_file=$(find "$worker_dir/results" -maxdepth 1 -name "*-pr-fix-result.json" -type f 2>/dev/null | sort -r | head -1)
+        fi
+
+        # 4. Generic fallback: newest result with gate_result field
         if [ -z "$result_file" ]; then
             local candidate
             while read -r candidate; do
@@ -72,19 +93,30 @@ worker_complete_fix() {
         return 0
     fi
 
-    local gate_result push_succeeded
     gate_result=$(jq -r '.outputs.gate_result // .gate_result // "FAIL"' "$result_file" 2>/dev/null) || gate_result="FAIL"
     push_succeeded=$(jq -r '.outputs.push_succeeded // "false"' "$result_file" 2>/dev/null) || push_succeeded="false"
 
-    # If pr-fix didn't report push success, check commit-push result
+    # If chosen result didn't report push success, check pr-fix and commit-push
     if [ "$push_succeeded" != "true" ] && [ -d "$worker_dir/results" ]; then
-        local commit_push_result
-        commit_push_result=$(find "$worker_dir/results" -maxdepth 1 -name "*-commit-push-result.json" -type f 2>/dev/null | sort -r | head -1)
-        if [ -n "$commit_push_result" ] && [ -f "$commit_push_result" ]; then
-            local push_status
-            push_status=$(jq -r '.outputs.push_status // .push_status // ""' "$commit_push_result" 2>/dev/null) || push_status=""
-            if [ "$push_status" = "success" ]; then
+        local pr_fix_result
+        pr_fix_result=$(find "$worker_dir/results" -maxdepth 1 -name "*-pr-fix-result.json" -type f 2>/dev/null | sort -r | head -1)
+        if [ -n "$pr_fix_result" ] && [ -f "$pr_fix_result" ]; then
+            local pr_push
+            pr_push=$(jq -r '.outputs.push_succeeded // "false"' "$pr_fix_result" 2>/dev/null) || pr_push="false"
+            if [ "$pr_push" = "true" ]; then
                 push_succeeded="true"
+            fi
+        fi
+
+        if [ "$push_succeeded" != "true" ]; then
+            local commit_push_result
+            commit_push_result=$(find "$worker_dir/results" -maxdepth 1 -name "*-commit-push-result.json" -type f 2>/dev/null | sort -r | head -1)
+            if [ -n "$commit_push_result" ] && [ -f "$commit_push_result" ]; then
+                local push_status
+                push_status=$(jq -r '.outputs.push_status // .push_status // ""' "$commit_push_result" 2>/dev/null) || push_status=""
+                if [ "$push_status" = "success" ]; then
+                    push_succeeded="true"
+                fi
             fi
         fi
     fi
