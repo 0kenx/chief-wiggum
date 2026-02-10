@@ -130,6 +130,12 @@ svc_orch_log_rotation() {
     log_rotation_check_all
 }
 
+# Export aggregated worker metrics to metrics.json
+svc_orch_metrics_export() {
+    source "$WIGGUM_HOME/lib/utils/metrics-export.sh"
+    export_metrics "$RALPH_DIR" 2>/dev/null || true
+}
+
 # =============================================================================
 # Startup Phase Handlers (Phase 3)
 # =============================================================================

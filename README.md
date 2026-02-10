@@ -271,7 +271,7 @@ wiggum inspect pipeline            # Show pipeline configuration
 wiggum inspect agents              # List agents with configs
 wiggum inspect activity            # View activity logs
 wiggum inspect step TASK-001       # Show current pipeline step
-WIGGUM_LOG_LEVEL=debug wiggum run  # Verbose logging
+wiggum run -vvv                    # Verbose logging
 ```
 
 ## Documentation

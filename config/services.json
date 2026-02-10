@@ -408,6 +408,24 @@
       }
     },
     {
+      "id": "metrics-export",
+      "description": "Export aggregated worker metrics to metrics.json",
+      "phase": "periodic",
+      "order": 90,
+      "schedule": {
+        "type": "interval",
+        "interval": 900
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_orch_metrics_export"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      }
+    },
+    {
       "id": "memory-extract",
       "description": "Dispatch pending workers for memory analysis (writes context file)",
       "phase": "periodic",

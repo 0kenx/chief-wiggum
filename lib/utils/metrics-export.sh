@@ -357,8 +357,10 @@ export_metrics() {
             workers: $workers
         }')
 
-    # Write to file
-    echo "$metrics_json" > "$output_file"
+    # Write atomically via temp-file + mv (rename() is atomic on same fs)
+    local tmp_file="${output_file}.tmp.$$"
+    echo "$metrics_json" > "$tmp_file"
+    mv "$tmp_file" "$output_file"
     echo "Metrics exported to $output_file"
 }
 

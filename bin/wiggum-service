@@ -72,6 +72,11 @@ init_services() {
     service_state_init "$RALPH_DIR"
     service_state_restore 2>/dev/null || true
 
+    # Source service handler functions (svc_* functions called by services.json)
+    for handler_file in "$WIGGUM_HOME"/lib/service-handlers/*.sh; do
+        [ -f "$handler_file" ] && source "$handler_file" 2>/dev/null || true
+    done
+
     # Initialize runner
     service_runner_init "$RALPH_DIR" "$PROJECT_DIR"
 }
