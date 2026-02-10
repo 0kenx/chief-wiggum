@@ -115,36 +115,50 @@ Init ==
     /\ priorityCount = 0
     /\ tick = 0
 
-\* Apalache constant initialization
-\* T1: HIGH(10000), files={f1}, deps={}, plan=TRUE, group="A"
-\* T2: MEDIUM(20000), files={f2}, deps={}, plan=FALSE, group="A"
-\* T3: HIGH(10000), files={f1,f3}, deps={T1}, plan=FALSE, group="B"
+\* Apalache constant initialization (Medium Term #2: Expanded task set)
+\* 5 tasks with overlapping sibling groups and files to expose starvation/priority inversions
+\*
+\* T1: HIGH(10000), files={f1}, deps={}, plan=TRUE, group="A"  - high priority with plan
+\* T2: MEDIUM(20000), files={f2}, deps={}, plan=FALSE, group="A" - sibling of T1
+\* T3: HIGH(10000), files={f1,f3}, deps={T1}, plan=FALSE, group="B" - conflicts with T1
+\* T4: CRITICAL(0), files={f2,f4}, deps={}, plan=FALSE, group="B" - sibling of T3, conflicts with T2
+\* T5: LOW(30000), files={f5}, deps={T3,T4}, plan=TRUE, group="C" - depends on two tasks
 CInit ==
-    /\ Tasks = {"T1", "T2", "T3"}
-    /\ MaxWorkers = 2
+    /\ Tasks = {"T1", "T2", "T3", "T4", "T5"}
+    /\ MaxWorkers = 3
     /\ PriorityLimit = 1
     /\ MAX_SKIP = 3
     /\ AgingFactor = 7
-    /\ BasePriority = [u \in {"T1", "T2", "T3"} |->
-        CASE u = "T1" -> 10000
-          [] u = "T2" -> 20000
-          [] u = "T3" -> 10000]
-    /\ TaskDeps = [u \in {"T1", "T2", "T3"} |->
+    /\ BasePriority = [u \in {"T1", "T2", "T3", "T4", "T5"} |->
+        CASE u = "T1" -> 10000   \* HIGH
+          [] u = "T2" -> 20000   \* MEDIUM
+          [] u = "T3" -> 10000   \* HIGH
+          [] u = "T4" -> 0       \* CRITICAL
+          [] u = "T5" -> 30000]  \* LOW
+    /\ TaskDeps = [u \in {"T1", "T2", "T3", "T4", "T5"} |->
         CASE u = "T1" -> {}
           [] u = "T2" -> {}
-          [] u = "T3" -> {"T1"}]
-    /\ TaskFiles = [u \in {"T1", "T2", "T3"} |->
+          [] u = "T3" -> {"T1"}
+          [] u = "T4" -> {}
+          [] u = "T5" -> {"T3", "T4"}]
+    /\ TaskFiles = [u \in {"T1", "T2", "T3", "T4", "T5"} |->
         CASE u = "T1" -> {"f1"}
           [] u = "T2" -> {"f2"}
-          [] u = "T3" -> {"f1", "f3"}]
-    /\ HasPlan = [u \in {"T1", "T2", "T3"} |->
+          [] u = "T3" -> {"f1", "f3"}   \* conflicts with T1
+          [] u = "T4" -> {"f2", "f4"}   \* conflicts with T2
+          [] u = "T5" -> {"f5"}]
+    /\ HasPlan = [u \in {"T1", "T2", "T3", "T4", "T5"} |->
         CASE u = "T1" -> TRUE
           [] u = "T2" -> FALSE
-          [] u = "T3" -> FALSE]
-    /\ TaskGroup = [u \in {"T1", "T2", "T3"} |->
+          [] u = "T3" -> FALSE
+          [] u = "T4" -> FALSE
+          [] u = "T5" -> TRUE]
+    /\ TaskGroup = [u \in {"T1", "T2", "T3", "T4", "T5"} |->
         CASE u = "T1" -> "A"
-          [] u = "T2" -> "A"
-          [] u = "T3" -> "B"]
+          [] u = "T2" -> "A"  \* sibling of T1
+          [] u = "T3" -> "B"
+          [] u = "T4" -> "B"  \* sibling of T3
+          [] u = "T5" -> "C"]
 
 \* =========================================================================
 \* Helpers - Derived Sets
@@ -366,11 +380,15 @@ EventualSpawn ==
     /\ (taskStatus["T1"] = "pending" /\ DepsCompleted("T1")) ~> taskStatus["T1"] /= "pending"
     /\ (taskStatus["T2"] = "pending" /\ DepsCompleted("T2")) ~> taskStatus["T2"] /= "pending"
     /\ (taskStatus["T3"] = "pending" /\ DepsCompleted("T3")) ~> taskStatus["T3"] /= "pending"
+    /\ (taskStatus["T4"] = "pending" /\ DepsCompleted("T4")) ~> taskStatus["T4"] /= "pending"
+    /\ (taskStatus["T5"] = "pending" /\ DepsCompleted("T5")) ~> taskStatus["T5"] /= "pending"
 
 \* SkipDecay: skip cooldown eventually reaches 0
 SkipDecay ==
     /\ skipCount["T1"] > 0 ~> skipCount["T1"] = 0
     /\ skipCount["T2"] > 0 ~> skipCount["T2"] = 0
     /\ skipCount["T3"] > 0 ~> skipCount["T3"] = 0
+    /\ skipCount["T4"] > 0 ~> skipCount["T4"] = 0
+    /\ skipCount["T5"] > 0 ~> skipCount["T5"] = 0
 
 =============================================================================

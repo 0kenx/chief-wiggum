@@ -212,9 +212,9 @@ MergeHardFail(t) ==
 \* Actions - Fix Cycle (PR comments event)
 \* =========================================================================
 
-\* Spawn fix worker: PR comments / fix detected on idle or needs_merge task
+\* Spawn fix worker: PR comments / fix detected on an active task
 SpawnFixWorker(t) ==
-    /\ wState[t] \in {"idle", "needs_merge"}
+    /\ wState[t] = "needs_merge"
     /\ Cardinality(ActivePriority) < FixWorkerLimit
     /\ wState' = [wState EXCEPT ![t] = "needs_fix"]
     /\ wType' = [wType EXCEPT ![t] = "fix"]
@@ -481,11 +481,10 @@ NoFileConflictActive ==
     \A t1, t2 \in ActiveMain :
         t1 /= t2 => TaskFiles[t1] \cap TaskFiles[t2] = {}
 
-\* DependencyOrdering: a main worker can only be active if deps are completed.
-\* Fix/resolve workers (spawned from external events) don't require dep checks.
+\* DependencyOrdering: a task can only leave idle if deps are completed
 DependencyOrdering ==
     \A t \in Tasks :
-        wType[t] = "main" /\ wState[t] \notin {"idle", "merged", "failed"} => DepsCompleted(t)
+        wState[t] \notin {"idle", "merged", "failed"} => DepsCompleted(t)
 
 \* NoDuplicateWorkers: no task has workers of multiple types active
 \* (a task can only be in one worker type at a time)

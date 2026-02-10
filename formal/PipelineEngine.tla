@@ -16,6 +16,13 @@
  *   Step 1: Has inline handler (FIX -> run inline, then re-run self)
  *   Step 2: Has inline handler (FIX -> run inline, then re-run self)
  *
+ * MEDIUM TERM #3: Supervisor Loop
+ * Models supervisor-level interruption and restart:
+ *   - SupervisorInterval: how often supervisor reviews progress
+ *   - Supervisor can issue CONTINUE, STOP, or RESTART decisions
+ *   - RESTART resets current step's visit counter (iteration reset)
+ *   - Models "supervisor restarts reset counters" class of bugs
+ *
  * Designed for Apalache symbolic model checking (type annotations, CInit).
  *)
 
@@ -31,7 +38,11 @@ CONSTANTS
     \* @type: Int -> Int;
     InlineMax,         \* function: step index -> max inline visits (0 = unlimited)
     \* @type: Int;
-    CircuitBreakerThreshold
+    CircuitBreakerThreshold,
+    \* @type: Int;
+    SupervisorInterval,  \* iterations between supervisor checks (0 = no supervisor)
+    \* @type: Int;
+    MaxSupervisorRestarts  \* max times supervisor can restart a step
 
 VARIABLES
     \* @type: Int;
@@ -45,10 +56,15 @@ VARIABLES
     \* @type: Int -> Str;
     lastResult,        \* function: step index -> last non-terminal result string
     \* @type: Str;
-    status             \* "running", "completed", "aborted"
+    status,            \* "running", "completed", "aborted"
+    \* === SUPERVISOR STATE (Medium Term #3) ===
+    \* @type: Int;
+    iterationsSinceCheck,  \* iterations since last supervisor check
+    \* @type: Int -> Int;
+    supervisorRestarts     \* function: step index -> restart count by supervisor
 
-\* @type: <<Int, Int -> Int, Int -> Int, Int -> Int, Int -> Str, Str>>;
-vars == <<pc, visits, inlineVisits, consecutiveSame, lastResult, status>>
+\* @type: <<Int, Int -> Int, Int -> Int, Int -> Int, Int -> Str, Str, Int, Int -> Int>>;
+vars == <<pc, visits, inlineVisits, consecutiveSame, lastResult, status, iterationsSinceCheck, supervisorRestarts>>
 
 \* =========================================================================
 \* Type definitions
@@ -68,6 +84,8 @@ Init ==
     /\ consecutiveSame = [i \in StepRange |-> 0]
     /\ lastResult = [i \in StepRange |-> ""]
     /\ status = "running"
+    /\ iterationsSinceCheck = 0
+    /\ supervisorRestarts = [i \in StepRange |-> 0]
 
 \* Apalache constant initialization
 CInit ==
@@ -76,6 +94,8 @@ CInit ==
     /\ HasInline = [i \in 0..2 |-> IF i = 0 THEN FALSE ELSE TRUE]
     /\ InlineMax = [i \in 0..2 |-> IF i = 0 THEN 0 ELSE 2]
     /\ CircuitBreakerThreshold = 3
+    /\ SupervisorInterval = 2       \* supervisor checks every 2 iterations
+    /\ MaxSupervisorRestarts = 1    \* supervisor can restart each step once
 
 \* =========================================================================
 \* Helpers
@@ -93,6 +113,9 @@ ResolveJump(target, current) ==
 \* Check if a result is terminal for the step (resets circuit breaker)
 \* @type: (Str) => Bool;
 IsTerminalResult(r) == r \in {"PASS", "FAIL", "SKIP"}
+
+\* Helper: unchanged supervisor state
+SupervisorUnchanged == UNCHANGED <<iterationsSinceCheck, supervisorRestarts>>
 
 \* =========================================================================
 \* Actions
@@ -203,12 +226,63 @@ ExecuteStep ==
                     /\ lastResult' = newLast
                     /\ status' = "running"
 
+\* Execute step and increment iteration counter
+ExecuteStepWithCount ==
+    /\ ExecuteStep
+    /\ iterationsSinceCheck' = iterationsSinceCheck + 1
+    /\ UNCHANGED supervisorRestarts
+
+\* =========================================================================
+\* Supervisor Actions (Medium Term #3)
+\* =========================================================================
+
+\* Supervisor checks and decides to CONTINUE (no-op, reset counter)
+SupervisorContinue ==
+    /\ status = "running"
+    /\ SupervisorInterval > 0
+    /\ iterationsSinceCheck >= SupervisorInterval
+    /\ iterationsSinceCheck' = 0
+    /\ UNCHANGED <<pc, visits, inlineVisits, consecutiveSame, lastResult, status, supervisorRestarts>>
+
+\* Supervisor decides to STOP (abort pipeline)
+SupervisorStop ==
+    /\ status = "running"
+    /\ SupervisorInterval > 0
+    /\ iterationsSinceCheck >= SupervisorInterval
+    /\ status' = "aborted"
+    /\ pc' = -1
+    /\ iterationsSinceCheck' = 0
+    /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult, supervisorRestarts>>
+
+\* Supervisor decides to RESTART current step (reset visit counter)
+\* This models "supervisor restarts reset counters" class of bugs
+SupervisorRestart ==
+    /\ status = "running"
+    /\ SupervisorInterval > 0
+    /\ iterationsSinceCheck >= SupervisorInterval
+    /\ pc >= 0
+    /\ pc < NumSteps
+    /\ supervisorRestarts[pc] < MaxSupervisorRestarts
+    \* Reset current step's visit counter (the dangerous reset)
+    /\ visits' = [visits EXCEPT ![pc] = 0]
+    /\ inlineVisits' = [inlineVisits EXCEPT ![pc] = 0]
+    /\ consecutiveSame' = [consecutiveSame EXCEPT ![pc] = 0]
+    /\ lastResult' = [lastResult EXCEPT ![pc] = ""]
+    /\ supervisorRestarts' = [supervisorRestarts EXCEPT ![pc] = supervisorRestarts[pc] + 1]
+    /\ iterationsSinceCheck' = 0
+    /\ UNCHANGED <<pc, status>>
+
 \* Terminal states are absorbing
 Terminated ==
     /\ status \in {"completed", "aborted"}
     /\ UNCHANGED vars
 
-Next == ExecuteStep \/ Terminated
+Next == 
+    \/ ExecuteStepWithCount
+    \/ SupervisorContinue
+    \/ SupervisorStop
+    \/ SupervisorRestart
+    \/ Terminated
 
 \* =========================================================================
 \* Fairness
@@ -230,10 +304,14 @@ TypeInvariant ==
     /\ \A i \in StepRange : consecutiveSame[i] \in 0..CircuitBreakerThreshold
     /\ \A i \in StepRange : lastResult[i] \in {"", "FIX"}
     /\ status \in {"running", "completed", "aborted"}
+    /\ iterationsSinceCheck \in 0..(SupervisorInterval + 1)
+    /\ \A i \in StepRange : supervisorRestarts[i] \in 0..(MaxSupervisorRestarts + 1)
 
 \* VisitsBounded: visits never wildly exceed max
 \* A step may enter at max count (visit happens, then on_max redirects),
 \* so visits[i] can be at most MaxVisits[i] + 1
+\* NOTE: With supervisor restarts, visits can exceed max if supervisor resets counter
+\* This invariant may be violated with supervisor restarts enabled - that's the bug!
 VisitsBounded ==
     \A i \in StepRange :
         MaxVisits[i] > 0 => visits[i] <= MaxVisits[i] + 1
@@ -242,6 +320,10 @@ VisitsBounded ==
 InlineVisitsBounded ==
     \A i \in StepRange :
         InlineMax[i] > 0 => inlineVisits[i] <= InlineMax[i] + 1
+
+\* SupervisorRestartsBounded: supervisor restarts don't exceed max
+SupervisorRestartsBounded ==
+    \A i \in StepRange : supervisorRestarts[i] <= MaxSupervisorRestarts
 
 \* StatusConsistency: status matches pc
 StatusConsistency ==

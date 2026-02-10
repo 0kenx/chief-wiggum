@@ -30,13 +30,13 @@ Filter:
     verify.sh Orchestrator        # all Orchestrator checks
     verify.sh TypeInvariant       # TypeInvariant across all specs
 
-Checks (26 safety invariants):
+Checks (27 safety invariants):
   WorkerLifecycle.tla   TypeInvariant BoundedCounters TransientStateInvariant
                         KanbanMergedConsistency KanbanFailedConsistency
                         ConflictQueueConsistency WorktreeStateConsistency
                         ErrorStateConsistency MergedCleanupConsistency
   PipelineEngine.tla    TypeInvariant VisitsBounded InlineVisitsBounded
-                        StatusConsistency
+                        StatusConsistency SupervisorRestartsBounded
   Orchestrator.tla      TypeInvariant WorkerPoolCapacity BoundedCounters
                         KanbanMergedConsistency NoIdleInProgress
                         NoFileConflictActive DependencyOrdering
@@ -169,6 +169,7 @@ run_check PipelineEngine.tla TypeInvariant 30
 run_check PipelineEngine.tla VisitsBounded 30
 run_check PipelineEngine.tla InlineVisitsBounded 30
 run_check PipelineEngine.tla StatusConsistency 30
+run_check PipelineEngine.tla SupervisorRestartsBounded 30
 
 # Orchestrator
 run_check Orchestrator.tla TypeInvariant 15
@@ -181,11 +182,11 @@ run_check Orchestrator.tla DependencyOrdering 15
 run_check Orchestrator.tla NoDuplicateActiveWorkers 15
 
 # Scheduler
-run_check Scheduler.tla TypeInvariant 25
-run_check Scheduler.tla CapacityInvariant 25
-run_check Scheduler.tla DependencyInvariant 25
-run_check Scheduler.tla FileConflictInvariant 25
-run_check Scheduler.tla SkipBoundInvariant 25
+run_check Scheduler.tla TypeInvariant 15
+run_check Scheduler.tla CapacityInvariant 15
+run_check Scheduler.tla DependencyInvariant 15
+run_check Scheduler.tla FileConflictInvariant 15
+run_check Scheduler.tla SkipBoundInvariant 15
 
 # =========================================================================
 # Summary
