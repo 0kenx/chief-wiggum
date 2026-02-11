@@ -177,8 +177,10 @@ svc_orch_preflight_git() {
         return 1
     fi
 
-    log "Pulling latest changes from origin/main..."
-    if ! git pull --ff-only origin main 2>&1; then
+    local default_branch
+    default_branch=$(get_default_branch)
+    log "Pulling latest changes from origin/$default_branch..."
+    if ! git pull --ff-only origin "$default_branch" 2>&1; then
         log_error "Git pull failed. Please resolve any issues before running."
         return 1
     fi

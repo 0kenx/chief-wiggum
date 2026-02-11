@@ -664,14 +664,16 @@ orch_spawn_ready_tasks() {
 #
 # Pulls latest from main and checks for conflicts.
 _orch_pre_worker_checks() {
-    # Pull latest changes from main with retry
+    # Pull latest changes from default branch with retry
+    local default_branch
+    default_branch=$(get_default_branch)
     local pull_output
     local max_attempts=3
     local delays=(2 4)
     local dirty_reset_done=false
 
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
-        if pull_output=$(git pull --ff-only origin main 2>&1); then
+        if pull_output=$(git pull --ff-only origin "$default_branch" 2>&1); then
             break
         fi
 
@@ -699,9 +701,9 @@ _orch_pre_worker_checks() {
                     continue
                 fi
             else
-                # Targeted reset insufficient — hard reset main to match remote
-                log_warn "Dirty reset insufficient — performing hard reset of main"
-                git reset --hard origin/main 2>/dev/null || true
+                # Targeted reset insufficient — hard reset to match remote
+                log_warn "Dirty reset insufficient — performing hard reset of $default_branch"
+                git reset --hard "origin/$default_branch" 2>/dev/null || true
                 git clean -fd 2>/dev/null || true
                 continue
             fi
@@ -1557,8 +1559,10 @@ pre_worker_checks() {
         fi
     fi
 
-    # Pull latest changes from main with retry
-    log "Pulling latest changes from origin/main..."
+    # Pull latest changes from default branch with retry
+    local default_branch
+    default_branch=$(get_default_branch)
+    log "Pulling latest changes from origin/$default_branch..."
 
     local pull_output
     local max_attempts=3
@@ -1566,7 +1570,7 @@ pre_worker_checks() {
     local dirty_reset_done=false
 
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
-        if pull_output=$(git pull --ff-only origin main 2>&1); then
+        if pull_output=$(git pull --ff-only origin "$default_branch" 2>&1); then
             break
         fi
 
@@ -1629,8 +1633,8 @@ pre_worker_checks() {
             local workspace="$worker_dir/workspace"
             if [ -d "$workspace/.git" ] || [ -f "$workspace/.git" ]; then
                 # Check if worktree has conflicts with main
-                if git -C "$workspace" diff --name-only origin/main 2>/dev/null | \
-                   xargs -I {} git -C "$workspace" diff --check origin/main -- {} 2>&1 | \
+                if git -C "$workspace" diff --name-only "origin/$default_branch" 2>/dev/null | \
+                   xargs -I {} git -C "$workspace" diff --check "origin/$default_branch" -- {} 2>&1 | \
                    grep -q "conflict"; then
                     log_error "Conflict detected in $(basename "$worker_dir")"
                     return 1

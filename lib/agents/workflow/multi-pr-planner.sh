@@ -88,7 +88,9 @@ agent_run() {
         for file in $(echo "$task_json" | jq -r '.conflict_files[]'); do
             if [ -d "$workspace" ]; then
                 local diff_output
-                diff_output=$(git -C "$workspace" diff origin/main -- "$file" 2>/dev/null | head -100) || true
+                local default_branch
+                default_branch=$(get_default_branch)
+                diff_output=$(git -C "$workspace" diff "origin/$default_branch" -- "$file" 2>/dev/null | head -100) || true
                 if [ -n "$diff_output" ]; then
                     task_contexts+="### Changes to $file:
 

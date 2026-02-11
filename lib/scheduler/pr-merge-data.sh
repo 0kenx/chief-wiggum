@@ -246,16 +246,18 @@ _check_for_new_comments_since_commit() {
 # PHASE 1: GATHER - Collect data on all pending PRs
 # =============================================================================
 
-# Get list of files modified by a PR branch compared to main
+# Get list of files modified by a PR branch compared to default branch
 _get_files_modified() {
     local workspace="$1"
 
     cd "$workspace" || return 1
 
-    git fetch origin main 2>/dev/null || true
+    local default_branch
+    default_branch=$(get_default_branch)
+    git fetch origin "$default_branch" 2>/dev/null || true
 
     local merge_base
-    merge_base=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+    merge_base=$(git merge-base HEAD "origin/$default_branch" 2>/dev/null || echo "")
 
     if [ -z "$merge_base" ]; then
         echo "[]"
@@ -278,12 +280,15 @@ _check_mergeable_to_main() {
 
     cd "$workspace" || return 1
 
-    git fetch origin main 2>/dev/null || true
+    local default_branch
+    default_branch=$(get_default_branch)
+
+    git fetch origin "$default_branch" 2>/dev/null || true
 
     local merge_base head_commit main_commit
-    merge_base=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+    merge_base=$(git merge-base HEAD "origin/$default_branch" 2>/dev/null || echo "")
     head_commit=$(git rev-parse HEAD 2>/dev/null)
-    main_commit=$(git rev-parse origin/main 2>/dev/null)
+    main_commit=$(git rev-parse "origin/$default_branch" 2>/dev/null)
 
     if [ -z "$merge_base" ]; then
         return 1
@@ -302,7 +307,7 @@ _check_mergeable_to_main() {
     local stash_result
     stash_result=$(git stash -q 2>&1 || echo "no_stash")
 
-    if git merge --no-commit --no-ff origin/main 2>/dev/null; then
+    if git merge --no-commit --no-ff "origin/$default_branch" 2>/dev/null; then
         git merge --abort 2>/dev/null || true
         [ "$stash_result" != "no_stash" ] && git stash pop -q 2>/dev/null || true
         return 0
@@ -330,7 +335,9 @@ _gather_pr_data() {
 
     local base_commit=""
     if [ -d "$workspace" ]; then
-        base_commit=$(git -C "$workspace" merge-base HEAD origin/main 2>/dev/null || echo "")
+        local default_branch
+        default_branch=$(get_default_branch)
+        base_commit=$(git -C "$workspace" merge-base HEAD "origin/$default_branch" 2>/dev/null || echo "")
     fi
 
     local files_modified="[]"

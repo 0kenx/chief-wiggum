@@ -4,7 +4,7 @@ set -euo pipefail
 # AGENT METADATA
 # =============================================================================
 # AGENT_TYPE: git-sync-main
-# AGENT_DESCRIPTION: Git sync agent that fetches and merges origin/main into
+# AGENT_DESCRIPTION: Git sync agent that fetches and merges the default branch into
 #   the current branch. Pure bash, no LLM involved. Detects merge conflicts.
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the git repository
@@ -14,7 +14,7 @@ set -euo pipefail
 
 # Source base library and initialize metadata
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
-agent_init_metadata "workflow.git-sync-main" "Git fetch and merge from origin/main"
+agent_init_metadata "workflow.git-sync-main" "Git fetch and merge from origin default branch"
 
 # Required paths before agent can run
 agent_required_paths() {
@@ -51,14 +51,16 @@ agent_run() {
     # Set up context
     agent_setup_context "$worker_dir" "$workspace" "$project_dir"
 
-    log "Syncing workspace with origin/main..."
+    local default_branch
+    default_branch=$(get_default_branch)
+    log "Syncing workspace with origin/$default_branch..."
 
     # Use shared advance function (fetch → ff → rebase → merge)
     local advance_exit=0
     git_advance_to_main "$workspace" || advance_exit=$?
 
     if [ $advance_exit -eq 0 ]; then
-        log "Successfully synced with origin/main"
+        log "Successfully synced with origin/$default_branch"
         agent_write_result "$worker_dir" "PASS" '{"merge_status":"synced","conflicts":0}'
         return 0
     fi
@@ -66,7 +68,7 @@ agent_run() {
     # Advance failed — workspace left clean (merge aborted).
     # Could be a conflict or a fetch failure; either way the pipeline
     # should treat it as FAIL and let downstream steps handle it.
-    log_error "Failed to sync with origin/main"
-    agent_write_result "$worker_dir" "FAIL" '{"merge_status":"failed"}' '["Sync with origin/main failed"]'
+    log_error "Failed to sync with origin/$default_branch"
+    agent_write_result "$worker_dir" "FAIL" '{"merge_status":"failed"}' '["Sync with origin/'"$default_branch"' failed"]'
     return 0  # FAIL is a valid gate result, not an error
 }

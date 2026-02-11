@@ -43,9 +43,9 @@ _guard_recovery_attempts_lt_max() {
     [ "$recovery" -lt "${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}" ]
 }
 
-# Guard: rebase onto origin/main succeeds
+# Guard: rebase onto origin/<default_branch> succeeds
 #
-# Attempts to rebase the workspace branch onto origin/main and force-push.
+# Attempts to rebase the workspace branch onto origin/<default_branch> and force-push.
 # This guard has a side effect (the rebase+push), which is intentional:
 # if the guard passes, the branch is updated and ready for merge retry.
 # If it fails, the rebase is aborted and no changes persist.
@@ -66,12 +66,14 @@ _guard_rebase_succeeded() {
     [ -n "$workspace" ] || workspace="$worker_dir/workspace"
     [ -d "$workspace" ] || return 1
 
-    # Fetch latest main
-    git -C "$workspace" fetch origin main 2>/dev/null || return 1
+    # Fetch latest default branch
+    local default_branch
+    default_branch=$(get_default_branch)
+    git -C "$workspace" fetch origin "$default_branch" 2>/dev/null || return 1
 
     # Attempt rebase
     local rebase_exit=0
-    git -C "$workspace" rebase origin/main 2>/dev/null || rebase_exit=$?
+    git -C "$workspace" rebase "origin/$default_branch" 2>/dev/null || rebase_exit=$?
 
     if [ $rebase_exit -ne 0 ]; then
         git -C "$workspace" rebase --abort 2>/dev/null || true

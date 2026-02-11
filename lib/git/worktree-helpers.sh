@@ -96,14 +96,16 @@ setup_worktree() {
     git -C "$workspace" config merge.conflictstyle diff3
 
     # Pre-flight merge conflict check: detect unresolvable conflicts with
-    # origin/main BEFORE the pipeline starts. Failing fast here saves an
-    # entire pipeline run on work that can't be committed.
+    # the default branch BEFORE the pipeline starts. Failing fast here saves
+    # an entire pipeline run on work that can't be committed.
     if [ "${WIGGUM_SKIP_MERGE_CHECK:-}" != "true" ]; then
+        local default_branch
+        default_branch=$(get_default_branch)
         local conflict_files
-        if conflict_files=$(git_worktree_check_mergeable "$workspace" "origin/main"); then
+        if conflict_files=$(git_worktree_check_mergeable "$workspace" "origin/$default_branch"); then
             log_debug "Pre-flight merge check passed"
         else
-            log_error "Pre-flight merge conflict detected — worktree cannot merge cleanly with origin/main"
+            log_error "Pre-flight merge conflict detected — worktree cannot merge cleanly with origin/$default_branch"
             if [ -n "$conflict_files" ]; then
                 log_error "Conflicting files:"
                 echo "$conflict_files" | while read -r f; do log_error "  $f"; done

@@ -183,7 +183,9 @@ _mm_emit_conflict() {
     local workspace="$worker_dir/workspace"
     if [ -d "$workspace" ]; then
         local changed_files
-        changed_files=$(git -C "$workspace" diff --name-only origin/main 2>/dev/null | head -50 || true)
+        local default_branch
+        default_branch=$(get_default_branch)
+        changed_files=$(git -C "$workspace" diff --name-only "origin/$default_branch" 2>/dev/null | head -50 || true)
         if [ -n "$changed_files" ]; then
             affected_files=$(echo "$changed_files" | jq -R -s 'split("\n") | map(select(length > 0))')
         fi

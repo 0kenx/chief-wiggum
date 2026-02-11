@@ -8,6 +8,7 @@ set -euo pipefail
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/config-validator.sh"
+source "$WIGGUM_HOME/lib/core/defaults.sh"
 
 # Terminal colors (if supported)
 if [ -t 1 ]; then
@@ -520,6 +521,14 @@ check_tui() {
 # Git & GitHub Checks
 # =============================================================================
 
+# Check and display the resolved default branch
+check_default_branch() {
+    local name="Default branch"
+    local branch
+    branch=$(get_default_branch)
+    _print_check "pass" "$name" "$branch"
+}
+
 # Check git remote is configured and reachable
 check_git_remote() {
     local name="Git remote"
@@ -779,6 +788,7 @@ run_preflight_checks() {
     echo ""
 
     echo "=== Git & GitHub ==="
+    check_default_branch
     check_git_remote
     check_git_worktree
     check_gh_token_scopes

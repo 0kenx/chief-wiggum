@@ -164,6 +164,7 @@ Workers transition through states via an event-driven state machine defined in `
 
 - `config/pipelines/default.json` - Default pipeline definition
 - `config/agents.json` - Agent registry with iteration/turn limits and per-agent result_mappings
+- `config/config.json` - Global configuration (git identity, review, rate limits, resume, etc.)
 - `.ralph/config.json` - Project-specific overrides
 - `.ralph/pipeline.json` - Project pipeline override
 - `.ralph/pipelines/<TASK-ID>.json` - Task-specific pipeline
@@ -464,3 +465,4 @@ Each agent defines its own `result_mappings` in `config/agents.json`. Fallback m
 Pattern: `WIGGUM_{AGENT_NAME}_MAX_TURNS` (uppercase, underscores)
 - `WIGGUM_SECURITY_AUDIT_MAX_TURNS`
 - `WIGGUM_TEST_COVERAGE_MAX_ITERATIONS`
+- `WIGGUM_DEFAULT_BRANCH` - Override default branch detection (e.g., `master`)

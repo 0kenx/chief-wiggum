@@ -557,10 +557,9 @@ _meta_check_and_create_pr() {
         return 0
     fi
 
-    # Check for commits made by the agent (on the current branch, not on main)
+    # Check for commits made by the agent (on the current branch, not on default branch)
     local main_branch
-    main_branch=$(git -C "$workspace" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | \
-        sed 's@^refs/remotes/origin/@@' || echo "main")
+    main_branch=$(get_default_branch)
 
     local commit_count
     commit_count=$(git -C "$workspace" rev-list --count "${main_branch}..HEAD" 2>/dev/null || true)

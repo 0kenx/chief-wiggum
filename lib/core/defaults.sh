@@ -150,7 +150,8 @@ _load_config_cache() {
         (.resume.fail_penalty // 8000),
         (.resume.min_retry_interval // 30),
         (.resume.max_decide_concurrent // 20),
-        (.task_source.mode // "hybrid")
+        (.task_source.mode // "hybrid"),
+        (.git.default_branch // "")
     ] | join("\u001e")' "$config_file" 2>/dev/null) || true
 
     if [ -n "$extracted" ]; then
@@ -161,6 +162,7 @@ _load_config_cache() {
                          _CACHE_RESUME_COOLDOWN _CACHE_RESUME_INITIAL_BONUS \
                          _CACHE_RESUME_FAIL_PENALTY _CACHE_RESUME_MIN_RETRY \
                          _CACHE_RESUME_MAX_DECIDE _CACHE_TASK_SOURCE_MODE \
+                         _CACHE_GIT_DEFAULT_BRANCH \
                          <<< "$extracted"
     fi
 
@@ -210,6 +212,49 @@ load_git_config() {
     WIGGUM_GIT_AUTHOR_EMAIL="${WIGGUM_GIT_AUTHOR_EMAIL:-ralph@wiggum.cc}"
     export WIGGUM_GIT_AUTHOR_NAME
     export WIGGUM_GIT_AUTHOR_EMAIL
+}
+
+# Detect the default branch for the current repository
+#
+# Priority: WIGGUM_DEFAULT_BRANCH env → config.json → git symbolic-ref → "main"
+#
+# Args:
+#   project_dir (optional) - directory to run git commands in (default: $PROJECT_DIR)
+#
+# Echoes: branch name (e.g. "main" or "master")
+get_default_branch() {
+    # Return cached value if already resolved
+    if [ -n "${WIGGUM_DEFAULT_BRANCH:-}" ]; then
+        echo "$WIGGUM_DEFAULT_BRANCH"
+        return 0
+    fi
+
+    local project_dir="${1:-${PROJECT_DIR:-.}}"
+
+    # Try config.json
+    _load_config_cache
+    if [ -n "${_CACHE_GIT_DEFAULT_BRANCH:-}" ]; then
+        WIGGUM_DEFAULT_BRANCH="$_CACHE_GIT_DEFAULT_BRANCH"
+        export WIGGUM_DEFAULT_BRANCH
+        echo "$WIGGUM_DEFAULT_BRANCH"
+        return 0
+    fi
+
+    # Try git symbolic-ref
+    local detected
+    detected=$(git -C "$project_dir" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | \
+        sed 's@^refs/remotes/origin/@@') || true
+    if [ -n "$detected" ]; then
+        WIGGUM_DEFAULT_BRANCH="$detected"
+        export WIGGUM_DEFAULT_BRANCH
+        echo "$WIGGUM_DEFAULT_BRANCH"
+        return 0
+    fi
+
+    # Fallback
+    WIGGUM_DEFAULT_BRANCH="main"
+    export WIGGUM_DEFAULT_BRANCH
+    echo "$WIGGUM_DEFAULT_BRANCH"
 }
 
 # Load workers config from config.json (with env var overrides)

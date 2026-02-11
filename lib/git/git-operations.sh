@@ -122,14 +122,14 @@ git_classify_commit_failure() {
 # implementation stage (test, validation) so the new worker doesn't start
 # from scratch.
 #
-# Identifies commits on old_branch that are not on main, and cherry-picks
-# them onto the current branch. Skips checkpoint/pre-conflict commits
-# (noise from the pipeline machinery).
+# Identifies commits on old_branch that are not on the default branch, and
+# cherry-picks them onto the current branch. Skips checkpoint/pre-conflict
+# commits (noise from the pipeline machinery).
 #
 # Args:
 #   workspace     - New workspace (on a fresh branch from latest main)
 #   old_branch    - Branch name from the previous failed worker
-#   main_branch   - Main branch to diff against (default: origin/main)
+#   main_branch   - Main branch to diff against (default: origin/<default_branch>)
 #
 # Returns:
 #   0 - Cherry-pick succeeded, implementation commits applied
@@ -138,7 +138,9 @@ git_classify_commit_failure() {
 git_cherry_pick_recovery() {
     local workspace="$1"
     local old_branch="$2"
-    local main_branch="${3:-origin/main}"
+    local default_branch
+    default_branch=$(get_default_branch)
+    local main_branch="${3:-origin/$default_branch}"
 
     GIT_CHERRY_PICK_COUNT=0
 
@@ -237,13 +239,15 @@ git_cherry_pick_recovery() {
 #
 # Args:
 #   workspace - Directory containing the git worktree
-#   target_branch - Branch to check mergeability against (default: origin/main)
+#   target_branch - Branch to check mergeability against (default: origin/<default_branch>)
 #
 # Returns: 0 if mergeable (no conflicts), 1 if conflicts detected
 # Echoes: conflicted file list when conflicts found
 git_worktree_check_mergeable() {
     local workspace="$1"
-    local target_branch="${2:-origin/main}"
+    local default_branch
+    default_branch=$(get_default_branch)
+    local target_branch="${2:-origin/$default_branch}"
 
     if [ ! -d "$workspace" ]; then
         log_error "git_worktree_check_mergeable: workspace not found: $workspace"
@@ -297,7 +301,7 @@ git_worktree_check_mergeable() {
 # ADVANCE WORKTREE TO LATEST MAIN
 # =============================================================================
 
-# Advance a workspace branch to the latest origin/main
+# Advance a workspace branch to the latest origin/<default_branch>
 #
 # Three-tier merge strategy (cheapest to most expensive):
 #   1. Fast-forward (no merge commit)
@@ -325,14 +329,17 @@ git_advance_to_main() {
         return 1
     fi
 
-    # Fetch latest main
-    if ! git -C "$workspace" fetch origin main 2>/dev/null; then
+    local default_branch
+    default_branch=$(get_default_branch)
+
+    # Fetch latest default branch
+    if ! git -C "$workspace" fetch origin "$default_branch" 2>/dev/null; then
         log_warn "git_advance_to_main: fetch failed"
         return 1
     fi
 
     # Check if already up to date
-    if git -C "$workspace" merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+    if git -C "$workspace" merge-base --is-ancestor "origin/$default_branch" HEAD 2>/dev/null; then
         log_debug "git_advance_to_main: already up to date"
         return 0
     fi
@@ -354,17 +361,17 @@ git_advance_to_main() {
 
     # Step 1: Try fast-forward (cheapest)
     local ff_exit=0
-    git -C "$workspace" merge --ff-only origin/main >/dev/null 2>&1 || ff_exit=$?
+    git -C "$workspace" merge --ff-only "origin/$default_branch" >/dev/null 2>&1 || ff_exit=$?
     if [ $ff_exit -eq 0 ]; then
-        log_debug "git_advance_to_main: fast-forwarded to origin/main"
+        log_debug "git_advance_to_main: fast-forwarded to origin/$default_branch"
         return 0
     fi
 
     # Step 2: Try rebase (linear history, safe on single-owner branches)
     local rebase_exit=0
-    git -C "$workspace" rebase origin/main >/dev/null 2>&1 || rebase_exit=$?
+    git -C "$workspace" rebase "origin/$default_branch" >/dev/null 2>&1 || rebase_exit=$?
     if [ $rebase_exit -eq 0 ]; then
-        log_debug "git_advance_to_main: rebased onto origin/main"
+        log_debug "git_advance_to_main: rebased onto origin/$default_branch"
         return 0
     fi
     # Abort failed rebase before falling back to merge
@@ -372,9 +379,9 @@ git_advance_to_main() {
 
     # Step 3: Try merge (single conflict resolution point)
     local merge_exit=0
-    git -C "$workspace" merge origin/main --no-edit >/dev/null 2>&1 || merge_exit=$?
+    git -C "$workspace" merge "origin/$default_branch" --no-edit >/dev/null 2>&1 || merge_exit=$?
     if [ $merge_exit -eq 0 ]; then
-        log_debug "git_advance_to_main: merged origin/main"
+        log_debug "git_advance_to_main: merged origin/$default_branch"
         return 0
     fi
 
@@ -707,10 +714,12 @@ ${closes_section}${metrics_section}
     clean_desc="${clean_desc# }"
 
     local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
+    local default_branch
+    default_branch=$(get_default_branch)
     if timeout "$gh_timeout" gh pr create \
         --title "$task_id: $clean_desc" \
         --body "$pr_body" \
-        --base main \
+        --base "$default_branch" \
         --head "$branch_name" 2>&1; then
 
         log "Created Pull Request for $task_id"

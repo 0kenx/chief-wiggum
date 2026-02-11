@@ -239,7 +239,9 @@ _memory_build_task_stats() {
     # Extract files touched from git diff if workspace exists
     if [ -d "$worker_dir/workspace" ]; then
         local touched
-        touched=$(git -C "$worker_dir/workspace" diff --name-only origin/main 2>/dev/null || true)
+        local default_branch
+        default_branch=$(get_default_branch)
+        touched=$(git -C "$worker_dir/workspace" diff --name-only "origin/$default_branch" 2>/dev/null || true)
         if [ -n "$touched" ]; then
             files_touched=$(echo "$touched" | jq -R -s 'split("\n") | map(select(. != ""))')
         fi

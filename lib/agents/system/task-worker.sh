@@ -207,11 +207,13 @@ agent_run() {
     fi
     local workspace="$WORKTREE_PATH"
 
-    # Advance workspace to latest origin/main before pipeline starts.
+    # Advance workspace to latest origin/<default_branch> before pipeline starts.
     # Critical for resumed workers whose worktrees may be hours/days stale.
-    log "Advancing workspace to latest origin/main"
+    local default_branch
+    default_branch=$(get_default_branch)
+    log "Advancing workspace to latest origin/$default_branch"
     if ! git_advance_to_main "$workspace"; then
-        log_warn "Could not advance to origin/main — proceeding with current state"
+        log_warn "Could not advance to origin/$default_branch — proceeding with current state"
     fi
 
     # Change to workspace
