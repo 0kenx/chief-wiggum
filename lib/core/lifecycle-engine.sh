@@ -207,6 +207,11 @@ _lifecycle_run_effects() {
 #
 # Used by both _lifecycle_run_effects and outbox_replay_pending.
 #
+# CATEGORY 4 FIX: Before executing cleanup_worktree (which archives the worker
+# directory), replay any pending effects from previous crashed transitions.
+# This ensures effects like sync_github and rm_conflict_queue are not lost
+# when they were recorded but the process crashed before execution.
+#
 # Args:
 #   effect_name  - Effect name from spec
 #   worker_dir   - Worker directory path
@@ -219,6 +224,15 @@ _lifecycle_run_single_effect() {
     local worker_dir="$2"
     local context_json="${3:-'{}'}"
     local kanban="${4:-}"
+
+    # CATEGORY 4 FIX: Replay pending effects before cleanup_worktree archives the directory
+    # This catches effects from mid-transition crashes that would otherwise be lost
+    if [[ "$effect_name" == "cleanup_worktree" ]]; then
+        if outbox_has_pending "$worker_dir" 2>/dev/null; then
+            log_debug "lifecycle: replaying pending effects before cleanup_worktree"
+            outbox_replay_pending "$worker_dir" >/dev/null 2>&1 || true
+        fi
+    fi
 
     local fn="${_LC_EFFECT_FN[$effect_name]:-}"
     [ -z "$fn" ] && { log_warn "lifecycle: unknown effect: $effect_name"; return 1; }

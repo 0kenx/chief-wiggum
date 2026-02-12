@@ -40,6 +40,8 @@ _PIPELINE_LAST_STEP_ID=""
 _PIPELINE_LAST_GATE_RESULT=""
 
 # Circuit breaker: consecutive same-result tracking per step
+# CATEGORY 8: Unified threshold with scheduler's cross-session tracking
+# Both use WIGGUM_CIRCUIT_BREAKER_THRESHOLD for consistency
 declare -gA _PIPELINE_CONSECUTIVE_RESULT=()   # step_id -> "result:count"
 _PIPELINE_CIRCUIT_BREAKER_THRESHOLD="${WIGGUM_CIRCUIT_BREAKER_THRESHOLD:-3}"
 

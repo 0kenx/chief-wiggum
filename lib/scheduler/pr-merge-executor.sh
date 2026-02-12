@@ -429,8 +429,8 @@ pr_merge_handle_remaining() {
             if ! emit_event "$worker_dir" "pr.multi_conflict_detected" "pr-merge-executor.handle_remaining" \
                 "$(jq -n --arg pr "$pr_number" --argjson af "$files_modified" '{pr_number: $pr, affected_files: $af}')"; then
                 log_debug "  $task_id: pr.multi_conflict_detected rejected by lifecycle (state=$(git_state_get "$worker_dir" 2>/dev/null))"
-                # Still add to queue for tracking, but don't bypass lifecycle guards
-                conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$files_modified"
+                # Guards rejected transition - do NOT bypass by adding to queue directly
+                # Task will be picked up on next poll cycle when state allows
             fi
             ((++needs_multi_resolve))
         else

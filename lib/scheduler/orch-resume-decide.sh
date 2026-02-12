@@ -219,9 +219,8 @@ _resume_decide_for_worker() {
             # Mark task [P] via lifecycle engine
             lifecycle_is_loaded || lifecycle_load
             if ! emit_event "$worker_dir" "task.pending_approval" "orch-resume-decide.COMPLETE"; then
-                # Fallback for backward compatibility
+                # Fallback for backward compatibility (lifecycle engine handles sync_github effect)
                 update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
-                github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
             fi
             resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
 
@@ -520,9 +519,8 @@ _recover_stranded_decisions() {
                     # Mark task [P] via lifecycle engine
                     lifecycle_is_loaded || lifecycle_load
                     if ! emit_event "$worker_dir" "task.pending_approval" "orch-resume-decide.recovered_COMPLETE"; then
-                        # Fallback for backward compatibility
+                        # Fallback for backward compatibility (lifecycle engine handles sync_github effect)
                         update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
-                        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
                     fi
                     resume_state_set_terminal "$worker_dir" "Recovered: work complete, task marked [P]"
                 else
@@ -642,10 +640,10 @@ _launch_resume_worker() {
     # Move task back to [=] in-progress via lifecycle engine (e.g., from [*] failed)
     lifecycle_is_loaded || lifecycle_load
     if ! emit_event "$worker_dir" "resume.retry" "orch-resume-decide._launch_resume_worker"; then
-        # Fallback for backward compatibility
+        # Fallback for backward compatibility (no lifecycle effect available)
         update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
     fi
-    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
 
     # Launch worker via setsid (same pattern as bin/wiggum-worker resume)
     export _WORKER_WIGGUM_HOME="$WIGGUM_HOME"

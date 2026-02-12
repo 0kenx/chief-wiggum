@@ -24,6 +24,7 @@
     "inc_merge_attempts":  { "fn": "git_state_inc_merge_attempts",   "args": ["worker_dir"] },
     "inc_recovery":        { "fn": "git_state_inc_recovery_attempts","args": ["worker_dir"] },
     "reset_merge":         { "fn": "git_state_reset_merge_attempts", "args": ["worker_dir"] },
+    "reset_recovery":      { "fn": "git_state_reset_recovery_attempts", "args": ["worker_dir"] },
     "sync_github":         { "fn": "github_issue_sync_task_status",  "args": ["ralph_dir", "task_id", "kanban"] },
     "cleanup_worktree":    { "fn": "_cleanup_merged_pr_worktree",    "args": ["worker_dir"] },
     "cleanup_batch":       { "fn": "_cleanup_batch_state",           "args": ["worker_dir", "task_id", "ralph_dir"] },
@@ -40,7 +41,7 @@
   },
 
   "transitions": [
-    { "event": "worker.spawned",        "from": "none",       "to": "needs_merge",  "kanban": "=" },
+    { "event": "worker.spawned",        "from": "none",       "to": "needs_merge",  "kanban": "=", "effects": ["sync_github"] },
 
     { "event": "fix.detected",          "from": "none",       "to": "needs_fix" },
     { "event": "fix.detected",          "from": "needs_merge","to": "needs_fix" },
@@ -112,6 +113,7 @@
     { "event": "recovery.to_resolve",   "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["check_permanent"] },
     { "event": "recovery.to_fix",       "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["check_permanent"] },
     { "event": "user.resume",           "from": "failed",     "to": "needs_merge",  "kanban": "=", "effects": ["rm_conflict_queue", "clear_error"] },
+    { "event": "user.github_retry",     "from": "failed",     "to": "needs_merge",  "kanban": "=", "effects": ["reset_merge", "reset_recovery", "rm_conflict_queue", "clear_error"] },
     { "event": "permanent_failure",     "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["sync_github"] },
 
     { "event": "startup.reset",          "from": "fixing",     "to": "needs_fix" },
@@ -135,6 +137,13 @@
     { "event": "manual.start_fix",      "from": "needs_merge","to": "fixing" },
     { "event": "manual.start_fix",      "from": "needs_fix",  "to": "fixing" },
     { "event": "manual.start_fix",      "from": "failed",     "to": "fixing",       "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "clear_error"] },
-    { "event": "manual.start_fix",      "from": "failed",     "to": "failed" }
+    { "event": "manual.start_fix",      "from": "failed",     "to": "failed" },
+
+    { "event": "worker.completion",     "from": "*",          "to": null,           "kanban": "P", "effects": ["sync_github"] },
+    { "event": "worker.failure",        "from": "*",          "to": "failed",       "kanban": "*", "effects": ["sync_github", "check_permanent"] },
+
+    { "event": "user.full_reset",       "from": "*",          "to": "needs_merge",  "kanban": "=", "effects": ["reset_merge", "clear_error"] },
+    { "event": "user.reset_to_fix",    "from": "*",          "to": "needs_fix",    "kanban": "=", "effects": ["reset_merge", "clear_error"] },
+    { "event": "user.reset_to_resolve","from": "*",          "to": "needs_resolve","kanban": "=", "effects": ["reset_merge", "clear_error"] }
   ]
 }

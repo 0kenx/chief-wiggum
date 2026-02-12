@@ -117,8 +117,8 @@ _cleanup_batch_state() {
         rm -f "$worker_dir/batch-context.json"
     fi
 
-    # Remove from conflict queue if present
-    conflict_queue_remove "$ralph_dir" "$task_id"
+    # Note: conflict queue removal is handled by rm_conflict_queue lifecycle effect
+    # (not duplicated here to avoid redundancy with lifecycle transitions)
 }
 
 # Clean up worker directory after PR is merged

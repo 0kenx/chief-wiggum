@@ -71,8 +71,14 @@ agent_run() {
 
     log "Attempting to merge PR #$pr_number..."
 
-    # Track merge attempt
-    git_state_inc_merge_attempts "$worker_dir"
+    # Use lifecycle event to track merge attempt (inc_merge_attempts effect)
+    lifecycle_is_loaded || lifecycle_load
+    if ! emit_event "$worker_dir" "merge.start" "workflow.pr-merge"; then
+        # Fallback: direct increment if lifecycle rejects (e.g., max attempts reached)
+        log_warn "merge.start rejected by lifecycle - may have exceeded max attempts"
+        # Still increment for tracking (agent may want to handle the guard failure)
+        git_state_inc_merge_attempts "$worker_dir"
+    fi
     local merge_attempts
     merge_attempts=$(git_state_get_merge_attempts "$worker_dir")
 

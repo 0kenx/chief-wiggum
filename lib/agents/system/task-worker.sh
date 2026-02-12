@@ -46,6 +46,7 @@ agent_source_registry
 # Source exit codes for standardized returns
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
 
 # Source pipeline libraries
 source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
@@ -497,11 +498,12 @@ _update_kanban_status() {
         # If no PR (gh CLI unavailable), mark as complete [x] directly
         if [ -n "$pr_url" ] && [ "$pr_url" != "N/A" ]; then
             log "Marking task $task_id as pending approval [P] in kanban (PR: $pr_url)"
-            if ! update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id"; then
-                log_error "Failed to update kanban.md after retries"
+            lifecycle_is_loaded || lifecycle_load
+            if ! emit_event "$worker_dir" "worker.completion" "task-worker.COMPLETE"; then
+                # Fallback for backward compatibility
+                update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
             fi
-            # Update linked GitHub issue and PR to pending-approval
-            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
+            # PR status sync is separate from issue status
             github_pr_sync_task_status "$RALPH_DIR" "$task_id" "P" "=" || true
         else
             log "Marking task $task_id as complete [x] in kanban (no PR created)"
@@ -527,11 +529,11 @@ _update_kanban_status() {
         log "Task worker $worker_id completed task $task_id"
     else
         log_error "Marking task $task_id as FAILED [*] in kanban"
-        if ! update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id"; then
-            log_error "Failed to update kanban.md after retries"
+        lifecycle_is_loaded || lifecycle_load
+        if ! emit_event "$worker_dir" "worker.failure" "task-worker.FAILED"; then
+            # Fallback for backward compatibility
+            update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
         fi
-        # Update GitHub issue and PR labels to failed
-        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
         # Post failure summary to GitHub issue (non-blocking)
         _post_task_failure_to_github "$worker_dir" "$task_id" || true
         log_error "Task worker $worker_id failed task $task_id"

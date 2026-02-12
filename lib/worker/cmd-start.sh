@@ -118,10 +118,8 @@ do_start() {
             # This preserves backward compatibility during transition
             log_warn "worker.spawned event failed, falling back to direct kanban update"
             update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
         fi
-
-        # Update linked GitHub issue to in-progress
-        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
 
         _msg "Starting worker $worker_id for task $task_id"
     fi

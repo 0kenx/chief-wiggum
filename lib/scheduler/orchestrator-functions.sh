@@ -1392,16 +1392,15 @@ orch_github_resume_trigger() {
         # Reset worker state — all retry counters get a fresh start
         resume_state_reset_for_user_retry "$worker_dir"
 
-        # Reset git-state counters (merge + recovery attempts)
-        source "$WIGGUM_HOME/lib/worker/git-state.sh"
+        # Reset worker state via lifecycle engine (resets all counters atomically)
         if [ -f "$worker_dir/git-state.json" ]; then
-            git_state_reset_merge_attempts "$worker_dir"
-            git_state_reset_recovery_attempts "$worker_dir"
-            git_state_set_error "$worker_dir" ""
-            # Transition out of "failed" so merge-manager will retry
-            if git_state_is "$worker_dir" "failed"; then
-                lifecycle_is_loaded || lifecycle_load
-                emit_event "$worker_dir" "user.resume" "github-resume-trigger" || true
+            lifecycle_is_loaded || lifecycle_load
+            if ! emit_event "$worker_dir" "user.github_retry" "github-resume-trigger"; then
+                # Fallback: direct counter reset for non-failed states
+                source "$WIGGUM_HOME/lib/worker/git-state.sh"
+                git_state_reset_merge_attempts "$worker_dir"
+                git_state_reset_recovery_attempts "$worker_dir"
+                git_state_set_error "$worker_dir" ""
             fi
         fi
 

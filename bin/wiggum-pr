@@ -967,29 +967,54 @@ cmd_task_reset() {
         log "  Workspace:     MISSING (will be reconstructed)"
     fi
 
-    # Update git-state.json
-    local tmp_file
-    tmp_file=$(mktemp)
-    jq --arg state "$target_state" '
-        .current_state = $state |
-        .merge_attempts = 0 |
-        .last_error = null |
-        .transitions += [{
-            "from": .current_state,
-            "to": $state,
-            "timestamp": (now | strftime("%Y-%m-%dT%H:%M:%S+00:00")),
-            "agent": "wiggum-pr.cmd_task_reset",
-            "reason": "Manual reset for retry"
-        }]
-    ' "$git_state_file" > "$tmp_file"
+    # Use lifecycle engine to reset worker state atomically
+    source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
+    lifecycle_is_loaded || lifecycle_load
+    
+    # Map target_state to appropriate lifecycle event
+    local reset_event
+    case "$target_state" in
+        needs_merge)   reset_event="user.full_reset" ;;
+        needs_fix)     reset_event="user.reset_to_fix" ;;
+        needs_resolve) reset_event="user.reset_to_resolve" ;;
+        *)             reset_event="" ;;
+    esac
+    
+    local lifecycle_succeeded=false
+    if [ -n "$reset_event" ]; then
+        if emit_event "$worker_dir" "$reset_event" "wiggum-pr.cmd_task_reset"; then
+            log "  git-state.json updated via lifecycle engine"
+            lifecycle_succeeded=true
+        else
+            log_warn "  Lifecycle event failed, using direct git-state update"
+        fi
+    fi
+    
+    if [ "$lifecycle_succeeded" = false ]; then
+        # Fallback: lifecycle event failed or no matching event, use direct update
+        local tmp_file
+        tmp_file=$(mktemp)
+        jq --arg state "$target_state" '
+            .current_state = $state |
+            .merge_attempts = 0 |
+            .last_error = null |
+            .transitions += [{
+                "from": .current_state,
+                "to": $state,
+                "timestamp": (now | strftime("%Y-%m-%dT%H:%M:%S+00:00")),
+                "agent": "wiggum-pr.cmd_task_reset",
+                "reason": "Manual reset for retry"
+            }]
+        ' "$git_state_file" > "$tmp_file"
 
-    if [ -s "$tmp_file" ]; then
-        mv "$tmp_file" "$git_state_file"
-        log "  git-state.json updated"
-    else
-        rm -f "$tmp_file"
-        log_error "Failed to update git-state.json"
-        return 1
+        if [ -s "$tmp_file" ]; then
+            mv "$tmp_file" "$git_state_file"
+            log "  git-state.json updated"
+        else
+            rm -f "$tmp_file"
+            log_error "Failed to update git-state.json"
+            return 1
+        fi
     fi
 
     # Remove broken workspace so scheduler can reconstruct it

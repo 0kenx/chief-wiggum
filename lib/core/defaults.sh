@@ -82,8 +82,16 @@ export ERROR_LOG_MAX_AGE
 STUCK_WORKER_THRESHOLD="${WIGGUM_STUCK_WORKER_THRESHOLD:-1800}"
 export STUCK_WORKER_THRESHOLD
 
-# Max consecutive failures at same pipeline step before terminal
-WIGGUM_MAX_STEP_RETRIES="${WIGGUM_MAX_STEP_RETRIES:-3}"
+# Circuit breaker threshold: max consecutive same non-terminal results before escalation
+# Used by:
+#   - Pipeline runner: consecutive FIX/UNKNOWN in single run -> escalate to FAIL
+#   - Scheduler: consecutive failures at same step across resumes -> terminal
+# CATEGORY 8 FIX: Unified to single variable (was WIGGUM_MAX_STEP_RETRIES + WIGGUM_CIRCUIT_BREAKER_THRESHOLD)
+WIGGUM_CIRCUIT_BREAKER_THRESHOLD="${WIGGUM_CIRCUIT_BREAKER_THRESHOLD:-3}"
+export WIGGUM_CIRCUIT_BREAKER_THRESHOLD
+
+# Legacy alias for backward compatibility (maps to circuit breaker threshold)
+WIGGUM_MAX_STEP_RETRIES="${WIGGUM_MAX_STEP_RETRIES:-$WIGGUM_CIRCUIT_BREAKER_THRESHOLD}"
 export WIGGUM_MAX_STEP_RETRIES
 
 # Max recovery attempts for failed workers before marking permanently failed

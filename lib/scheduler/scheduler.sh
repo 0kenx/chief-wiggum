@@ -891,7 +891,8 @@ _has_repeated_step_failures() {
     local state_file="$worker_dir/resume-state.json"
     [ -f "$state_file" ] || return 1
 
-    local threshold="${WIGGUM_MAX_STEP_RETRIES:-3}"
+    # CATEGORY 8 FIX: Use unified circuit breaker threshold (with legacy fallback)
+    local threshold="${WIGGUM_CIRCUIT_BREAKER_THRESHOLD:-${WIGGUM_MAX_STEP_RETRIES:-3}}"
 
     # Count consecutive entries from most recent where step is the same.
     # USER_RETRY entries break the chain (user explicitly requested retry).
