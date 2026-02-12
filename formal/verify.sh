@@ -32,7 +32,7 @@ Filter:
     verify.sh Orchestrator        # all Orchestrator checks
     verify.sh TypeInvariant       # TypeInvariant across all specs
 
-Checks (32 safety invariants):
+Checks (34 safety invariants):
   WorkerLifecycle.tla   (length 25) TypeInvariant BoundedCounters
                         TransientStateInvariant KanbanMergedConsistency
                         KanbanFailedConsistency ConflictQueueConsistency
@@ -40,17 +40,17 @@ Checks (32 safety invariants):
                         MergedCleanupConsistency
   PipelineEngine.tla    (length 30) TypeInvariant VisitsBounded
                         InlineVisitsBounded StatusConsistency
-                        SupervisorRestartsBounded
-  Orchestrator.tla      (length 20) TypeInvariant WorkerPoolCapacity
+                        SupervisorRestartsBounded CostBudgetInvariant
+  Orchestrator.tla      (length 10) TypeInvariant WorkerPoolCapacity
                         BoundedCounters KanbanMergedConsistency
                         NoIdleInProgress NoFileConflictActive
                         DependencyOrdering NoDuplicateActiveWorkers
                         KanbanFailedConsistency ConflictQueueConsistency
                         WorktreeStateConsistency ErrorStateConsistency
                         MergedCleanupConsistency
-  Scheduler.tla         (length 15) TypeInvariant CapacityInvariant
+  Scheduler.tla         (length 10) TypeInvariant CapacityInvariant
                         DependencyInvariant FileConflictInvariant
-                        SkipBoundInvariant
+                        SkipBoundInvariant CyclicTasksNeverSpawned
 
 Note: Temporal/liveness properties (EventualTermination, NoStarvation,
 EventualSpawn, SkipDecay, PipelineTermination) are defined in each spec
@@ -306,6 +306,7 @@ _run_all_checks() {
     run_check PipelineEngine.tla InlineVisitsBounded 30
     run_check PipelineEngine.tla StatusConsistency 30
     run_check PipelineEngine.tla SupervisorRestartsBounded 30
+    run_check PipelineEngine.tla CostBudgetInvariant 30
 
     # Orchestrator
     run_check Orchestrator.tla TypeInvariant 10
@@ -328,6 +329,7 @@ _run_all_checks() {
     run_check Scheduler.tla DependencyInvariant 10
     run_check Scheduler.tla FileConflictInvariant 10
     run_check Scheduler.tla SkipBoundInvariant 10
+    run_check Scheduler.tla CyclicTasksNeverSpawned 10
 }
 
 # =========================================================================

@@ -309,6 +309,39 @@ MergeOutOfDateFail(t) ==
                    inConflictQueue, worktreeState>>
     /\ EnvVarsUnchanged
 
+\* Merge transient fail: merging -> needs_merge (guarded: merge_attempts < max)
+MergeTransientFailRetry(t) ==
+    /\ wState[t] = "merging"
+    /\ mergeAttempts[t] < MaxMergeAttempts
+    /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* Merge transient fail: merging -> failed (fallback: attempts exhausted)
+\* Effects: set_error, check_permanent
+MergeTransientFailAbort(t) ==
+    /\ wState[t] = "merging"
+    /\ mergeAttempts[t] >= MaxMergeAttempts
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* Merge already merged: merging -> merged (PR merged externally during merge attempt)
+\* Effects: sync_github, cleanup_batch, cleanup_worktree, release_claim
+MergeAlreadyMerged(t) ==
+    /\ wState[t] = "merging"
+    /\ wState' = [wState EXCEPT ![t] = "merged"]
+    /\ kanban' = [kanban EXCEPT ![t] = "x"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ worktreeState' = [worktreeState EXCEPT ![t] = "cleaning"]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, lastError>>
+    /\ EnvVarsUnchanged
+
 \* Merge hard fail (infrastructure failure)
 \* Effects: set_error, check_permanent
 MergeHardFail(t) ==
@@ -414,6 +447,37 @@ FixPartial(t) ==
     /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
     /\ AllAuxUnchanged
 
+\* Fix skip: fixing -> needs_merge (chains through fix_completed)
+\* Effect: rm_conflict_queue
+FixSkip(t) ==
+    /\ wState[t] = "fixing"
+    /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts,
+                   worktreeState, lastError, githubSynced>>
+    /\ EnvVarsUnchanged
+
+\* Fix timeout: fixing -> needs_fix
+FixTimeout(t) ==
+    /\ wState[t] = "fixing"
+    /\ wState' = [wState EXCEPT ![t] = "needs_fix"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* Fix already merged: needs_fix -> merged, kanban "x"
+\* Effects: sync_github, cleanup_batch, cleanup_worktree, release_claim, clear_error, rm_conflict_queue
+FixAlreadyMerged(t) ==
+    /\ wState[t] = "needs_fix"
+    /\ wState' = [wState EXCEPT ![t] = "merged"]
+    /\ kanban' = [kanban EXCEPT ![t] = "x"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ worktreeState' = [worktreeState EXCEPT ![t] = "cleaning"]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+
 \* =========================================================================
 \* Actions - Resolve Cycle
 \* =========================================================================
@@ -483,6 +547,102 @@ ResolveBatchFailed(t) ==
     /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
     /\ AllAuxUnchanged
 
+\* Resolve already merged: needs_resolve -> merged, kanban "x"
+\* Effects: sync_github, cleanup_batch, cleanup_worktree, release_claim, clear_error, rm_conflict_queue
+ResolveAlreadyMergedFromNeedsResolve(t) ==
+    /\ wState[t] = "needs_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "merged"]
+    /\ kanban' = [kanban EXCEPT ![t] = "x"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ worktreeState' = [worktreeState EXCEPT ![t] = "cleaning"]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+
+\* Resolve already merged: needs_multi_resolve -> merged, kanban "x"
+\* Effects: sync_github, cleanup_batch, cleanup_worktree, release_claim, clear_error, rm_conflict_queue
+ResolveAlreadyMergedFromNeedsMulti(t) ==
+    /\ wState[t] = "needs_multi_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "merged"]
+    /\ kanban' = [kanban EXCEPT ![t] = "x"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ worktreeState' = [worktreeState EXCEPT ![t] = "cleaning"]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+
+\* Resolve max exceeded: needs_resolve -> failed
+\* Effect: check_permanent
+ResolveMaxExceededFromNeedsResolve(t) ==
+    /\ wState[t] = "needs_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* Resolve max exceeded: needs_multi_resolve -> failed
+\* Effect: check_permanent
+ResolveMaxExceededFromNeedsMulti(t) ==
+    /\ wState[t] = "needs_multi_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* Resolve stuck_reset: resolving -> needs_resolve (guarded: merge_attempts < max)
+\* Effect: inc_merge_attempts. Worker process exits.
+ResolveStuckResetGuarded(t) ==
+    /\ wState[t] = "resolving"
+    /\ mergeAttempts[t] < MaxMergeAttempts
+    /\ wState' = [wState EXCEPT ![t] = "needs_resolve"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ mergeAttempts' = [mergeAttempts EXCEPT ![t] = mergeAttempts[t] + 1]
+    /\ UNCHANGED <<kanban, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* Resolve stuck_reset: resolving -> failed (fallback: attempts exhausted)
+\* Effect: check_permanent. Worker process exits.
+ResolveStuckResetFallback(t) ==
+    /\ wState[t] = "resolving"
+    /\ mergeAttempts[t] >= MaxMergeAttempts
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* Resolve fail: needs_resolve -> failed
+\* Effect: check_permanent
+ResolveFailFromNeedsResolve(t) ==
+    /\ wState[t] = "needs_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* Resolve fail: needs_multi_resolve -> failed
+\* Effect: check_permanent
+ResolveFailFromNeedsMulti(t) ==
+    /\ wState[t] = "needs_multi_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
 \* =========================================================================
 \* Actions - Recovery
 \* =========================================================================
@@ -510,6 +670,41 @@ RecoveryFallback(t) ==
     /\ recoveryAttempts[t] >= MaxRecoveryAttempts
     /\ kanban' = [kanban EXCEPT ![t] = "*"]
     /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wState, wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* resume.abort: * -> failed, kanban "*"
+\* Effects: sync_github. Kills active worker, releases pool slot.
+ResumeAbort(t) ==
+    /\ wState[t] \notin {"idle", "merged"}
+    /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ kanban' = [kanban EXCEPT ![t] = "*"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* user.resume: failed -> needs_merge, kanban "="
+\* Effects: rm_conflict_queue, clear_error
+UserResume(t) ==
+    /\ wState[t] = "failed"
+    /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ kanban' = [kanban EXCEPT ![t] = "="]
+    /\ wType' = [wType EXCEPT ![t] = "main"]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, worktreeState>>
+    /\ EnvVarsUnchanged
+
+\* permanent_failure: failed -> failed, kanban "*"
+\* Effect: sync_github
+PermanentFailure(t) ==
+    /\ wState[t] = "failed"
+    /\ kanban' = [kanban EXCEPT ![t] = "*"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
     /\ UNCHANGED <<wState, wType, mergeAttempts, recoveryAttempts,
                    inConflictQueue, worktreeState, lastError>>
     /\ EnvVarsUnchanged
@@ -845,12 +1040,15 @@ Next ==
         \/ WorkerMergeStart(t)
         \/ WorkerMergeStartFallback(t)
         \/ MergeSucceeded(t)
+        \/ MergeAlreadyMerged(t)
         \/ MergeConflictDetected(t)
         \/ ConflictToResolve(t)
         \/ ConflictToMultiResolve(t)
         \/ ConflictToFailed(t)
         \/ MergeOutOfDateOk(t)
         \/ MergeOutOfDateFail(t)
+        \/ MergeTransientFailRetry(t)
+        \/ MergeTransientFailAbort(t)
         \/ MergeHardFail(t)
         \/ ExternalPrMerged(t)
         \* Fix cycle
@@ -861,17 +1059,31 @@ Next ==
         \/ FixPassFallback(t)
         \/ FixFail(t)
         \/ FixPartial(t)
+        \/ FixSkip(t)
+        \/ FixTimeout(t)
+        \/ FixAlreadyMerged(t)
         \* Resolve cycle
         \/ ResolveStarted(t)
         \/ ResolveSucceeded(t)
         \/ ResolveFail(t)
+        \/ ResolveFailFromNeedsResolve(t)
+        \/ ResolveFailFromNeedsMulti(t)
         \/ ResolveTimeout(t)
+        \/ ResolveStuckResetGuarded(t)
+        \/ ResolveStuckResetFallback(t)
+        \/ ResolveAlreadyMergedFromNeedsResolve(t)
+        \/ ResolveAlreadyMergedFromNeedsMulti(t)
+        \/ ResolveMaxExceededFromNeedsResolve(t)
+        \/ ResolveMaxExceededFromNeedsMulti(t)
         \* Multi-resolve cycle
         \/ ResolveStartedFromMulti(t)
         \/ ResolveBatchFailed(t)
         \* Recovery
         \/ Recovery(t)
         \/ RecoveryFallback(t)
+        \/ ResumeAbort(t)
+        \/ UserResume(t)
+        \/ PermanentFailure(t)
         \* Startup reset
         \/ StartupResetFixing(t)
         \/ StartupResetMerging(t)
@@ -923,16 +1135,25 @@ Fairness ==
     /\ \A q \in Tasks :
         /\ WF_vars(SpawnMainWorker(q))
         /\ WF_vars(WorkerMergeStart(q) \/ WorkerMergeStartFallback(q))
-        /\ WF_vars(MergeSucceeded(q) \/ MergeHardFail(q)
+        /\ WF_vars(MergeSucceeded(q) \/ MergeAlreadyMerged(q) \/ MergeHardFail(q)
                    \/ MergeConflictDetected(q)
-                   \/ MergeOutOfDateOk(q) \/ MergeOutOfDateFail(q))
+                   \/ MergeOutOfDateOk(q) \/ MergeOutOfDateFail(q)
+                   \/ MergeTransientFailRetry(q) \/ MergeTransientFailAbort(q))
         /\ WF_vars(ConflictToResolve(q) \/ ConflictToMultiResolve(q) \/ ConflictToFailed(q))
         /\ WF_vars(SpawnFixWorkerFromFailed(q))
         /\ WF_vars(FixStarted(q))
-        /\ WF_vars(FixPassGuarded(q) \/ FixPassFallback(q) \/ FixFail(q))
+        /\ WF_vars(FixPassGuarded(q) \/ FixPassFallback(q) \/ FixFail(q)
+                   \/ FixSkip(q) \/ FixTimeout(q))
+        /\ WF_vars(FixAlreadyMerged(q))
         /\ WF_vars(ResolveStarted(q))
         /\ WF_vars(ResolveStartedFromMulti(q))
-        /\ WF_vars(ResolveSucceeded(q) \/ ResolveFail(q))
+        /\ WF_vars(ResolveSucceeded(q) \/ ResolveFail(q)
+                   \/ ResolveFailFromNeedsResolve(q) \/ ResolveFailFromNeedsMulti(q))
+        /\ WF_vars(ResolveStuckResetGuarded(q) \/ ResolveStuckResetFallback(q))
+        /\ WF_vars(ResolveAlreadyMergedFromNeedsResolve(q) \/ ResolveAlreadyMergedFromNeedsMulti(q))
+        /\ WF_vars(ResolveMaxExceededFromNeedsResolve(q) \/ ResolveMaxExceededFromNeedsMulti(q))
+        /\ WF_vars(UserResume(q))
+        /\ WF_vars(PermanentFailure(q))
         /\ WF_vars(Recovery(q) \/ RecoveryFallback(q))
         /\ WF_vars(StartupReconcileMerged(q))
         /\ WF_vars(StartupReconcileConflict(q))
