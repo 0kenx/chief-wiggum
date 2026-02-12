@@ -687,7 +687,7 @@ _orch_pre_worker_checks() {
         if echo "$pull_output" | grep -qiE "(local changes|untracked.*files).*overwritten"; then
             if [ "$dirty_reset_done" = false ]; then
                 local dirty_files
-                dirty_files=$(echo "$pull_output" | sed -n '/would be overwritten/,/Please\|Aborting/{//d; s/^[[:space:]]*//; /^$/d; p}')
+                dirty_files=$(echo "$pull_output" | awk '/would be overwritten/,/Aborting/{if(/would be overwritten|Please commit|Aborting/) next; gsub(/^[ \t]+|[ \t]+$/,""); if($0) print}')
                 if [ -n "$dirty_files" ]; then
                     log_warn "Resetting files blocking pull: $dirty_files"
                     echo "$dirty_files" | xargs git checkout -- 2>/dev/null || true
@@ -1583,7 +1583,7 @@ pre_worker_checks() {
         # Dirty/untracked working directory - reset the blocking files and retry once
         if [ "$dirty_reset_done" = false ] && echo "$pull_output" | grep -qiE "(local changes|untracked.*files).*overwritten"; then
             local dirty_files
-            dirty_files=$(echo "$pull_output" | sed -n '/would be overwritten/,/Please\|Aborting/{//d; s/^[[:space:]]*//; /^$/d; p}')
+            dirty_files=$(echo "$pull_output" | awk '/would be overwritten/,/Aborting/{if(/would be overwritten|Please commit|Aborting/) next; gsub(/^[ \t]+|[ \t]+$/,""); if($0) print}')
             if [ -n "$dirty_files" ]; then
                 log_warn "Resetting files blocking pull: $dirty_files"
                 echo "$dirty_files" | xargs git checkout -- 2>/dev/null || true
