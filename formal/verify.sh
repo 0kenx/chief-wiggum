@@ -32,7 +32,7 @@ Filter:
     verify.sh Orchestrator        # all Orchestrator checks
     verify.sh TypeInvariant       # TypeInvariant across all specs
 
-Checks (34 safety invariants):
+Checks (47 safety invariants):
   WorkerLifecycle.tla   (length 25) TypeInvariant BoundedCounters
                         TransientStateInvariant KanbanMergedConsistency
                         KanbanFailedConsistency ConflictQueueConsistency
@@ -51,11 +51,19 @@ Checks (34 safety invariants):
   Scheduler.tla         (length 10) TypeInvariant CapacityInvariant
                         DependencyInvariant FileConflictInvariant
                         SkipBoundInvariant CyclicTasksNeverSpawned
+  EffectOutbox.tla      (length 20) TypeInvariant DoneConsistency
+                        StateBeforeKanban CompletedSubsetPending
+                        CleanupEffectOrder CrashBounded
+  ResumeLifecycle.tla   (length 20) TypeInvariant TerminalAbsorbing
+                        AttemptsWithinBounds CooldownBlocksSpawn
+                        DecisionRequiredForSpawn TerminalReasonConsistency
+                        PassNeverRetried
 
 Note: Temporal/liveness properties (EventualTermination, NoStarvation,
-EventualSpawn, SkipDecay, PipelineTermination) are defined in each spec
-but require TLC for verification -- Apalache does not support fairness
-in --temporal mode ("Handling fairness is not supported yet!").
+EventualSpawn, SkipDecay, PipelineTermination, EventualCompletion) are
+defined in each spec but require TLC for verification -- Apalache does
+not support fairness in --temporal mode ("Handling fairness is not
+supported yet!").
 EOF
 }
 
@@ -330,6 +338,23 @@ _run_all_checks() {
     run_check Scheduler.tla FileConflictInvariant 10
     run_check Scheduler.tla SkipBoundInvariant 10
     run_check Scheduler.tla CyclicTasksNeverSpawned 10
+
+    # EffectOutbox
+    run_check EffectOutbox.tla TypeInvariant 20
+    run_check EffectOutbox.tla DoneConsistency 20
+    run_check EffectOutbox.tla StateBeforeKanban 20
+    run_check EffectOutbox.tla CompletedSubsetPending 20
+    run_check EffectOutbox.tla CleanupEffectOrder 20
+    run_check EffectOutbox.tla CrashBounded 20
+
+    # ResumeLifecycle
+    run_check ResumeLifecycle.tla TypeInvariant 20
+    run_check ResumeLifecycle.tla TerminalAbsorbing 20
+    run_check ResumeLifecycle.tla AttemptsWithinBounds 20
+    run_check ResumeLifecycle.tla CooldownBlocksSpawn 20
+    run_check ResumeLifecycle.tla DecisionRequiredForSpawn 20
+    run_check ResumeLifecycle.tla TerminalReasonConsistency 20
+    run_check ResumeLifecycle.tla PassNeverRetried 20
 }
 
 # =========================================================================
