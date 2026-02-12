@@ -42,6 +42,25 @@
  *   - RESTART resets current step's visit counter (iteration reset)
  *   - Models "supervisor restarts reset counters" class of bugs
  *
+ * ENRICHMENT: Step Timeout
+ * Steps with HasTimeout[i] = TRUE can time out, producing a FAIL result
+ * regardless of agent output. Matches step-level timeout_seconds in pipeline config.
+ *
+ * ENRICHMENT: enabled_by Conditional Skipping
+ * Steps with StepEnabled[i] = FALSE are silently skipped: pc advances without
+ * incrementing visits or producing a result. Matches enabled_by conditions in
+ * pipeline step definitions.
+ *
+ * ENRICHMENT: on_max Cascade Detection
+ * When on_max fires and sends control to another step that also fires on_max,
+ * a cascade forms. If a step appears twice in the cascade, the pipeline aborts
+ * to prevent infinite on_max loops. Tracked via onMaxCascade set.
+ *
+ * ENRICHMENT: Commit Failure Override
+ * Steps with CommitAfter[i] = TRUE attempt a git commit after execution.
+ * If the commit fails and the effective result was PASS, it overrides to FIX.
+ * Matches commit_after in pipeline step definitions.
+ *
  * Designed for Apalache symbolic model checking (type annotations, CInit).
  *)
 
@@ -63,7 +82,14 @@ CONSTANTS
     \* @type: Int;
     MaxSupervisorRestarts, \* max times supervisor can restart a step
     \* @type: Int;
-    CostBudget             \* max accumulated cost (0 = unlimited). GAP CLOSURE #4.
+    CostBudget,            \* max accumulated cost (0 = unlimited). GAP CLOSURE #4.
+    \* === ENRICHMENT CONSTANTS ===
+    \* @type: Int -> Bool;
+    HasTimeout,            \* function: step index -> TRUE if step can time out
+    \* @type: Int -> Bool;
+    StepEnabled,           \* function: step index -> TRUE if step is enabled (enabled_by)
+    \* @type: Int -> Bool;
+    CommitAfter            \* function: step index -> TRUE if step commits after execution
 
 VARIABLES
     \* @type: Int;
@@ -84,10 +110,15 @@ VARIABLES
     \* @type: Int -> Int;
     supervisorRestarts,    \* function: step index -> restart count by supervisor
     \* @type: Int;
-    currentCost            \* accumulated pipeline cost (GAP CLOSURE #4)
+    currentCost,           \* accumulated pipeline cost (GAP CLOSURE #4)
+    \* === ENRICHMENT VARIABLES ===
+    \* @type: Set(Int);
+    onMaxCascade,          \* set of step indices visited during current on_max cascade
+    \* @type: Bool;
+    timedOut               \* TRUE if current step timed out
 
-\* @type: <<Int, Int -> Int, Int -> Int, Int -> Int, Int -> Str, Str, Int, Int -> Int, Int>>;
-vars == <<pc, visits, inlineVisits, consecutiveSame, lastResult, status, iterationsSinceCheck, supervisorRestarts, currentCost>>
+\* @type: <<Int, Int -> Int, Int -> Int, Int -> Int, Int -> Str, Str, Int, Int -> Int, Int, Set(Int), Bool>>;
+vars == <<pc, visits, inlineVisits, consecutiveSame, lastResult, status, iterationsSinceCheck, supervisorRestarts, currentCost, onMaxCascade, timedOut>>
 
 \* =========================================================================
 \* Type definitions
@@ -111,6 +142,8 @@ Init ==
     /\ iterationsSinceCheck = 0
     /\ supervisorRestarts = [i \in StepRange |-> 0]
     /\ currentCost = 0
+    /\ onMaxCascade = {}
+    /\ timedOut = FALSE
 
 \* Apalache constant initialization
 CInit ==
@@ -122,6 +155,10 @@ CInit ==
     /\ SupervisorInterval = 2       \* supervisor checks every 2 iterations
     /\ MaxSupervisorRestarts = 1    \* supervisor can restart each step once
     /\ CostBudget = 5              \* pipeline aborts after 5 abstract cost units (GAP CLOSURE #4)
+    \* === ENRICHMENT CONSTANTS ===
+    /\ HasTimeout = [i \in 0..2 |-> IF i = 1 THEN TRUE ELSE FALSE]    \* step 1 can time out
+    /\ StepEnabled = [i \in 0..2 |-> IF i = 2 THEN FALSE ELSE TRUE]   \* step 2 is disabled
+    /\ CommitAfter = [i \in 0..2 |-> IF i = 1 THEN TRUE ELSE FALSE]   \* step 1 commits after
 
 \* =========================================================================
 \* Helpers
@@ -152,18 +189,28 @@ SupervisorUnchanged == UNCHANGED <<iterationsSinceCheck, supervisorRestarts>>
 \* Helper: unchanged cost state
 CostUnchanged == UNCHANGED currentCost
 
+\* Helper: unchanged enrichment state
+EnrichmentUnchanged == UNCHANGED <<onMaxCascade, timedOut>>
+
 \* =========================================================================
 \* Actions
 \* =========================================================================
 
 \* Execute a pipeline step: nondeterministically choose a result and dispatch
+\* ENRICHMENT: Guard against timedOut (timeout produces FAIL via separate action)
 ExecuteStep ==
     /\ status = "running"
     /\ pc >= 0
     /\ pc < NumSteps
+    /\ ~timedOut
+    \* ENRICHMENT: Step must be enabled (enabled_by condition)
+    /\ StepEnabled[pc]
     \* GAP CLOSURE #4: Cost budget check before execution
     /\ CostBudget = 0 \/ currentCost < CostBudget
     /\ \E result \in Results :
+        \* ENRICHMENT: Commit failure override
+        \* When CommitAfter and commit fails, PASS is overridden to FIX
+        \E commitFails \in BOOLEAN :
         LET
             i == pc
             currentVisits == visits[i]
@@ -173,13 +220,24 @@ ExecuteStep ==
         IF maxV > 0 /\ currentVisits >= maxV
         THEN
             \* on_max fires: default jump is "next"
-            LET nextPc == ResolveJump("next", i) IN
-            /\ pc' = nextPc
-            /\ status' = IF nextPc < 0 THEN "aborted"
-                          ELSE IF nextPc >= NumSteps THEN "completed"
-                          ELSE "running"
-            /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult>>
-            /\ CostUnchanged
+            \* ENRICHMENT: Cascade detection — if step already in cascade, abort
+            IF i \in onMaxCascade
+            THEN
+                /\ pc' = -1
+                /\ status' = "aborted"
+                /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult>>
+                /\ CostUnchanged
+                /\ UNCHANGED <<onMaxCascade, timedOut>>
+            ELSE
+                LET nextPc == ResolveJump("next", i) IN
+                /\ pc' = nextPc
+                /\ status' = IF nextPc < 0 THEN "aborted"
+                              ELSE IF nextPc >= NumSteps THEN "completed"
+                              ELSE "running"
+                /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult>>
+                /\ CostUnchanged
+                /\ onMaxCascade' = onMaxCascade \cup {i}
+                /\ UNCHANGED timedOut
         ELSE
             LET
                 \* Increment visit counter
@@ -197,13 +255,20 @@ ExecuteStep ==
                             ELSE IF prevResult = recoveredResult THEN prevCount + 1
                             ELSE 1
                 cbTripped == ~IsTerminalResult(recoveredResult) /\ newCount >= CircuitBreakerThreshold
-                effectiveResult == IF cbTripped THEN "FAIL" ELSE recoveredResult
+                preCommitResult == IF cbTripped THEN "FAIL" ELSE recoveredResult
+
+                \* ENRICHMENT: Commit failure override
+                \* When CommitAfter and commit fails and result is PASS, override to FIX
+                effectiveResult == IF CommitAfter[i] /\ commitFails /\ preCommitResult = "PASS"
+                                   THEN "FIX"
+                                   ELSE preCommitResult
 
                 \* Update circuit breaker tracking
                 newConsec == [consecutiveSame EXCEPT ![i] = newCount]
                 newLast == [lastResult EXCEPT ![i] = IF IsTerminalResult(recoveredResult) THEN "" ELSE recoveredResult]
             IN
             \* --- Dispatch on effective result ---
+            \* ENRICHMENT: Clear cascade set when a step actually executes
             CASE effectiveResult = "PASS" ->
                 LET nextPc == ResolveJump("next", i) IN
                 /\ pc' = nextPc
@@ -213,6 +278,8 @@ ExecuteStep ==
                 /\ status' = IF nextPc >= NumSteps THEN "completed" ELSE "running"
                 /\ UNCHANGED inlineVisits
                 /\ currentCost' = currentCost + 1
+                /\ onMaxCascade' = {}
+                /\ UNCHANGED timedOut
 
               [] effectiveResult = "FAIL" ->
                 /\ pc' = -1
@@ -222,6 +289,8 @@ ExecuteStep ==
                 /\ status' = "aborted"
                 /\ UNCHANGED inlineVisits
                 /\ currentCost' = currentCost + 1
+                /\ onMaxCascade' = {}
+                /\ UNCHANGED timedOut
 
               [] effectiveResult = "SKIP" ->
                 LET nextPc == ResolveJump("next", i) IN
@@ -232,6 +301,8 @@ ExecuteStep ==
                 /\ status' = IF nextPc >= NumSteps THEN "completed" ELSE "running"
                 /\ UNCHANGED inlineVisits
                 /\ currentCost' = currentCost + 1
+                /\ onMaxCascade' = {}
+                /\ UNCHANGED timedOut
 
               [] effectiveResult = "FIX" ->
                 IF HasInline[i]
@@ -254,6 +325,8 @@ ExecuteStep ==
                                       ELSE IF nextPc >= NumSteps THEN "completed"
                                       ELSE "running"
                         /\ currentCost' = currentCost + 1
+                        /\ onMaxCascade' = {}
+                        /\ UNCHANGED timedOut
                     ELSE
                         \* Run inline (atomic), then jump to self (re-run parent)
                         \* Reset circuit breaker for parent since inline ran between
@@ -264,6 +337,8 @@ ExecuteStep ==
                         /\ lastResult' = [newLast EXCEPT ![i] = ""]
                         /\ status' = "running"
                         /\ currentCost' = currentCost + 1
+                        /\ onMaxCascade' = {}
+                        /\ UNCHANGED timedOut
                 ELSE
                     \* No inline handler: jump prev (or self if at step 0)
                     LET nextPc == ResolveJump("prev", i) IN
@@ -274,6 +349,8 @@ ExecuteStep ==
                     /\ lastResult' = newLast
                     /\ status' = "running"
                     /\ currentCost' = currentCost + 1
+                    /\ onMaxCascade' = {}
+                    /\ UNCHANGED timedOut
 
               \* GAP CLOSURE #3: UNKNOWN result — backup extraction failed or not attempted.
               \* Jump to self (re-run step). Circuit breaker tracks consecutive UNKNOWNs.
@@ -285,6 +362,40 @@ ExecuteStep ==
                 /\ status' = "running"
                 /\ UNCHANGED inlineVisits
                 /\ currentCost' = currentCost + 1
+                /\ onMaxCascade' = {}
+                /\ UNCHANGED timedOut
+
+\* ENRICHMENT: Step timeout — fires when HasTimeout[pc] is TRUE.
+\* Produces a FAIL result regardless of agent output, aborting the pipeline.
+\* Matches step-level timeout_seconds in pipeline config.
+StepTimeout ==
+    /\ status = "running"
+    /\ pc >= 0
+    /\ pc < NumSteps
+    /\ HasTimeout[pc]
+    /\ ~timedOut
+    /\ timedOut' = TRUE
+    /\ pc' = -1
+    /\ status' = "aborted"
+    /\ visits' = [visits EXCEPT ![pc] = visits[pc] + 1]
+    /\ UNCHANGED <<inlineVisits, consecutiveSame, lastResult, currentCost>>
+    /\ onMaxCascade' = {}
+    /\ SupervisorUnchanged
+
+\* ENRICHMENT: Skip disabled step — enabled_by condition is FALSE.
+\* Silently advances pc without incrementing visits, producing a result,
+\* or checking max visits. Matches enabled_by conditions in pipeline steps.
+SkipDisabledStep ==
+    /\ status = "running"
+    /\ pc >= 0
+    /\ pc < NumSteps
+    /\ ~StepEnabled[pc]
+    /\ pc' = pc + 1
+    /\ status' = IF pc + 1 >= NumSteps THEN "completed" ELSE "running"
+    /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult, currentCost>>
+    /\ onMaxCascade' = {}
+    /\ UNCHANGED timedOut
+    /\ SupervisorUnchanged
 
 \* Execute step and increment iteration counter
 \* Guard: when supervisor is enabled, execution blocks once the interval is reached
@@ -306,6 +417,7 @@ CostBudgetAbort ==
     /\ pc' = -1
     /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult, currentCost>>
     /\ SupervisorUnchanged
+    /\ EnrichmentUnchanged
 
 \* =========================================================================
 \* Supervisor Actions (Medium Term #3)
@@ -318,6 +430,7 @@ SupervisorContinue ==
     /\ iterationsSinceCheck >= SupervisorInterval
     /\ iterationsSinceCheck' = 0
     /\ UNCHANGED <<pc, visits, inlineVisits, consecutiveSame, lastResult, status, supervisorRestarts, currentCost>>
+    /\ EnrichmentUnchanged
 
 \* Supervisor decides to STOP (abort pipeline)
 SupervisorStop ==
@@ -328,6 +441,7 @@ SupervisorStop ==
     /\ pc' = -1
     /\ iterationsSinceCheck' = 0
     /\ UNCHANGED <<visits, inlineVisits, consecutiveSame, lastResult, supervisorRestarts, currentCost>>
+    /\ EnrichmentUnchanged
 
 \* Supervisor decides to RESTART current step (reset visit counter)
 \* This models "supervisor restarts reset counters" class of bugs
@@ -346,6 +460,7 @@ SupervisorRestart ==
     /\ supervisorRestarts' = [supervisorRestarts EXCEPT ![pc] = supervisorRestarts[pc] + 1]
     /\ iterationsSinceCheck' = 0
     /\ UNCHANGED <<pc, status, currentCost>>
+    /\ EnrichmentUnchanged
 
 \* Terminal states are absorbing
 Terminated ==
@@ -354,6 +469,8 @@ Terminated ==
 
 Next ==
     \/ ExecuteStepWithCount
+    \/ StepTimeout
+    \/ SkipDisabledStep
     \/ CostBudgetAbort
     \/ SupervisorContinue
     \/ SupervisorStop
@@ -383,6 +500,8 @@ TypeInvariant ==
     /\ iterationsSinceCheck \in 0..(SupervisorInterval + 1)
     /\ \A i \in StepRange : supervisorRestarts[i] \in 0..(MaxSupervisorRestarts + 1)
     /\ currentCost \in 0..(CostBudget + NumSteps)
+    /\ onMaxCascade \subseteq StepRange
+    /\ timedOut \in BOOLEAN
 
 \* VisitsBounded: visits never wildly exceed max
 \* A step may enter at max count (visit happens, then on_max redirects),
@@ -412,6 +531,29 @@ StatusConsistency ==
 \* GAP CLOSURE #4: safety property for cost budget enforcement
 CostBudgetInvariant ==
     CostBudget > 0 => currentCost <= CostBudget + 1
+
+\* =========================================================================
+\* Enrichment Safety Invariants
+\* =========================================================================
+
+\* CascadeDetected: onMaxCascade never contains a duplicate before abort.
+\* If on_max cascade visits a step that's already in the cascade set,
+\* the pipeline aborts immediately. The cascade set is a strict subset of
+\* steps actually visited by on_max, never containing duplicates.
+CascadeDetected ==
+    status = "running" =>
+        \A i \in onMaxCascade : i \in StepRange
+
+\* DisabledStepNeverExecuted: disabled steps never have their visit
+\* counter incremented. StepEnabled[i] = FALSE means the step is skipped.
+DisabledStepNeverExecuted ==
+    \A i \in StepRange :
+        ~StepEnabled[i] => visits[i] = 0
+
+\* TimeoutProducesFail: a timed-out step always results in the FAIL path
+\* (pipeline aborted). If timedOut is TRUE, the pipeline must be aborted.
+TimeoutProducesFail ==
+    timedOut => status = "aborted"
 
 \* =========================================================================
 \* Liveness Properties (require fairness)

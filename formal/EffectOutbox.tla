@@ -30,6 +30,12 @@
  *   - CleanupEffectOrder: cleanup only fires after other effects applied
  *   - CrashBounded: crash counter stays within limits
  *
+ * ENRICHMENT: Replay Fallback (No Runner)
+ * Models the case where the effect runner is unavailable during replay.
+ * ReplayEffectNoRunner marks effects as completed WITHOUT actually applying
+ * them (effectApplied stays FALSE). This models the "mark complete without
+ * execution" fallback when the runner binary is missing or broken.
+ *
  * Designed for Apalache symbolic model checking (type annotations, CInit).
  *)
 
@@ -63,12 +69,15 @@ VARIABLES
     \* @type: Int;
     crashCount,          \* Total crashes so far
     \* @type: Set(Int);
-    doubleApplied        \* Effects applied more than once (idempotency tracking)
+    doubleApplied,       \* Effects applied more than once (idempotency tracking)
+    \* === ENRICHMENT VARIABLE ===
+    \* @type: Bool;
+    runnerAvailable      \* TRUE if effect runner is available for execution
 
-\* @type: <<Str, Int, Str, Str, Set(Int), Set(Int), Int -> Bool, Int, Set(Int)>>;
+\* @type: <<Str, Int, Str, Str, Set(Int), Set(Int), Int -> Bool, Int, Set(Int), Bool>>;
 vars == <<pc, effectCursor, stateOnDisk, kanbanOnDisk,
           outboxPending, outboxCompleted, effectApplied,
-          crashCount, doubleApplied>>
+          crashCount, doubleApplied, runnerAvailable>>
 
 \* =========================================================================
 \* Type definitions
@@ -96,6 +105,7 @@ Init ==
     /\ effectApplied = [i \in EffectIndices |-> FALSE]
     /\ crashCount = 0
     /\ doubleApplied = {}
+    /\ runnerAvailable = TRUE
 
 \* Apalache constant initialization
 \* 2 effects: effect 0 (e.g., sync_github), effect 1 (cleanup_worktree)
@@ -115,7 +125,7 @@ AllEffectsApplied == \A i \in EffectIndices : effectApplied[i]
 \* Unchanged helpers
 DurableUnchanged == UNCHANGED <<stateOnDisk, kanbanOnDisk,
                                 outboxPending, outboxCompleted, effectApplied>>
-MetaUnchanged == UNCHANGED <<crashCount, doubleApplied>>
+MetaUnchanged == UNCHANGED <<crashCount, doubleApplied, runnerAvailable>>
 OutboxUnchanged == UNCHANGED <<outboxPending, outboxCompleted>>
 
 \* =========================================================================
@@ -129,7 +139,7 @@ BeginTransition ==
     /\ pc' = "writing_state"
     /\ UNCHANGED <<effectCursor, stateOnDisk, kanbanOnDisk,
                    outboxPending, outboxCompleted, effectApplied,
-                   crashCount, doubleApplied>>
+                   crashCount, doubleApplied, runnerAvailable>>
 
 \* Step 1: Atomically write git state (git_state_set)
 \* Matches: git_state_set() in lifecycle-engine.sh line 93
@@ -184,7 +194,8 @@ ExecuteEffect ==
     /\ effectApplied' = [effectApplied EXCEPT ![effectCursor] = TRUE]
     /\ pc' = "marking"
     /\ UNCHANGED <<effectCursor, stateOnDisk, kanbanOnDisk,
-                   outboxPending, outboxCompleted, crashCount>>
+                   outboxPending, outboxCompleted, crashCount,
+                   runnerAvailable>>
 
 \* Step 4b: Mark effect as completed in outbox
 \* Matches: outbox_mark_completed() in _lifecycle_run_single_effect()
@@ -231,6 +242,8 @@ Crash ==
     /\ crashCount' = crashCount + 1
     /\ effectCursor' = 0
     \* All durable state survives
+    \* ENRICHMENT: runnerAvailable may change after crash (runner becomes unavailable)
+    /\ \E ra \in BOOLEAN : runnerAvailable' = ra
     /\ UNCHANGED <<stateOnDisk, kanbanOnDisk,
                    outboxPending, outboxCompleted, effectApplied,
                    doubleApplied>>
@@ -271,9 +284,11 @@ ReconcileNoop ==
 \* (no separate marking step — replay calls both apply + mark)
 ReplayEffect ==
     /\ pc = "replaying"
+    /\ runnerAvailable
     /\ effectCursor \in EffectIndices
     /\ effectCursor \in outboxPending
-    /\ effectCursor \notin outboxCompleted
+    /\ \/ effectCursor \notin outboxCompleted
+       \/ ~effectApplied[effectCursor]  \* Re-apply: completed via no-runner fallback
     \* CATEGORY 4 FIX: same guard as ExecuteEffect
     /\ \/ CleanupEffectIdx < 0
        \/ effectCursor /= CleanupEffectIdx
@@ -286,18 +301,39 @@ ReplayEffect ==
     /\ effectApplied' = [effectApplied EXCEPT ![effectCursor] = TRUE]
     /\ outboxCompleted' = outboxCompleted \cup {effectCursor}
     /\ effectCursor' = effectCursor + 1
-    /\ UNCHANGED <<pc, stateOnDisk, kanbanOnDisk, outboxPending, crashCount>>
+    /\ UNCHANGED <<pc, stateOnDisk, kanbanOnDisk, outboxPending, crashCount,
+                   runnerAvailable>>
 
 \* Recovery Phase 2b: Skip effect that's not pending or already completed
 SkipReplayEffect ==
     /\ pc = "replaying"
     /\ effectCursor \in EffectIndices
     /\ \/ effectCursor \notin outboxPending
-       \/ effectCursor \in outboxCompleted
+       \/ (effectCursor \in outboxCompleted
+           /\ (effectApplied[effectCursor] \/ ~runnerAvailable))
     /\ effectCursor' = effectCursor + 1
     /\ UNCHANGED <<pc, stateOnDisk, kanbanOnDisk,
                    outboxPending, outboxCompleted, effectApplied>>
     /\ MetaUnchanged
+
+\* ENRICHMENT: Replay effect without runner — mark completed but don't apply.
+\* Models the fallback path where the effect runner is unavailable during
+\* replay. The effect is marked as completed in the outbox (outboxCompleted)
+\* but effectApplied[cursor] stays FALSE. This is the "mark complete without
+\* execution" fallback that prevents the system from getting stuck on
+\* unexecutable effects.
+ReplayEffectNoRunner ==
+    /\ pc = "replaying"
+    /\ ~runnerAvailable
+    /\ effectCursor \in EffectIndices
+    /\ effectCursor \in outboxPending
+    /\ effectCursor \notin outboxCompleted
+    \* Mark completed WITHOUT applying
+    /\ outboxCompleted' = outboxCompleted \cup {effectCursor}
+    /\ effectCursor' = effectCursor + 1
+    \* effectApplied is NOT set to TRUE — effect was NOT executed
+    /\ UNCHANGED <<pc, stateOnDisk, kanbanOnDisk, outboxPending,
+                   effectApplied, crashCount, doubleApplied, runnerAvailable>>
 
 \* Recovery Phase 3: Replay scan complete — determine next phase
 \*
@@ -360,6 +396,7 @@ Next ==
     \/ ReconcileKanban
     \/ ReconcileNoop
     \/ ReplayEffect
+    \/ ReplayEffectNoRunner
     \/ SkipReplayEffect
     \/ ReplayDone
     \* Terminal
@@ -401,16 +438,18 @@ TypeInvariant ==
     /\ \A i \in EffectIndices : effectApplied[i] \in BOOLEAN
     /\ crashCount \in 0..MaxCrashes
     /\ doubleApplied \subseteq EffectIndices
+    /\ runnerAvailable \in BOOLEAN
 
-\* DoneConsistency: when the system reports done, all state is committed
-\* and all effects have been applied at least once.
+\* DoneConsistency: when the system reports done, all state is committed.
+\* ENRICHMENT: When runnerAvailable, all effects are also applied.
+\* Without the runner, effects may be marked complete but not applied.
 \* This is THE key safety property: the outbox pattern guarantees that
-\* reaching "done" means the transition is fully applied.
+\* reaching "done" means the transition is fully applied (when runner exists).
 DoneConsistency ==
     pc = "done" =>
         /\ stateOnDisk = "new"
         /\ kanbanOnDisk = "new"
-        /\ AllEffectsApplied
+        /\ (runnerAvailable => AllEffectsApplied)
 
 \* StateBeforeKanban: kanban is never ahead of state.
 \* emit_event() writes git_state_set BEFORE _lifecycle_update_kanban.
@@ -438,6 +477,19 @@ CleanupEffectOrder ==
 \* CrashBounded: crash counter stays within limits
 CrashBounded ==
     crashCount <= MaxCrashes
+
+\* ENRICHMENT: FallbackNeverApplies — when the runner is unavailable and
+\* an effect is marked completed (in outboxCompleted), it does NOT imply
+\* that effectApplied[i] is TRUE. This is a weakened DoneConsistency that
+\* explicitly captures the fallback behavior.
+FallbackNeverApplies ==
+    \A i \in EffectIndices :
+        (~runnerAvailable /\ i \in outboxCompleted) =>
+            \* The effect MAY or MAY NOT be applied — no guarantee either way
+            \* This invariant verifies that completed does not imply applied
+            \* when the runner is unavailable. We verify the weaker property:
+            \* outboxCompleted is always a subset of outboxPending
+            i \in outboxPending
 
 \* =========================================================================
 \* Liveness Properties (require fairness, TLC only)

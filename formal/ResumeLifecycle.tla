@@ -27,6 +27,20 @@
  *   - TerminalReasonConsistency: terminal reason matches the path taken
  *   - PassNeverRetried: a passing pipeline is never retried
  *
+ * ENRICHMENT: USER_RETRY Override
+ * Models manual user retry from terminal state. Resets attempts to 0,
+ * clears terminal reason, transitions to needs_decide. Bounded by MaxUserRetries.
+ *
+ * ENRICHMENT: Workspace Violation
+ * Models workspace violation detection (e.g., agent wrote to forbidden paths).
+ * Violations from active phase force terminal with VIOLATION reason.
+ * ForceResumeViolation clears the violation (models -f flag).
+ *
+ * ENRICHMENT: Interrupted vs Completed
+ * When pipeline fails with stepInterrupted=TRUE, the decide phase is skipped
+ * and the worker goes directly from pipeline_done to active (retry without decide).
+ * When stepInterrupted=FALSE, normal decide path.
+ *
  * Designed for Apalache symbolic model checking (type annotations, CInit).
  *)
 
@@ -36,7 +50,9 @@ CONSTANTS
     \* @type: Int;
     MaxAttempts,         \* Maximum resume attempts before terminal
     \* @type: Int;
-    CooldownDuration     \* Ticks of cooldown for DEFER decisions
+    CooldownDuration,    \* Ticks of cooldown for DEFER decisions
+    \* @type: Int;
+    MaxUserRetries       \* Maximum user retry overrides from terminal
 
 VARIABLES
     \* @type: Str;
@@ -50,10 +66,18 @@ VARIABLES
     \* @type: Str;
     pipelineResult,      \* Last pipeline outcome: "none", "PASS", "FAIL"
     \* @type: Str;
-    terminalReason       \* Why terminal: "", "COMPLETE", "ABORT", "MAX_ATTEMPTS", "REPEATED_FAIL"
+    terminalReason,      \* Why terminal: "", "COMPLETE", "ABORT", "MAX_ATTEMPTS", "REPEATED_FAIL", "VIOLATION"
+    \* === ENRICHMENT VARIABLES ===
+    \* @type: Int;
+    userRetryCount,      \* Number of user retry overrides from terminal
+    \* @type: Bool;
+    hasViolation,        \* TRUE if workspace violation detected
+    \* @type: Bool;
+    stepInterrupted      \* TRUE if pipeline was interrupted (not completed)
 
-\* @type: <<Str, Int, Str, Int, Str, Str>>;
-vars == <<phase, attempts, decision, cooldownTicks, pipelineResult, terminalReason>>
+\* @type: <<Str, Int, Str, Int, Str, Str, Int, Bool, Bool>>;
+vars == <<phase, attempts, decision, cooldownTicks, pipelineResult, terminalReason,
+          userRetryCount, hasViolation, stepInterrupted>>
 
 \* =========================================================================
 \* Type definitions
@@ -62,11 +86,11 @@ vars == <<phase, attempts, decision, cooldownTicks, pipelineResult, terminalReas
 PhaseValues == {"idle", "active", "pipeline_done", "needs_decide",
                 "deciding", "decided", "cooldown", "terminal"}
 
-DecisionValues == {"none", "COMPLETE", "RETRY", "DEFER", "ABORT"}
+DecisionValues == {"none", "COMPLETE", "RETRY", "DEFER", "ABORT", "USER_RETRY"}
 
 ResultValues == {"none", "PASS", "FAIL"}
 
-ReasonValues == {"", "COMPLETE", "ABORT", "MAX_ATTEMPTS", "REPEATED_FAIL"}
+ReasonValues == {"", "COMPLETE", "ABORT", "MAX_ATTEMPTS", "REPEATED_FAIL", "VIOLATION"}
 
 \* =========================================================================
 \* Init and CInit
@@ -79,12 +103,23 @@ Init ==
     /\ cooldownTicks = 0
     /\ pipelineResult = "none"
     /\ terminalReason = ""
+    /\ userRetryCount = 0
+    /\ hasViolation = FALSE
+    /\ stepInterrupted = FALSE
 
 \* Apalache constant initialization
 \* 3 attempts before terminal, 2-tick cooldown
 CInit ==
     /\ MaxAttempts = 3
     /\ CooldownDuration = 2
+    /\ MaxUserRetries = 2
+
+\* =========================================================================
+\* Helpers
+\* =========================================================================
+
+\* Unchanged enrichment variables
+EnrichmentUnchanged == UNCHANGED <<userRetryCount, hasViolation, stepInterrupted>>
 
 \* =========================================================================
 \* Actions - Pipeline Execution
@@ -94,9 +129,11 @@ CInit ==
 \* Matches: orchestrator spawning initial worker for a task
 StartPipeline ==
     /\ phase = "idle"
+    /\ hasViolation = FALSE
     /\ phase' = "active"
     /\ pipelineResult' = "none"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Pipeline completes successfully
 \* Matches: pipeline_run_all returns 0 (PASS result from final step)
@@ -104,15 +141,21 @@ PipelinePass ==
     /\ phase = "active"
     /\ pipelineResult' = "PASS"
     /\ phase' = "pipeline_done"
-    /\ UNCHANGED <<attempts, decision, cooldownTicks, terminalReason>>
+    /\ stepInterrupted' = FALSE
+    /\ UNCHANGED <<attempts, decision, cooldownTicks, terminalReason,
+                   userRetryCount, hasViolation>>
 
 \* Pipeline fails
 \* Matches: pipeline_run_all returns non-zero or agent returns FAIL
+\* ENRICHMENT: stepInterrupted is nondeterministic — models whether the
+\* pipeline was interrupted mid-step (TRUE) or completed the step and failed (FALSE)
 PipelineFail ==
     /\ phase = "active"
     /\ pipelineResult' = "FAIL"
     /\ phase' = "pipeline_done"
-    /\ UNCHANGED <<attempts, decision, cooldownTicks, terminalReason>>
+    /\ \E interrupted \in BOOLEAN : stepInterrupted' = interrupted
+    /\ UNCHANGED <<attempts, decision, cooldownTicks, terminalReason,
+                   userRetryCount, hasViolation>>
 
 \* =========================================================================
 \* Actions - Pipeline Result Handling
@@ -126,15 +169,46 @@ PassToTerminal ==
     /\ phase' = "terminal"
     /\ terminalReason' = "COMPLETE"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult>>
+    /\ EnrichmentUnchanged
 
-\* Pipeline failed → needs resume decision
+\* Pipeline failed → needs resume decision (normal path: step completed)
 \* Matches: get_workers_needing_decide() in scheduler.sh identifying
 \* workers whose pipeline failed and resume-state is not terminal
+\* ENRICHMENT: Only fires when stepInterrupted = FALSE (normal decide path)
 FailToNeedsDecide ==
     /\ phase = "pipeline_done"
     /\ pipelineResult = "FAIL"
+    /\ stepInterrupted = FALSE
     /\ phase' = "needs_decide"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
+
+\* ENRICHMENT: Pipeline failed with interruption → retry directly without decide.
+\* When stepInterrupted = TRUE, skip the decide phase entirely and go directly
+\* from pipeline_done to active (retry without decide).
+InterruptedToActive ==
+    /\ phase = "pipeline_done"
+    /\ pipelineResult = "FAIL"
+    /\ stepInterrupted = TRUE
+    /\ attempts < MaxAttempts
+    /\ hasViolation = FALSE
+    /\ attempts' = attempts + 1
+    /\ phase' = "active"
+    /\ pipelineResult' = "none"
+    /\ decision' = "RETRY"
+    /\ UNCHANGED <<cooldownTicks, terminalReason>>
+    /\ EnrichmentUnchanged
+
+\* ENRICHMENT: Pipeline failed with interruption but max attempts exceeded
+InterruptedMaxExceeded ==
+    /\ phase = "pipeline_done"
+    /\ pipelineResult = "FAIL"
+    /\ stepInterrupted = TRUE
+    /\ attempts >= MaxAttempts
+    /\ phase' = "terminal"
+    /\ terminalReason' = "MAX_ATTEMPTS"
+    /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult>>
+    /\ EnrichmentUnchanged
 
 \* =========================================================================
 \* Actions - Resume Decision
@@ -146,6 +220,7 @@ StartDecide ==
     /\ phase = "needs_decide"
     /\ phase' = "deciding"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Resume-decide agent produces COMPLETE decision
 \* Matches: agent writes <decision>COMPLETE</decision> to output
@@ -154,6 +229,7 @@ MakeDecisionComplete ==
     /\ decision' = "COMPLETE"
     /\ phase' = "decided"
     /\ UNCHANGED <<attempts, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Resume-decide agent produces RETRY decision
 \* Matches: agent writes <decision>RETRY:pipeline:step_id</decision>
@@ -162,6 +238,7 @@ MakeDecisionRetry ==
     /\ decision' = "RETRY"
     /\ phase' = "decided"
     /\ UNCHANGED <<attempts, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Resume-decide agent produces DEFER decision
 \* Matches: agent writes <decision>DEFER</decision> (transient failure)
@@ -170,6 +247,7 @@ MakeDecisionDefer ==
     /\ decision' = "DEFER"
     /\ phase' = "decided"
     /\ UNCHANGED <<attempts, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Resume-decide agent produces ABORT decision
 \* Matches: agent writes <decision>ABORT</decision> (uncompletable)
@@ -178,6 +256,7 @@ MakeDecisionAbort ==
     /\ decision' = "ABORT"
     /\ phase' = "decided"
     /\ UNCHANGED <<attempts, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Resume-decide agent fails (crash, parse failure, timeout)
 \* Matches: decide agent exits non-zero or output unparseable.
@@ -188,6 +267,7 @@ DecideFailed ==
     /\ phase = "deciding"
     /\ phase' = "needs_decide"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* =========================================================================
 \* Actions - Decision Consumption
@@ -201,6 +281,7 @@ ConsumeComplete ==
     /\ phase' = "terminal"
     /\ terminalReason' = "COMPLETE"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult>>
+    /\ EnrichmentUnchanged
 
 \* Consume RETRY: increment attempts and spawn resume worker
 \* Guarded: attempts < MaxAttempts
@@ -209,10 +290,12 @@ ConsumeRetry ==
     /\ phase = "decided"
     /\ decision = "RETRY"
     /\ attempts < MaxAttempts
+    /\ hasViolation = FALSE
     /\ attempts' = attempts + 1
     /\ phase' = "active"
     /\ pipelineResult' = "none"
     /\ UNCHANGED <<decision, cooldownTicks, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Consume RETRY but max attempts exceeded: terminal
 \* Matches: resume_state_max_exceeded() check in scheduling phase
@@ -223,6 +306,7 @@ ConsumeRetryMaxExceeded ==
     /\ phase' = "terminal"
     /\ terminalReason' = "MAX_ATTEMPTS"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult>>
+    /\ EnrichmentUnchanged
 
 \* Consume ABORT: mark terminal
 \* Matches: resume_state_set_terminal(worker_dir, "ABORT", ...)
@@ -232,6 +316,7 @@ ConsumeAbort ==
     /\ phase' = "terminal"
     /\ terminalReason' = "ABORT"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult>>
+    /\ EnrichmentUnchanged
 
 \* Consume DEFER: enter cooldown
 \* Matches: resume_state_set_cooldown(worker_dir, duration)
@@ -241,6 +326,7 @@ ConsumeDeferCooldown ==
     /\ cooldownTicks' = CooldownDuration
     /\ phase' = "cooldown"
     /\ UNCHANGED <<attempts, decision, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* =========================================================================
 \* Actions - Cooldown
@@ -253,6 +339,7 @@ CooldownTick ==
     /\ cooldownTicks > 1
     /\ cooldownTicks' = cooldownTicks - 1
     /\ UNCHANGED <<phase, attempts, decision, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* Cooldown expired: back to needs_decide for re-evaluation
 \* Matches: scheduler tick where cooldown_until has passed
@@ -262,6 +349,7 @@ CooldownExpire ==
     /\ cooldownTicks' = 0
     /\ phase' = "needs_decide"
     /\ UNCHANGED <<attempts, decision, pipelineResult, terminalReason>>
+    /\ EnrichmentUnchanged
 
 \* =========================================================================
 \* Actions - Forced Terminal
@@ -277,12 +365,60 @@ ForceTerminalRepeatedFail ==
     /\ phase' = "terminal"
     /\ terminalReason' = "REPEATED_FAIL"
     /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult>>
+    /\ EnrichmentUnchanged
+
+\* =========================================================================
+\* Actions - Enrichment: USER_RETRY Override
+\* =========================================================================
+
+\* ENRICHMENT: User retry from terminal state.
+\* Resets attempts to 0, clears terminalReason, transitions to needs_decide.
+\* Bounded by MaxUserRetries.
+UserRetry ==
+    /\ phase = "terminal"
+    /\ userRetryCount < MaxUserRetries
+    /\ terminalReason /= "VIOLATION"
+    /\ phase' = "needs_decide"
+    /\ attempts' = 0
+    /\ terminalReason' = ""
+    /\ decision' = "none"
+    /\ pipelineResult' = "none"
+    /\ userRetryCount' = userRetryCount + 1
+    /\ UNCHANGED <<cooldownTicks, hasViolation, stepInterrupted>>
+
+\* =========================================================================
+\* Actions - Enrichment: Workspace Violation
+\* =========================================================================
+
+\* ENRICHMENT: Violation detected during active phase.
+\* Agent wrote to forbidden paths or violated workspace rules.
+\* Forces terminal with VIOLATION reason.
+ViolationDetected ==
+    /\ phase = "active"
+    /\ hasViolation' = TRUE
+    /\ phase' = "terminal"
+    /\ terminalReason' = "VIOLATION"
+    /\ UNCHANGED <<attempts, decision, cooldownTicks, pipelineResult,
+                   userRetryCount, stepInterrupted>>
+
+\* ENRICHMENT: Force resume after violation (models -f flag).
+\* Clears the violation flag, allowing retry.
+ForceResumeViolation ==
+    /\ phase = "terminal"
+    /\ hasViolation = TRUE
+    /\ terminalReason = "VIOLATION"
+    /\ hasViolation' = FALSE
+    /\ phase' = "needs_decide"
+    /\ terminalReason' = ""
+    /\ decision' = "none"
+    /\ UNCHANGED <<attempts, cooldownTicks, pipelineResult,
+                   userRetryCount, stepInterrupted>>
 
 \* =========================================================================
 \* Actions - Terminal
 \* =========================================================================
 
-\* Terminal is absorbing: no transitions out
+\* Terminal is absorbing: no transitions out (except USER_RETRY and ForceResumeViolation)
 Terminated ==
     /\ phase = "terminal"
     /\ UNCHANGED vars
@@ -299,6 +435,8 @@ Next ==
     \* Pipeline result handling
     \/ PassToTerminal
     \/ FailToNeedsDecide
+    \/ InterruptedToActive
+    \/ InterruptedMaxExceeded
     \* Resume decision
     \/ StartDecide
     \/ MakeDecisionComplete
@@ -317,6 +455,11 @@ Next ==
     \/ CooldownExpire
     \* Forced terminal
     \/ ForceTerminalRepeatedFail
+    \* Enrichment: USER_RETRY
+    \/ UserRetry
+    \* Enrichment: Violation
+    \/ ViolationDetected
+    \/ ForceResumeViolation
     \* Terminal
     \/ Terminated
 
@@ -351,10 +494,14 @@ TypeInvariant ==
     /\ cooldownTicks \in 0..CooldownDuration
     /\ pipelineResult \in ResultValues
     /\ terminalReason \in ReasonValues
+    /\ userRetryCount \in 0..(MaxUserRetries + 1)
+    /\ hasViolation \in BOOLEAN
+    /\ stepInterrupted \in BOOLEAN
 
-\* TerminalAbsorbing: once terminal, always terminal.
-\* The terminal phase is a sink state: no action can leave it.
-\* Formally: terminal state with a reason implies we stay terminal.
+\* TerminalAbsorbing: terminal reason implies terminal phase.
+\* ENRICHMENT: USER_RETRY and ForceResumeViolation can leave terminal,
+\* but they clear terminalReason before transitioning. So the invariant
+\* still holds: non-empty reason => terminal phase.
 TerminalAbsorbing ==
     terminalReason /= "" => phase = "terminal"
 
@@ -385,6 +532,27 @@ TerminalReasonConsistency ==
 \* If the last pipeline result was PASS, we go terminal (not retry).
 PassNeverRetried ==
     pipelineResult = "PASS" => phase \in {"pipeline_done", "terminal"}
+
+\* =========================================================================
+\* Enrichment Safety Invariants
+\* =========================================================================
+
+\* UserRetryBounded: user retry count never exceeds MaxUserRetries
+UserRetryBounded ==
+    userRetryCount <= MaxUserRetries
+
+\* ViolationBlocksResume: when hasViolation is TRUE, only terminal or active
+\* phases are possible. The violation flag blocks ConsumeRetry and
+\* InterruptedToActive. Only ForceResumeViolation can clear it.
+ViolationBlocksResume ==
+    hasViolation => phase \in {"terminal", "active"}
+
+\* InterruptedBypassesDecide: when stepInterrupted is TRUE and we're back
+\* in active phase with attempts > 0, the decision must be RETRY or none
+\* (the decide phase was bypassed via InterruptedToActive).
+InterruptedBypassesDecide ==
+    stepInterrupted /\ phase = "active" /\ attempts > 0 =>
+        decision \in {"none", "RETRY"}
 
 \* =========================================================================
 \* Liveness Properties (require fairness, TLC only)

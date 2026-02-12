@@ -178,10 +178,10 @@ outbox_replay_pending() {
                 log_warn "outbox: failed to replay effect '$effect_name' for $entry_id"
             fi
         else
-            # Fallback: mark as completed to prevent infinite retries
-            log_warn "outbox: no effect runner available, marking '$effect_name' complete"
-            outbox_mark_completed "$worker_dir" "$entry_id"
-            ((++replayed)) || true
+            # Runner unavailable — leave effect pending for future replay.
+            # Don't mark complete: the runner may recover on next restart.
+            # Replay only runs at startup so this won't cause a tight loop.
+            log_warn "outbox: no effect runner available, skipping '$effect_name' (stays pending)"
         fi
     done <<< "$pending"
 

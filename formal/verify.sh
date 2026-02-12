@@ -32,7 +32,7 @@ Filter:
     verify.sh Orchestrator        # all Orchestrator checks
     verify.sh TypeInvariant       # TypeInvariant across all specs
 
-Checks (47 safety invariants):
+Checks (67 safety invariants):
   WorkerLifecycle.tla   (length 25) TypeInvariant BoundedCounters
                         TransientStateInvariant KanbanMergedConsistency
                         KanbanFailedConsistency ConflictQueueConsistency
@@ -41,6 +41,8 @@ Checks (47 safety invariants):
   PipelineEngine.tla    (length 30) TypeInvariant VisitsBounded
                         InlineVisitsBounded StatusConsistency
                         SupervisorRestartsBounded CostBudgetInvariant
+                        CascadeDetected DisabledStepNeverExecuted
+                        TimeoutProducesFail
   Orchestrator.tla      (length 10) TypeInvariant WorkerPoolCapacity
                         BoundedCounters KanbanMergedConsistency
                         NoIdleInProgress NoFileConflictActive
@@ -54,10 +56,19 @@ Checks (47 safety invariants):
   EffectOutbox.tla      (length 20) TypeInvariant DoneConsistency
                         StateBeforeKanban CompletedSubsetPending
                         CleanupEffectOrder CrashBounded
+                        FallbackNeverApplies
   ResumeLifecycle.tla   (length 20) TypeInvariant TerminalAbsorbing
                         AttemptsWithinBounds CooldownBlocksSpawn
                         DecisionRequiredForSpawn TerminalReasonConsistency
-                        PassNeverRetried
+                        PassNeverRetried UserRetryBounded
+                        ViolationBlocksResume InterruptedBypassesDecide
+  MergeManager.tla      (length 15) TypeInvariant GateBlocksSilently
+                        RebaseIdempotency ConflictSequenceConsistency
+                        MergeAttemptsBounded SuccessImpliesCommitted
+                        CrashBounded
+  KanbanLock.tla        (length 15) TypeInvariant MutualExclusion
+                        NoLostUpdateUnderLock SerializedWrites
+                        WeakAppendPreservesData LockRetryBounded
 
 Note: Temporal/liveness properties (EventualTermination, NoStarvation,
 EventualSpawn, SkipDecay, PipelineTermination, EventualCompletion) are
@@ -315,6 +326,9 @@ _run_all_checks() {
     run_check PipelineEngine.tla StatusConsistency 30
     run_check PipelineEngine.tla SupervisorRestartsBounded 30
     run_check PipelineEngine.tla CostBudgetInvariant 30
+    run_check PipelineEngine.tla CascadeDetected 30
+    run_check PipelineEngine.tla DisabledStepNeverExecuted 30
+    run_check PipelineEngine.tla TimeoutProducesFail 30
 
     # Orchestrator
     run_check Orchestrator.tla TypeInvariant 10
@@ -346,6 +360,7 @@ _run_all_checks() {
     run_check EffectOutbox.tla CompletedSubsetPending 20
     run_check EffectOutbox.tla CleanupEffectOrder 20
     run_check EffectOutbox.tla CrashBounded 20
+    run_check EffectOutbox.tla FallbackNeverApplies 20
 
     # ResumeLifecycle
     run_check ResumeLifecycle.tla TypeInvariant 20
@@ -355,6 +370,26 @@ _run_all_checks() {
     run_check ResumeLifecycle.tla DecisionRequiredForSpawn 20
     run_check ResumeLifecycle.tla TerminalReasonConsistency 20
     run_check ResumeLifecycle.tla PassNeverRetried 20
+    run_check ResumeLifecycle.tla UserRetryBounded 20
+    run_check ResumeLifecycle.tla ViolationBlocksResume 20
+    run_check ResumeLifecycle.tla InterruptedBypassesDecide 20
+
+    # MergeManager
+    run_check MergeManager.tla TypeInvariant 15
+    run_check MergeManager.tla GateBlocksSilently 15
+    run_check MergeManager.tla RebaseIdempotency 15
+    run_check MergeManager.tla ConflictSequenceConsistency 15
+    run_check MergeManager.tla MergeAttemptsBounded 15
+    run_check MergeManager.tla SuccessImpliesCommitted 15
+    run_check MergeManager.tla CrashBounded 15
+
+    # KanbanLock
+    run_check KanbanLock.tla TypeInvariant 15
+    run_check KanbanLock.tla MutualExclusion 15
+    run_check KanbanLock.tla NoLostUpdateUnderLock 15
+    run_check KanbanLock.tla SerializedWrites 15
+    run_check KanbanLock.tla WeakAppendPreservesData 15
+    run_check KanbanLock.tla LockRetryBounded 15
 }
 
 # =========================================================================
